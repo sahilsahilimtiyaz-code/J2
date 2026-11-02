@@ -426,6 +426,38 @@ private fun searchDuckDuckGo(query: String): List<WebHit> {
         }
     }
 
+    // Wikipedia OpenSearch / Query API as a reliable zero-API-key research fallback
+    runCatching {
+        val wikiJson = fetchHtml(
+            "https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=$encoded&utf8=1&format=json&srlimit=5",
+            userAgent = USER_AGENT_APP,
+            timeoutMs = 5_500,
+        ) ?: return@runCatching
+        val root = com.jarvis.assistant.brain.parseJsonObject(wikiJson) ?: return@runCatching
+        val queryObj = root["query"] as? JsonObject ?: return@runCatching
+        val searchArr = queryObj.arrayOrNull("search")?.filterIsInstance<JsonObject>().orEmpty()
+        val wikiHits = searchArr.mapNotNull { item ->
+            val title = item.stringOrNull("title")?.trim().orEmpty()
+            val rawSnippet = item.stringOrNull("snippet").orEmpty()
+                .replace(Regex("<[^>]+>"), "")
+                .replace("&quot;", "\"")
+                .replace("&amp;", "&")
+                .replace("&#039;", "'")
+                .replace(Regex("\\s+"), " ")
+                .trim()
+            if (title.isBlank()) return@mapNotNull null
+            val slug = java.net.URLEncoder.encode(title.replace(' ', '_'), Charsets.UTF_8.name())
+            WebHit(
+                title = title,
+                snippet = rawSnippet.ifBlank { "Wikipedia article on $title." },
+                url = "https://en.wikipedia.org/wiki/$slug",
+            )
+        }
+        if (wikiHits.isNotEmpty()) {
+            return wikiHits
+        }
+    }
+
     return emptyList()
 }
 

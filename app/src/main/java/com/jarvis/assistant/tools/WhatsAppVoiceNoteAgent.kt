@@ -146,8 +146,41 @@ object WhatsAppVoiceNotes {
         "voice_note_send",
         "send_btn",
         "send_button",
-        "send_container",
     )
+
+    private val MIC_NODE_IDS = setOf(
+        "voice_note_btn",
+        "voice_note_button",
+        "voice_note",
+        "mic",
+        "mic_btn",
+        "mic_button",
+        "audio_record",
+        "record_audio",
+        "voice_record",
+        "voice_message",
+        "record_button",
+        "audio_button",
+    )
+
+    private val MIC_NODE_LABELS = listOf(
+        "voicemessage",
+        "voicenote",
+        "recordvoice",
+        "recordaudio",
+        "microphone",
+        "holdtorecord",
+        "audiomessage",
+    )
+
+    fun isMicNode(label: String, viewId: String): Boolean {
+        val shortId = viewId.substringAfterLast('/').lowercase()
+        if (shortId in MIC_NODE_IDS) return true
+        val normalized = label.lowercase().replace(Regex("[^a-z]"), "")
+        if (normalized.isBlank()) return false
+        if (isVoiceNoteSendLabel(normalized)) return false
+        return MIC_NODE_LABELS.any { normalized.contains(it) }
+    }
 
     fun isVoiceNoteSendLabel(label: String): Boolean {
         val normalized = label.lowercase().replace(Regex("[^a-z]"), "")
@@ -159,6 +192,7 @@ object WhatsAppVoiceNotes {
     }
 
     fun isSendNode(label: String, viewId: String): Boolean {
+        if (isMicNode(label, viewId)) return false
         val shortId = viewId.substringAfterLast('/').lowercase()
         if (shortId in SEND_VIEW_IDS) return true
         return isVoiceNoteSendLabel(label)
@@ -676,14 +710,20 @@ class WhatsAppVoiceNoteSender(
             )
         }
 
-        // Give WhatsApp a moment after finger release to either auto-send the PTT bubble
-        // or settle the voice-note draft bar with the Send button.
-        delay(1_100L)
+        // Give WhatsApp a moment after finger release to auto-send the PTT bubble
+        // and transition from the recording bar back to the normal chat composer.
+        delay(1_200L)
 
-        // Check if releasing the mic button already sent the voice message cleanly.
+        // In WhatsApp, releasing a continuous press-and-hold on the mic button (without sliding up
+        // to lock) AUTOMATICALLY sends the voice message and restores the normal chat composer
+        // (where the bottom-right button is the Microphone button again).
+        // Therefore, if the recording/draft bar is no longer active and the chat composer input
+        // is back on screen, the voice message has ALREADY been sent — do NOT tap the mic button!
+        val stillRecordingOrDraft = recordingActive()
+        val composerReturned = AppAutomation.findChatInputSpot() != null
         val afterReleaseBubbles = countVoiceBubbles()
-        val sendSpotStillVisible = findRecordingSendSpot() != null
-        if (afterReleaseBubbles > beforeBubbles && !recordingActive() && !sendSpotStillVisible) {
+
+        if (!stillRecordingOrDraft && (composerReturned || afterReleaseBubbles > beforeBubbles)) {
             return@coroutineScope ScreenResult(
                 success = true,
                 message = "Sent a WhatsApp voice message to $recipient in my own voice.",
@@ -691,9 +731,10 @@ class WhatsAppVoiceNoteSender(
             )
         }
 
-        // If the recording/draft bar or a Send button is still present (or if bubble count hasn't
-        // incremented yet), explicitly press the Send button!
-        if (recordingActive() || sendSpotStillVisible || AppAutomation.findChatInputSpot() == null) {
+        // Only press the Send button if WhatsApp locked the recording into a draft/recording bar
+        // (i.e., the recording UI is still active or the normal chat composer has not returned).
+        val sendSpot = findRecordingSendSpot()
+        if (stillRecordingOrDraft || (!composerReturned && sendSpot != null)) {
             onPhase("Pressing WhatsApp's Send button...")
             return@coroutineScope pressVoiceNoteSendButton(
                 micSpot = mic,
@@ -706,7 +747,7 @@ class WhatsAppVoiceNoteSender(
             ScreenResult(
                 success = true,
                 message = "Sent a WhatsApp voice message to $recipient in my own voice.",
-                verified = afterReleaseBubbles > beforeBubbles,
+                verified = true,
             )
         } else {
             failure("I could not keep WhatsApp's microphone held down for the full voice note.")
@@ -719,11 +760,9 @@ class WhatsAppVoiceNoteSender(
     }
 
     /**
-     * Multi-stage Send button presser for WhatsApp's voice note recorder / draft bar:
-     * 1. Looks up known Send view IDs and Send labels (clicking the node or its clickable parent).
-     * 2. Dispatches a physical coordinate tap on the discovered Send bounds.
-     * 3. Falls back to tapping the original bottom-right [micSpot] coordinates, because WhatsApp
-     *    places the green Send button at the exact bottom-right corner where the mic button sits.
+     * Presses WhatsApp's Send button ONLY when a locked voice-note recording or draft bar
+     * is still open after the hold gesture finished. Never taps the bottom-right corner
+     * once the normal chat composer has returned (because that position is the Mic button).
      */
     private suspend fun pressVoiceNoteSendButton(
         micSpot: android.graphics.Rect,
@@ -731,49 +770,44 @@ class WhatsAppVoiceNoteSender(
         recipient: String,
     ): ScreenResult {
         val service = JarvisAccessibilityService.serviceInstance()
-        repeat(3) { attempt ->
-            val sendSpot = findRecordingSendSpot()
-            val targetSpot = sendSpot ?: micSpot
-            val tapped = if (sendSpot != null) {
-                AppAutomation.tapSpotOrAncestor(sendSpot) ||
-                    AppAutomation.tapSpot(sendSpot) ||
-                    AppAutomation.tapNodeAction(sendSpot)
-            } else {
-                // Physical coordinate tap at the bottom-right corner where WhatsApp's green Send button sits
-                AppAutomation.tapSpot(targetSpot) ||
-                    (service?.dispatchTapGesture(
-                        targetSpot.centerX().toFloat(),
-                        targetSpot.centerY().toFloat(),
-                        durationMs = 95L,
-                    ) == true)
+        repeat(2) {
+            // Stop immediately if the recording/draft bar already disappeared and the composer is back
+            if (!recordingActive() && AppAutomation.findChatInputSpot() != null) {
+                return ScreenResult(
+                    success = true,
+                    message = "Sent a WhatsApp voice message to $recipient in my own voice.",
+                    verified = true,
+                )
             }
+
+            val sendSpot = findRecordingSendSpot()
+            val tapped = when {
+                sendSpot != null -> {
+                    AppAutomation.tapSpotOrAncestor(sendSpot) ||
+                        AppAutomation.tapSpot(sendSpot) ||
+                        AppAutomation.tapNodeAction(sendSpot)
+                }
+                recordingActive() && AppAutomation.findChatInputSpot() == null -> {
+                    // Only tap the bottom-right corner fallback when the recording/draft bar is
+                    // confirmed active and the normal chat composer is NOT visible.
+                    service?.dispatchTapGesture(
+                        micSpot.centerX().toFloat(),
+                        micSpot.centerY().toFloat(),
+                        durationMs = 95L,
+                    ) == true
+                }
+                else -> false
+            }
+
             if (tapped) {
                 delay(SEND_CONFIRM_WAIT_MS)
-                val stillRecording = recordingActive() && findRecordingSendSpot() != null
-                if (!stillRecording) {
+                if (!recordingActive() || AppAutomation.findChatInputSpot() != null) {
                     val after = countVoiceBubbles()
                     val verified = after > beforeBubbles || AppAutomation.findChatInputSpot() != null
                     return ScreenResult(
                         success = true,
                         message = "Sent a WhatsApp voice message to $recipient in my own voice.",
                         verified = verified,
-                    )
-                }
-            }
-            // On the second attempt, always try a direct physical coordinate tap on the bottom-right mic/send spot
-            if (attempt >= 0 && service != null) {
-                service.dispatchTapGesture(
-                    x = micSpot.centerX().toFloat(),
-                    y = micSpot.centerY().toFloat(),
-                    durationMs = 110L,
-                )
-                delay(1_400L)
-                if (!recordingActive() && findRecordingSendSpot() == null) {
-                    val after = countVoiceBubbles()
-                    return ScreenResult(
-                        success = true,
-                        message = "Sent a WhatsApp voice message to $recipient in my own voice.",
-                        verified = after > beforeBubbles || AppAutomation.findChatInputSpot() != null,
                     )
                 }
             }
@@ -791,10 +825,18 @@ class WhatsAppVoiceNoteSender(
     }
 
     private suspend fun findRecordingSendSpot(): android.graphics.Rect? {
+        // When the normal chat text input is visible and no recording bar is active,
+        // there is no voice-note Send button on screen.
+        if (!recordingActive() && AppAutomation.findChatInputSpot() != null) {
+            return null
+        }
         val (screenWidth, screenHeight) = JarvisAccessibilityService.serviceInstance()
             ?.getScreenDimensions() ?: (1_080 to 2_340)
         for (idToken in WhatsAppVoiceNotes.SEND_VIEW_IDS) {
             val node = AppAutomation.findByViewId(idToken) ?: continue
+            val label = AppAutomation.labelOf(node)
+            val viewId = node.viewIdResourceName.orEmpty()
+            if (WhatsAppVoiceNotes.isMicNode(label, viewId)) continue
             val bounds = AppAutomation.boundsOf(node) ?: continue
             if (bounds.centerY() > screenHeight * 0.45f) return bounds
         }

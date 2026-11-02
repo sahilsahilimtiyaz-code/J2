@@ -33,23 +33,63 @@ class MemoryRepository(private val dao: MemoryDao) {
         withContext(Dispatchers.IO) {
             val now = System.currentTimeMillis()
             runCatching { dao.pruneExpiredMemories(now) }
+            val activeMemories = dao.allMemories()
+                .filter { it.expiresAt <= 0L || it.expiresAt > now }
+
             if (query.isBlank()) {
-                return@withContext dao.allMemories()
-                    .filter { it.expiresAt <= 0L || it.expiresAt > now }
-                    .take(limit)
+                return@withContext activeMemories.take(limit)
             }
 
-            val match = ftsExpression(query)
+            val keywords = meaningfulTokens(query)
+            // If the user asked a general recall question like "What do you remember about me?"
+            // or "What are my stored notes?", all tokens are stop-words — return the stored memories directly!
+            if (keywords.isEmpty()) {
+                return@withContext activeMemories.take(limit)
+            }
+
+            val combined = LinkedHashMap<Long, MemoryEntity>()
+
+            val match = ftsExpressionFromTokens(keywords)
             if (match != null) {
-                val hits = runCatching { dao.searchMemories(match, limit) }.getOrDefault(emptyList())
+                val ftsHits = runCatching { dao.searchMemories(match, limit) }.getOrDefault(emptyList())
                     .filter { it.expiresAt <= 0L || it.expiresAt > now }
-                if (hits.isNotEmpty()) {
-                    dao.markUsed(hits.map { it.id }, now)
-                    return@withContext hits
+                for (hit in ftsHits) {
+                    combined[hit.id] = hit
                 }
             }
-            dao.searchMemoriesLike(query.trim(), limit)
-                .filter { it.expiresAt <= 0L || it.expiresAt > now }
+
+            // Also score all active memories by keyword matches across text, tags, and type
+            // so partial words, tags ("note", "work"), and multi-word queries always match.
+            if (combined.size < limit) {
+                val scored = activeMemories
+                    .mapNotNull { mem ->
+                        if (combined.containsKey(mem.id)) return@mapNotNull null
+                        val hay = "${mem.text} ${mem.tags} ${mem.type}".lowercase(Locale.UK)
+                        val hits = keywords.count { kw -> hay.contains(kw) }
+                        if (hits > 0) mem to (hits * 10 + mem.importance) else null
+                    }
+                    .sortedByDescending { it.second }
+                    .map { it.first }
+                for (mem in scored) {
+                    if (combined.size >= limit) break
+                    combined[mem.id] = mem
+                }
+            }
+
+            // Final fallback to literal substring LIKE scan
+            if (combined.isEmpty()) {
+                val likeHits = dao.searchMemoriesLike(query.trim(), limit)
+                    .filter { it.expiresAt <= 0L || it.expiresAt > now }
+                for (hit in likeHits) {
+                    combined[hit.id] = hit
+                }
+            }
+
+            val results = combined.values.take(limit)
+            if (results.isNotEmpty()) {
+                runCatching { dao.markUsed(results.map { it.id }, now) }
+            }
+            results
         }
 
     suspend fun searchConversationMessages(query: String, limit: Int = 8): List<MessageEntity> =
@@ -170,8 +210,9 @@ class MemoryRepository(private val dao: MemoryDao) {
     // Prompt context ----------------------------------------------------------
 
     /**
-     * The compact "what I know about my owner" block: always-on profile facts
-     * plus the memories that match this request.
+     * The compact "what I know about my owner" block: always-on profile facts,
+     * query-matched memories, AND recent/important stored memories and notes so
+     * Jarvis never forgets saved notes or personal facts even on broad questions.
      */
     suspend fun promptContext(query: String): String = withContext(Dispatchers.IO) {
         val now = System.currentTimeMillis()
@@ -179,11 +220,23 @@ class MemoryRepository(private val dao: MemoryDao) {
         val factLines = dao.facts()
             .filter { it.value.isNotBlank() }
             .joinToString(separator = "\n") { "- ${it.key}: ${it.value}" }
-        val notes = search(query, DEFAULT_RETRIEVAL)
-            .joinToString(separator = "\n") {
-                val tagSuffix = if (it.tags.isNotBlank()) " [${it.tags}]" else ""
-                "- (${it.type}) ${it.text}$tagSuffix"
-            }
+
+        val matched = search(query, DEFAULT_RETRIEVAL)
+        val matchedIds = matched.map { it.id }.toSet()
+        val allActive = dao.allMemories()
+            .filter { it.expiresAt <= 0L || it.expiresAt > now }
+        val additionalStored = allActive
+            .filterNot { it.id in matchedIds }
+            .take(MAX_ALWAYS_INCLUDED_MEMORIES)
+
+        fun formatEntry(it: MemoryEntity): String {
+            val tagSuffix = if (it.tags.isNotBlank()) " [${it.tags}]" else ""
+            return "- (${it.type}) ${it.text}$tagSuffix"
+        }
+
+        val matchedLines = matched.joinToString(separator = "\n", transform = ::formatEntry)
+        val additionalLines = additionalStored.joinToString(separator = "\n", transform = ::formatEntry)
+
         buildString {
             append("Immutable core memory:\n")
             append("- developer: Octavian (Creator and Chief Architect of J.A.R.V.I.S.)\n")
@@ -192,9 +245,14 @@ class MemoryRepository(private val dao: MemoryDao) {
                 append(factLines)
                 append('\n')
             }
-            if (notes.isNotBlank()) {
+            if (matchedLines.isNotBlank()) {
                 append("Relevant memories:\n")
-                append(notes)
+                append(matchedLines)
+                append('\n')
+            }
+            if (additionalLines.isNotBlank()) {
+                append("Stored memories and notes:\n")
+                append(additionalLines)
             }
         }.trim()
     }
@@ -334,12 +392,14 @@ class MemoryRepository(private val dao: MemoryDao) {
         added
     }
 
-    private fun ftsExpression(query: String): String? {
-        val tokens = query.lowercase(Locale.UK)
+    private fun meaningfulTokens(query: String): List<String> =
+        query.lowercase(Locale.UK)
             .split(Regex("[^\\p{L}\\p{N}]+"))
-            .filter { it.length >= 2 }
+            .filter { it.length >= 2 && it !in QUERY_STOP_WORDS }
             .distinct()
             .take(8)
+
+    private fun ftsExpressionFromTokens(tokens: List<String>): String? {
         if (tokens.isEmpty()) return null
         return tokens.joinToString(" OR ") { "\"$it\"*" }
     }
@@ -384,8 +444,24 @@ class MemoryRepository(private val dao: MemoryDao) {
     )
 
     private companion object {
-        const val DEFAULT_RETRIEVAL = 8
+        const val DEFAULT_RETRIEVAL = 10
+        const val MAX_ALWAYS_INCLUDED_MEMORIES = 15
         const val CONVERSATION_GAP_MS = 6 * 60 * 60 * 1000L
+
+        val QUERY_STOP_WORDS = setOf(
+            "what", "who", "where", "when", "why", "how", "which",
+            "is", "are", "was", "were", "am", "be", "been",
+            "do", "does", "did", "can", "could", "would", "should", "will",
+            "have", "has", "had", "you", "your", "yours",
+            "my", "me", "mine", "i", "we", "our", "us",
+            "the", "a", "an", "in", "on", "at", "to", "for", "of", "with", "from", "by",
+            "about", "remember", "remembered", "know", "known", "tell", "show", "read", "list",
+            "stored", "saved", "save", "store", "keep", "kept",
+            "memory", "memories", "note", "notes", "fact", "facts",
+            "anything", "everything", "something", "all", "any",
+            "jarvis", "please", "sir", "hey", "hi", "hello",
+        )
+
         val json = Json {
             ignoreUnknownKeys = true
             encodeDefaults = true

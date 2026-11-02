@@ -16,12 +16,13 @@ class RememberTool : Tool {
             required = listOf("text"),
             properties = mapOf(
                 "text" to stringProperty(
-                    "One short sentence in the third person, e.g. \"The owner's sister is named Anya.\"",
+                    "One short sentence or note to remember, e.g. \"The owner's sister is named Anya.\"",
                 ),
                 "type" to stringProperty(
                     "Kind of memory.",
                     enum = listOf(
                         MemoryType.FACT,
+                        MemoryType.NOTE,
                         MemoryType.PREFERENCE,
                         MemoryType.PERSON,
                         MemoryType.PROJECT,
@@ -30,8 +31,8 @@ class RememberTool : Tool {
                         MemoryType.RECURRING_TASK,
                     ),
                 ),
-                "importance" to intProperty("1 low to 5 high. Use 4 or 5 for identity, dates, and close family."),
-                "tags" to stringProperty("Optional comma-separated tags (e.g. \"work,trip,family\")."),
+                "importance" to intProperty("1 low to 5 high. Use 4 or 5 for identity, notes, dates, and close family."),
+                "tags" to stringProperty("Optional comma-separated tags (e.g. \"note,work,trip,family\")."),
                 "temporary_hours" to intProperty(
                     "Optional hours until this temporary memory automatically expires (0 or omitted = permanent).",
                 ),
@@ -46,13 +47,16 @@ class RememberTool : Tool {
         val memory = context.memory
             ?: return ToolResult(false, "Memory is not available in this build.")
         val text = arguments.argString("text")
+            ?: arguments.argString("fact")
+            ?: arguments.argString("note")
+            ?: arguments.argString("content")
             ?: return ToolResult(false, "Tell me what to remember.")
         if (text.length < 3) return ToolResult(false, "That is too short to remember.")
         if (looksLikeSecret(text)) {
             return ToolResult(false, "I will not store passwords, codes or keys.")
         }
         val type = arguments.argString("type") ?: MemoryType.FACT
-        val importance = (arguments.argInt("importance") ?: 3).coerceIn(1, 5)
+        val importance = (arguments.argInt("importance") ?: 4).coerceIn(1, 5)
         val tags = arguments.argString("tags").orEmpty()
         val tempHours = arguments.argInt("temporary_hours") ?: 0
         val expiresAt = if (tempHours > 0) {
@@ -87,13 +91,13 @@ class SearchMemoryTool : Tool {
 
     override val definition: ToolDefinition = ToolDefinition(
         name = "search_memory",
-        description = "Search what Jarvis remembers about the owner and optionally past conversation history. " +
-            "Use it when the answer may depend on a stored detail, project, date, or earlier chat.",
+        description = "Search what Jarvis remembers about the owner, stored notes, and optionally past conversation history. " +
+            "Use it when the answer may depend on a stored detail, note, project, date, or earlier chat.",
         parameters = objectSchema(
             required = listOf("query"),
             properties = mapOf(
-                "query" to stringProperty("Keywords to search for, e.g. \"sister birthday\" or \"trip\"."),
-                "limit" to intProperty("Maximum results, default 5."),
+                "query" to stringProperty("Keywords to search for, e.g. \"sister birthday\", \"notes\", or \"trip\"."),
+                "limit" to intProperty("Maximum results, default 8."),
                 "include_history" to booleanProperty("Also search past conversation messages (default true)."),
             ),
         ),
@@ -105,18 +109,24 @@ class SearchMemoryTool : Tool {
     override suspend fun execute(arguments: JsonObject, context: ToolContext): ToolResult {
         val memory = context.memory
             ?: return ToolResult(false, "Memory is not available in this build.")
-        val query = arguments.argString("query")
-            ?: return ToolResult(false, "What should I look for?")
-        val limit = (arguments.argInt("limit") ?: 5).coerceIn(1, 10)
+        val query = arguments.argString("query").orEmpty().trim()
+        val limit = (arguments.argInt("limit") ?: 8).coerceIn(1, 15)
         val includeHistory = arguments.argBoolean("include_history") ?: true
-        val results = memory.search(query, limit)
-        val historyHits = if (includeHistory) memory.searchHistory(query, limit) else emptyList()
+        val primaryResults = memory.search(query, limit)
+        // If specific keyword search yielded nothing, return all stored memories/notes so the owner
+        // never gets an empty answer when they have saved memories or notes.
+        val results = if (primaryResults.isNotEmpty()) {
+            primaryResults
+        } else {
+            memory.search("", limit)
+        }
+        val historyHits = if (includeHistory && query.isNotBlank()) memory.searchHistory(query, limit) else emptyList()
         if (results.isEmpty() && historyHits.isEmpty()) {
-            return ToolResult(true, "I have nothing stored that matches \"$query\".")
+            return ToolResult(true, "I have no stored memories or notes yet.")
         }
         val combined = buildString {
             if (results.isNotEmpty()) {
-                append("Stored memories:\n")
+                append("Stored memories and notes:\n")
                 append(results.joinToString("\n") { "- $it" })
             }
             if (historyHits.isNotEmpty()) {

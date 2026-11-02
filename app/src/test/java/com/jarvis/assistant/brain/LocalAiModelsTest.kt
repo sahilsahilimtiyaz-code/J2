@@ -25,6 +25,8 @@ class LocalAiModelsTest {
         ToolDefinition("set_volume", "Adjust volume", buildJsonObject {}),
         ToolDefinition("run_diagnostics", "Run diagnostics", buildJsonObject {}),
         ToolDefinition("remember_about_owner", "Save owner fact", buildJsonObject {}),
+        ToolDefinition("search_memory", "Search saved memory and notes", buildJsonObject {}),
+        ToolDefinition("web_search", "Search the web", buildJsonObject {}),
     )
 
     @Test
@@ -132,6 +134,30 @@ class LocalAiModelsTest {
         assertNotNull(openAppCall)
         assertEquals("open_app", openAppCall!!.name)
         assertTrue(openAppCall.argumentsJson.contains("Spotify"))
+
+        val webResearchCall = OfflineTaskRouter.routeUserCommand(
+            "do a web research on quantum computing breakthroughs",
+            sampleTools,
+        ).firstOrNull()
+        assertNotNull(webResearchCall)
+        assertEquals("web_search", webResearchCall!!.name)
+        assertTrue(webResearchCall.argumentsJson.contains("quantum computing breakthroughs"))
+
+        val noteSaveCall = OfflineTaskRouter.routeUserCommand(
+            "save a note that my passport number is in the blue folder",
+            sampleTools,
+        ).firstOrNull()
+        assertNotNull(noteSaveCall)
+        assertEquals("remember_about_owner", noteSaveCall!!.name)
+        assertTrue(noteSaveCall.argumentsJson.contains("\"text\""))
+        assertTrue(noteSaveCall.argumentsJson.contains("passport number"))
+
+        val memoryRecallCall = OfflineTaskRouter.routeUserCommand(
+            "what do you remember about my stored notes?",
+            sampleTools,
+        ).firstOrNull()
+        assertNotNull(memoryRecallCall)
+        assertEquals("search_memory", memoryRecallCall!!.name)
     }
 
     @Test

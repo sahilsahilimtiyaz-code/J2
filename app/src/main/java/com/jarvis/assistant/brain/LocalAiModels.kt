@@ -1045,31 +1045,63 @@ object OfflineTaskRouter {
             }
         }
 
-        // 19. Memory (Remember / Search / Forget)
-        if ((lower.startsWith("remember that ") || lower.startsWith("remember my ") || lower.startsWith("save to memory ")) &&
+        // 19. Memory & Notes (Remember / Save Note / Search Memory / Recall Notes / Forget)
+        if ((lower.startsWith("remember that ") ||
+                lower.startsWith("remember my ") ||
+                lower.startsWith("remember ") ||
+                lower.startsWith("save to memory ") ||
+                lower.startsWith("store in memory ") ||
+                lower.startsWith("save a note ") ||
+                lower.startsWith("take a note ") ||
+                lower.startsWith("make a note ") ||
+                lower.startsWith("keep a note ") ||
+                lower.startsWith("note that ")) &&
+            !lower.contains("what do you remember") &&
+            !lower.contains("do you remember") &&
             hasTool("remember_about_owner")
         ) {
+            val isNote = lower.contains("note")
             val fact = clean
-                .replace(Regex("(?i)^(jarvis\\s*,?\\s*)?(please\\s+)?(remember that|remember|save to memory)\\s+"), "")
+                .replace(
+                    Regex("(?i)^(jarvis\\s*,?\\s*)?(please\\s+)?(remember that|remember|save to memory|store in memory|save a note that|save a note|take a note that|take a note|make a note that|make a note|keep a note|note that)\\s*:?\\s*"),
+                    "",
+                )
                 .trim()
             if (fact.isNotBlank()) {
                 return call(
                     "remember_about_owner",
                     buildJsonObject {
-                        put("fact", fact)
-                        put("type", "fact")
+                        put("text", fact)
+                        put("type", if (isNote) "note" else "fact")
                         put("importance", 4)
+                        if (isNote) put("tags", "note")
                     }.toString(),
                 )
             }
         }
-        if ((lower.contains("what do you remember") || lower.contains("what do you know about me") || lower.startsWith("search memory")) &&
+        if ((lower.contains("what do you remember") ||
+                lower.contains("what do you know about me") ||
+                lower.contains("do you remember") ||
+                lower.contains("my notes") ||
+                lower.contains("stored notes") ||
+                lower.contains("saved notes") ||
+                lower.contains("stored memory") ||
+                lower.contains("stored memories") ||
+                lower.contains("saved memories") ||
+                lower.contains("my memories") ||
+                lower.contains("what did i tell you") ||
+                lower.contains("what did i save") ||
+                lower.startsWith("search memory") ||
+                lower.startsWith("read my notes") ||
+                lower.startsWith("show my notes")) &&
             hasTool("search_memory")
         ) {
             val q = clean
-                .replace(Regex("(?i)^(jarvis\\s*,?\\s*)?(what do you remember about|what do you know about|search memory for|search memory)\\s*"), "")
+                .replace(
+                    Regex("(?i)^(jarvis\\s*,?\\s*)?(please\\s+)?(what do you remember about|what do you remember|what do you know about me|what do you know about|do you remember my|do you remember|search memory for|search memory|read my notes about|read my notes|show my notes|what are my stored notes|what are my notes|what are my memories)\\s*"),
+                    "",
+                )
                 .trim()
-                .ifBlank { "owner" }
             return call(
                 "search_memory",
                 buildJsonObject { put("query", q) }.toString(),
@@ -1139,7 +1171,90 @@ object OfflineTaskRouter {
             }
         }
 
+        // 23. Web Search & Web Research (works with zero API keys via DuckDuckGo & Wikipedia)
+        if (hasTool("web_search") && isWebResearchIntent(lower)) {
+            val searchQuery = extractWebResearchQuery(clean)
+            if (searchQuery.isNotBlank()) {
+                return call(
+                    "web_search",
+                    buildJsonObject { put("query", searchQuery) }.toString(),
+                )
+            }
+        }
+
         return emptyList()
+    }
+
+    private fun isWebResearchIntent(lower: String): Boolean {
+        if (lower.contains("who are you") ||
+            lower.contains("what is your name") ||
+            lower.contains("who am i") ||
+            lower.contains("what is my name") ||
+            lower.contains("which model") ||
+            lower.contains("what model") ||
+            lower.contains("what can you do") ||
+            lower.contains("who created you") ||
+            lower.contains("who made you")
+        ) {
+            return false
+        }
+        val explicitTriggers = listOf(
+            "search the web",
+            "web search",
+            "search for ",
+            "search about ",
+            "search on google",
+            "google ",
+            "look up ",
+            "research ",
+            "web research",
+            "do a research",
+            "do research",
+            "find information",
+            "find info ",
+            "latest news",
+            "news about ",
+            "weather in ",
+            "what is the weather",
+            "what's the weather",
+            "who won ",
+            "price of ",
+            "stock price",
+            "bitcoin price",
+        )
+        if (explicitTriggers.any { lower.contains(it) }) return true
+
+        // Factual knowledge / encyclopedia questions ("who is ...", "what is ...", "where is ...", "tell me about ...")
+        val factualPrefixes = listOf(
+            "who is ",
+            "what is ",
+            "what are ",
+            "where is ",
+            "when was ",
+            "how does ",
+            "tell me about ",
+            "explain ",
+        )
+        if (factualPrefixes.any { lower.startsWith(it) || lower.startsWith("jarvis $it") || lower.startsWith("jarvis, $it") }) {
+            // Do not route simple math or personal questions ("what is my ...", "who is my ...") to web search;
+            // personal questions should check stored memory first!
+            if (lower.contains(" my ") || lower.contains(" i ") || Regex("""\d+\s*[\+\-\*x×/÷]\s*\d+""").containsMatchIn(lower)) {
+                return false
+            }
+            return true
+        }
+        return false
+    }
+
+    private fun extractWebResearchQuery(raw: String): String {
+        return raw
+            .replace(Regex("(?i)^(jarvis\\s*,?\\s*)?(please\\s+)?(can you\\s+|could you\\s+)?"), "")
+            .replace(
+                Regex("(?i)^(do\\s+a\\s+web\\s+research\\s+(on|about|for)|do\\s+web\\s+research\\s+(on|about|for)|do\\s+a\\s+research\\s+(on|about|for)|web\\s+research\\s+(on|about|for)?|research\\s+(on|about|for)?|search\\s+the\\s+web\\s+for|search\\s+for|search\\s+about|web\\s+search\\s+for|web\\s+search|look\\s+up|find\\s+information\\s+(on|about)|find\\s+info\\s+(on|about)|google)\\s+"),
+                "",
+            )
+            .trim()
+            .trimEnd('?', '.')
     }
 
     private fun extractWhatsAppVoiceTargetAndMessage(raw: String): Pair<String, String> {
@@ -1246,7 +1361,8 @@ object OfflineTaskRouter {
  * 1. Verifies the downloaded GGUF model file on disk via [GgufModelInspector].
  * 2. Bridges to a local loopback GGUF runner (`127.0.0.1:8080` or `11434`) if active.
  * 3. Otherwise runs the built-in native Kotlin [OfflineTaskRouter] + J.A.R.V.I.S. response
- *    generator directly on-device so all phone tasks, tool calls, and conversations work offline.
+ *    generator directly on-device so all phone tasks, tool calls, web research, and
+ *    stored memories/notes work without any API keys.
  */
 class LocalLlmProvider(
     private val client: OkHttpClient,
@@ -1360,9 +1476,13 @@ class LocalLlmProvider(
             val summaries = trailingTools.mapNotNull { toolMsg ->
                 parseToolOutcome(toolMsg.content)
             }
-            val joined = summaries.joinToString(" ").trim()
+            val joined = summaries.joinToString("\n\n").trim()
             return if (joined.isNotBlank()) {
-                if (joined.endsWith(".")) "$joined, $title." else "$joined, $title."
+                if (joined.endsWith(".") || joined.endsWith("!") || joined.endsWith("?")) {
+                    joined
+                } else {
+                    "$joined, $title."
+                }
             } else {
                 "That task is complete, $title."
             }
@@ -1381,9 +1501,14 @@ class LocalLlmProvider(
             return "The answer is $result, $title."
         }
 
+        // Direct memory / notes lookup from the system prompt's injected memory context
+        findRelevantMemoryLine(systemText, lower)?.let { matchedMemory ->
+            return "From your stored memory, $title: $matchedMemory"
+        }
+
         return when {
             lower.contains("who are you") || lower.contains("what is your name") || lower.contains("introduce yourself") ->
-                "I am Jarvis, your personal AI assistant, $title. I am currently running locally on your device using ${spec.displayName} (${spec.parameterBadge}) with zero internet or API keys required."
+                "I am Jarvis, your personal AI assistant, $title. I am currently running locally on your device using ${spec.displayName} (${spec.parameterBadge}) with zero API keys required."
 
             lower.contains("who am i") || lower.contains("what is my name") ->
                 if (ownerName.isNotBlank()) {
@@ -1394,11 +1519,11 @@ class LocalLlmProvider(
 
             lower.contains("which model") || lower.contains("what model") || lower.contains("offline") || lower.contains("local ai") -> {
                 val sizeStr = ggufInfo?.fileSizeBytes?.takeIf { it > 0 }?.let { LocalModelCatalog.formatBytes(it) } ?: spec.approxSizeLabel
-                "I am currently operating on-device with ${spec.displayName} ($sizeStr, ${spec.bestUse}), $title. All phone tools, voice commands, and local memory are active offline."
+                "I am currently operating on-device with ${spec.displayName} ($sizeStr, ${spec.bestUse}), $title. All phone tools, web research, voice commands, and local memories are active."
             }
 
             lower.contains("what can you do") || lower.contains("help") || lower.contains("capabilities") ->
-                "Even while completely offline on ${spec.displayName}, $title, I can open any installed app, play videos on YouTube, send WhatsApp messages and voice notes, place calls, send texts, set alarms, timers and reminders, toggle the torch, adjust volume and brightness, read notifications, and recall your personal memories."
+                "Running on ${spec.displayName}, $title, I can perform web research, recall and save your personal memories and notes, open any installed app, play videos on YouTube, send WhatsApp messages and voice notes, place calls, send texts, set alarms, timers and reminders, toggle the torch, adjust volume and brightness, and read notifications."
 
             lower.contains("time") && (lower.contains("what") || lower.contains("current") || lower.contains("tell")) -> {
                 val now = SimpleDateFormat("HH:mm 'on' EEEE, d MMMM yyyy", Locale.getDefault()).format(Date())
@@ -1412,11 +1537,11 @@ class LocalLlmProvider(
             }
 
             else -> {
-                val memoryMatch = findRelevantMemoryLine(systemText, lower)
-                if (memoryMatch != null) {
-                    "From what I have in memory, $title: $memoryMatch"
+                val allMemoriesSummary = listStoredMemoriesFromPrompt(systemText)
+                if (allMemoriesSummary != null && (lower.contains("note") || lower.contains("memor") || lower.contains("remember") || lower.contains("know about me"))) {
+                    "Here is what I have stored in your memories and notes, $title:\n$allMemoriesSummary"
                 } else {
-                    "At your service on ${spec.displayName} (offline on-device mode), $title. Tell me if you would like me to open an app, send a WhatsApp message or voice note, set an alarm or timer, adjust phone settings, or save a note to memory."
+                    "At your service on ${spec.displayName}, $title. You can ask me to research any topic on the web, recall or save notes to memory, send a WhatsApp voice message, play YouTube, or control your phone."
                 }
             }
         }
@@ -1424,39 +1549,97 @@ class LocalLlmProvider(
 
     private fun parseToolOutcome(rawJson: String): String? {
         val trimmed = rawJson.trim()
-        if (trimmed.startsWith("{")) {
+        val rawResult = if (trimmed.startsWith("{")) {
             runCatching {
                 val obj = JSONObject(trimmed)
-                val res = obj.optString("result").trim()
-                if (res.isNotBlank()) {
-                    return res
-                        .replace("Inform the owner now.", "")
-                        .trim()
-                        .removeSuffix(".")
-                }
-            }
+                obj.optString("result").trim().ifBlank { obj.optString("error").trim() }
+            }.getOrDefault("")
+        } else {
+            trimmed
         }
-        return trimmed.takeIf { it.isNotBlank() }?.removeSuffix(".")
+        if (rawResult.isBlank()) return null
+
+        // Cleanly format web_search output so TTS speaks the research findings instead of URLs or prompt directives
+        if (rawResult.startsWith("Live web search results for")) {
+            val cleanedLines = rawResult.lines()
+                .map { it.trim() }
+                .filter { line ->
+                    line.isNotBlank() &&
+                        !line.startsWith("http://") &&
+                        !line.startsWith("https://") &&
+                        !line.startsWith("Summarize these results", ignoreCase = true)
+                }
+                .take(4)
+            return cleanedLines.joinToString("\n")
+        }
+
+        return rawResult
+            .replace("Inform the owner now.", "")
+            .replace("Summarize these results so the owner hears the answer; no browser is open and none should be opened.", "")
+            .trim()
     }
 
     private fun extractOwnerTitle(systemPrompt: String): String {
-        val m = Regex("""Preferred form of address:\s*([^\n.]+)""", RegexOption.IGNORE_CASE).find(systemPrompt)
+        val m = Regex("""Preferred (?:form of address|title):\s*([^\n.]+)""", RegexOption.IGNORE_CASE).find(systemPrompt)
         return m?.groupValues?.get(1)?.trim()?.takeIf { it.isNotBlank() } ?: "sir"
     }
 
     private fun extractOwnerName(systemPrompt: String): String {
-        val m = Regex("""Owner name:\s*([^\n.]+)""", RegexOption.IGNORE_CASE).find(systemPrompt)
-        return m?.groupValues?.get(1)?.trim().orEmpty()
+        val m = Regex("""(?:Owner name|Phone Owner Name):\s*([^\n.]+)""", RegexOption.IGNORE_CASE).find(systemPrompt)
+        val name = m?.groupValues?.get(1)?.trim().orEmpty()
+        return if (name.equals("the owner", ignoreCase = true)) "" else name
     }
 
     private fun findRelevantMemoryLine(systemPrompt: String, queryLower: String): String? {
-        val keywords = queryLower.split(Regex("\\W+")).filter { it.length >= 4 }
-        if (keywords.isEmpty()) return null
-        val lines = systemPrompt.lines().map { it.trim() }.filter { it.startsWith("- ") }
-        return lines.firstOrNull { line ->
-            val lowerLine = line.lowercase(Locale.ROOT)
-            keywords.any { kw -> lowerLine.contains(kw) }
-        }?.removePrefix("- ")?.trim()
+        val stopWords = setOf(
+            "what", "who", "where", "when", "why", "how", "which",
+            "is", "are", "was", "were", "do", "does", "did", "can", "could",
+            "you", "your", "my", "me", "the", "a", "an", "in", "on", "at", "to", "for", "of",
+            "remember", "know", "about", "tell", "show", "stored", "saved", "memory", "memories",
+            "note", "notes", "jarvis", "please", "sir",
+        )
+        val keywords = queryLower.split(Regex("\\W+")).filter { it.length >= 3 && it !in stopWords }
+        val memorySection = systemPrompt.substringAfter("## Retrieved memory notes", "")
+            .substringBefore("## Non-negotiable", "")
+            .ifBlank { systemPrompt }
+        val memoryLines = memorySection.lines()
+            .map { it.trim() }
+            .filter { it.startsWith("- (") || (it.startsWith("- ") && !it.startsWith("- developer:") && !it.startsWith("- Local date") && !it.startsWith("- Communication") && !it.startsWith("- You can") && !it.startsWith("- Tools that")) }
+
+        if (keywords.isEmpty()) {
+            // If the user explicitly asked for their memories or notes without a specific keyword, return all stored memories!
+            if (queryLower.contains("memor") || queryLower.contains("note") || queryLower.contains("remember") || queryLower.contains("know about me")) {
+                val userMemories = memoryLines.filterNot { it.contains("Octavian") }
+                if (userMemories.isNotEmpty()) {
+                    return userMemories.take(8).joinToString("; ") { it.removePrefix("- ").trim() }
+                }
+            }
+            return null
+        }
+
+        val matches = memoryLines
+            .filter { line ->
+                val lowerLine = line.lowercase(Locale.ROOT)
+                keywords.any { kw -> lowerLine.contains(kw) }
+            }
+            .map { it.removePrefix("- ").trim() }
+
+        return if (matches.isNotEmpty()) {
+            matches.take(4).joinToString("; ")
+        } else {
+            null
+        }
+    }
+
+    private fun listStoredMemoriesFromPrompt(systemPrompt: String): String? {
+        val memorySection = systemPrompt.substringAfter("## Retrieved memory notes", "")
+            .substringBefore("## Non-negotiable", "")
+        if (memorySection.isBlank()) return null
+        val lines = memorySection.lines()
+            .map { it.trim() }
+            .filter { it.startsWith("- (") && !it.contains("Octavian") }
+        if (lines.isEmpty()) return null
+        return lines.take(10).joinToString("\n")
     }
 
     private fun evaluateSimpleMath(lower: String): String? {

@@ -298,3 +298,16 @@
   - Upgraded `pressVoiceNoteSendButton` and `findRecordingSendSpot` to match all WhatsApp voice-note Send button view IDs (`send`, `voice_note_draft_send`, `voice_recorder_send_btn`, `send_voice_note_btn`, `voice_note_send_btn`, `send_btn`, `send_container`), click ancestor containers (`tapSpotOrAncestor`), and fall back to a physical coordinate tap directly at the bottom-right `(mic.centerX(), mic.centerY())` position where WhatsApp's green Send button sits.
 - [x] **Verification:** `gradle testDebugUnitTest assembleDebug` green (62 unit tests passing, 0 failures/errors).
 
+## 2026-11-02 — Stored Memory & Notes Recall Fix, Offline Web Research & WhatsApp Post-Send Mic Click Prevention
+
+- [x] **Stored Memory & Stored Notes Recall Fix (`MemoryRepository.kt`, `MemoryEntities.kt`, `MemoryTools.kt`, `LocalAiModels.kt`):**
+  - Added `MemoryType.NOTE = "note"` and conversational stop-word stripping (`meaningfulTokens`) in `MemoryRepository.search(query, limit)` so broad recall questions (*"What do you remember about me?"*, *"What are my stored notes?"*) return active stored memories and notes directly instead of failing FTS/LIKE matching on stop-words.
+  - Upgraded `MemoryRepository.promptContext(query)` to always inject both query-relevant memories and up to 15 active **Stored memories and notes** into the system prompt on every turn so both cloud and offline models always know all saved facts and notes.
+  - Updated `RememberTool` (`remember_about_owner`) to accept `"text"`, `"fact"`, `"note"`, or `"content"`, and updated `SearchMemoryTool` (`search_memory`) to fall back to returning all active stored memories/notes when a specific keyword match is empty.
+- [x] **Offline / Local AI Web Research (`LocalAiModels.kt`, `MediaTools.kt`):**
+  - Added Rule #23 (`web_search`) + `isWebResearchIntent` + `extractWebResearchQuery` in `OfflineTaskRouter.routeUserCommand` so downloaded local models route web research, search, news, weather, and general knowledge queries directly to `web_search`.
+  - Added a zero-API-key **Wikipedia OpenSearch / Query API** fallback in `MediaTools.kt` (`searchDuckDuckGo`) alongside DuckDuckGo HTML, Lite, and Instant Answer endpoints, and formatted multi-source research summaries in `LocalLlmProvider`.
+- [x] **WhatsApp Voice-Note Post-Send Mic Click Fix (`WhatsAppVoiceNoteAgent.kt`):**
+  - Removed `"send_container"` from `WhatsAppVoiceNotes.SEND_VIEW_IDS` (which wraps the Microphone button when the text input is empty) and added `WhatsAppVoiceNotes.isMicNode` guards so microphone controls are never mistaken for a Send button.
+  - Updated `WhatsAppVoiceNoteSender.holdMicAndPlay` and `pressVoiceNoteSendButton`: releasing the continuous hold gesture (`dispatchHoldGesture`) auto-sends the voice note in WhatsApp and restores the normal chat composer (`!recordingActive()`). Jarvis now verifies auto-send immediately on release and never taps the mic button a second time after the voice note has already been sent.
+

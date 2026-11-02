@@ -120,6 +120,7 @@ data class ActionLogEntity(
 
 object MemoryType {
     const val FACT = "fact"
+    const val NOTE = "note"
     const val PREFERENCE = "preference"
     const val PERSON = "person"
     const val PROJECT = "project"
@@ -130,6 +131,7 @@ object MemoryType {
 
     val ALL = listOf(
         FACT,
+        NOTE,
         PREFERENCE,
         PERSON,
         PROJECT,

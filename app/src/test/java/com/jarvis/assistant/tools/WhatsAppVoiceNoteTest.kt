@@ -254,6 +254,9 @@ class WhatsAppVoiceNoteTest {
         assertTrue(WhatsAppVoiceNotes.isSendNode("", "com.whatsapp:id/voice_recorder_send_btn"))
         assertTrue(WhatsAppVoiceNotes.isSendNode("", "com.whatsapp:id/send"))
         assertFalse(WhatsAppVoiceNotes.isSendNode("Record voice message", "com.whatsapp:id/voice_note_btn"))
+        assertFalse(WhatsAppVoiceNotes.isSendNode("Voice message", "com.whatsapp:id/send_container"))
+        assertFalse(WhatsAppVoiceNotes.isSendNode("", "com.whatsapp:id/send_container"))
+        assertTrue(WhatsAppVoiceNotes.isMicNode("Voice message", "com.whatsapp:id/voice_note_btn"))
         assertTrue(
             WhatsAppVoiceNotes.looksLikeRecordingUi(
                 labels = listOf("voice_note_draft_send", "Delete", "0:06"),
