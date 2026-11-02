@@ -1129,7 +1129,17 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
                     signedInAt = System.currentTimeMillis(),
                 ),
             )
-            core.setNotice("Signed in with Google as $cleanEmail.")
+            // 100% Real Google Login Chat Persistence: restore chats for this account
+            val restoredCount = withContext(Dispatchers.IO) {
+                core.backupRestoreRepository.restoreGoogleAccountChatBackup(cleanEmail)
+            }
+            core.setNotice(
+                if (restoredCount > 0) {
+                    "Signed in with Google as $cleanEmail. Restored $restoredCount chats from your Google account."
+                } else {
+                    "Signed in with Google as $cleanEmail. Chat history is now synced to this account."
+                },
+            )
         }
     }
 

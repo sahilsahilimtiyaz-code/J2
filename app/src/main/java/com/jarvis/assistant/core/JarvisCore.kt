@@ -888,6 +888,10 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         scope.launch(Dispatchers.IO) {
             runCatching {
                 memoryRepository.addMessage(conversationId, "jarvis", text, providerName)
+                val currentAuth = settings.value.auth
+                if (currentAuth.mode == com.jarvis.assistant.settings.AuthMode.GOOGLE && currentAuth.email.isNotBlank()) {
+                    backupRestoreRepository.saveGoogleAccountChatBackup(currentAuth.email)
+                }
             }
         }
     }
@@ -2336,6 +2340,82 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             )
         return runCatching { controller.tapVideoItemVerified(index, query) }
             .getOrElse { ScreenResult(false, "Video tap failed: ${it.message}", verified = false) }
+    }
+
+    override suspend fun doubleTap(text: String): ScreenResult {
+        val controller = JarvisAccessibilityService.controller()
+            ?: return ScreenResult(false, "Screen control is not enabled.", verified = false)
+        val candidate = controller.findTapCandidates(text).firstOrNull()
+        if (candidate != null) {
+            val service = JarvisAccessibilityService.serviceInstance()
+            val sent = service?.dispatchDoubleTapGesture(candidate.bounds.exactCenterX(), candidate.bounds.exactCenterY()) ?: false
+            return ScreenResult(sent, if (sent) "Double-tapped \"${candidate.label}\"." else "Double tap failed.", verified = sent)
+        }
+        return controller.tapVerified(text)
+    }
+
+    override suspend fun longPress(text: String, durationMs: Long): ScreenResult {
+        val controller = JarvisAccessibilityService.controller()
+            ?: return ScreenResult(false, "Screen control is not enabled.", verified = false)
+        val candidate = controller.findTapCandidates(text).firstOrNull()
+        if (candidate != null) {
+            val service = JarvisAccessibilityService.serviceInstance()
+            val sent = service?.dispatchLongPressGesture(candidate.bounds.exactCenterX(), candidate.bounds.exactCenterY(), durationMs) ?: false
+            return ScreenResult(sent, if (sent) "Long-pressed \"${candidate.label}\" for ${durationMs}ms." else "Long press failed.", verified = sent)
+        }
+        return controller.tapVerified(text)
+    }
+
+    override suspend fun swipe(direction: String, distance: String): ScreenResult {
+        return scrollDirection(direction)
+    }
+
+    override suspend fun drag(fromTarget: String, toTarget: String): ScreenResult {
+        val controller = JarvisAccessibilityService.controller()
+            ?: return ScreenResult(false, "Screen control is not enabled.", verified = false)
+        val fromCand = controller.findTapCandidates(fromTarget).firstOrNull()
+            ?: return ScreenResult(false, "Could not locate start element \"$fromTarget\".", verified = false)
+        val toCand = controller.findTapCandidates(toTarget).firstOrNull()
+            ?: return ScreenResult(false, "Could not locate destination element \"$toTarget\".", verified = false)
+        val service = JarvisAccessibilityService.serviceInstance()
+        val sent = service?.dispatchDragGesture(
+            startX = fromCand.bounds.exactCenterX(),
+            startY = fromCand.bounds.exactCenterY(),
+            endX = toCand.bounds.exactCenterX(),
+            endY = toCand.bounds.exactCenterY(),
+        ) ?: false
+        return ScreenResult(sent, if (sent) "Dragged from \"$fromTarget\" to \"$toTarget\"." else "Drag gesture failed.", verified = sent)
+    }
+
+    override suspend fun pinchZoom(zoomIn: Boolean, scaleFactor: Float): ScreenResult {
+        val service = JarvisAccessibilityService.serviceInstance()
+            ?: return ScreenResult(false, "Accessibility is not connected.", verified = false)
+        val (w, h) = service.getScreenDimensions()
+        val sent = service.dispatchPinchZoomGesture(
+            centerX = w / 2f,
+            centerY = h / 2f,
+            zoomIn = zoomIn,
+            spanPx = (minOf(w, h) * 0.45f).coerceAtLeast(180f),
+        )
+        return ScreenResult(sent, if (sent) (if (zoomIn) "Zoomed in." else "Pinched out.") else "Pinch gesture failed.", verified = sent)
+    }
+
+    override suspend fun selectElement(target: String, desiredState: Boolean?): ScreenResult {
+        return tap(target)
+    }
+
+    override suspend fun dismissDialog(): ScreenResult {
+        return press("back")
+    }
+
+    override suspend fun keyboardAction(action: String): ScreenResult {
+        val service = JarvisAccessibilityService.serviceInstance()
+        val sent = service?.performImeAction() ?: false
+        return if (sent) {
+            ScreenResult(true, "Triggered keyboard $action action.", verified = true)
+        } else {
+            press("enter")
+        }
     }
 
     override suspend fun press(key: String): ScreenResult = withScreen { it.press(key) }

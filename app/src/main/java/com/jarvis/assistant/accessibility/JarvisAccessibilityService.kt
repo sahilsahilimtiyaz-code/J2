@@ -14,11 +14,14 @@ import android.provider.Settings
 import android.view.Display
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.resume
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 
@@ -234,6 +237,116 @@ class JarvisAccessibilityService : AccessibilityService() {
             }
         }
     }
+
+    /**
+     * Dispatches a human-like double tap at ([x], [y]) with two crisp strokes
+     * separated by ~85ms.
+     */
+    suspend fun dispatchDoubleTapGesture(x: Float, y: Float): Boolean {
+        if (x <= 0f || y <= 0f) return false
+        val first = dispatchTapGesture(x, y, durationMs = 50L)
+        if (!first) return false
+        delay(85L)
+        return dispatchTapGesture(x, y, durationMs = 50L)
+    }
+
+    /**
+     * Dispatches a long press at ([x], [y]) holding contact for [durationMs] (default 650ms).
+     */
+    suspend fun dispatchLongPressGesture(x: Float, y: Float, durationMs: Long = 650L): Boolean {
+        return dispatchHoldGesture(x, y, durationMs.coerceIn(400L, 2500L))
+    }
+
+    /**
+     * Dispatches a continuous drag and drop gesture from ([startX], [startY]) to ([endX], [endY])
+     * maintaining contact over [durationMs] ms (default 480ms).
+     */
+    suspend fun dispatchDragGesture(
+        startX: Float,
+        startY: Float,
+        endX: Float,
+        endY: Float,
+        durationMs: Long = 480L,
+    ): Boolean {
+        return dispatchSwipeGesture(startX, startY, endX, endY, durationMs = durationMs)
+    }
+
+    /**
+     * Dispatches a supported multi-touch pinch or zoom gesture using two simultaneous
+     * StrokeDescription strokes centered around ([centerX], [centerY]).
+     */
+    suspend fun dispatchPinchZoomGesture(
+        centerX: Float,
+        centerY: Float,
+        zoomIn: Boolean,
+        spanPx: Float = 360f,
+        durationMs: Long = 380L,
+    ): Boolean {
+        if (centerX <= 0f || centerY <= 0f) return false
+        return suspendCancellableCoroutine { cont ->
+            val completed = runCatching {
+                val halfSpan = (spanPx / 2f).coerceAtLeast(40f)
+                val path1 = Path()
+                val path2 = Path()
+                if (zoomIn) {
+                    // Zoom in (spread fingers outwards)
+                    path1.moveTo(centerX - 40f, centerY - 40f)
+                    path1.lineTo(centerX - halfSpan, centerY - halfSpan)
+                    path2.moveTo(centerX + 40f, centerY + 40f)
+                    path2.lineTo(centerX + halfSpan, centerY + halfSpan)
+                } else {
+                    // Pinch out (pinch fingers inwards)
+                    path1.moveTo(centerX - halfSpan, centerY - halfSpan)
+                    path1.lineTo(centerX - 40f, centerY - 40f)
+                    path2.moveTo(centerX + halfSpan, centerY + halfSpan)
+                    path2.lineTo(centerX + 40f, centerY + 40f)
+                }
+                val stroke1 = GestureDescription.StrokeDescription(path1, 0L, durationMs)
+                val stroke2 = GestureDescription.StrokeDescription(path2, 0L, durationMs)
+                val gesture = GestureDescription.Builder()
+                    .addStroke(stroke1)
+                    .addStroke(stroke2)
+                    .build()
+                dispatchGesture(
+                    gesture,
+                    object : GestureResultCallback() {
+                        override fun onCompleted(gestureDescription: GestureDescription?) {
+                            if (cont.isActive) cont.resume(true)
+                        }
+
+                        override fun onCancelled(gestureDescription: GestureDescription?) {
+                            if (cont.isActive) cont.resume(false)
+                        }
+                    },
+                    null,
+                )
+            }.getOrDefault(false)
+            if (!completed && cont.isActive) {
+                cont.resume(false)
+            }
+        }
+    }
+
+    /**
+     * Returns true if an input method / soft keyboard window is currently active and visible.
+     */
+    fun isKeyboardVisible(): Boolean = runCatching {
+        windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+    }.getOrDefault(false)
+
+    /**
+     * Executes standard IME action on the focused node (Enter / Search / Send).
+     */
+    fun performImeAction(): Boolean = runCatching {
+        val root = rootInActiveWindow ?: return@runCatching false
+        val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            ?: root.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY)
+        if (focused != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            focused.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
+        } else {
+            false
+        }
+    }.getOrDefault(false)
 
     /**
      * Returns the physical screen dimensions (width to height) of the active device display,

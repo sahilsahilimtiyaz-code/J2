@@ -87,6 +87,15 @@ interface ScreenAccess {
     suspend fun tapVideo(index: Int = 1, query: String = ""): ScreenResult =
         tap("video")
 
+    suspend fun doubleTap(text: String): ScreenResult = tap(text)
+    suspend fun longPress(text: String, durationMs: Long = 650L): ScreenResult = tap(text)
+    suspend fun swipe(direction: String, distance: String = "medium"): ScreenResult = scrollDirection(direction)
+    suspend fun drag(fromTarget: String, toTarget: String): ScreenResult = tap(fromTarget)
+    suspend fun pinchZoom(zoomIn: Boolean, scaleFactor: Float = 1.5f): ScreenResult = ScreenResult(false, "Pinch zoom not supported on this view.", verified = false)
+    suspend fun selectElement(target: String, desiredState: Boolean? = null): ScreenResult = tap(target)
+    suspend fun dismissDialog(): ScreenResult = press("back")
+    suspend fun keyboardAction(action: String = "enter"): ScreenResult = press("enter")
+
     suspend fun press(key: String): ScreenResult
 
     /**

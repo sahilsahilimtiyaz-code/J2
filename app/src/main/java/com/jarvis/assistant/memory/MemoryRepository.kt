@@ -332,6 +332,8 @@ class MemoryRepository(private val dao: MemoryDao) {
     }
 
     suspend fun exportJson(): String = withContext(Dispatchers.IO) {
+        val allConvs = dao.allConversations()
+        val allMsgs = dao.allMessages()
         val export = MemoryExport(
             exportedAt = System.currentTimeMillis(),
             facts = dao.facts().map { FactDto(it.key, it.value, it.source) },
@@ -348,6 +350,24 @@ class MemoryRepository(private val dao: MemoryDao) {
             },
             skills = dao.skills().map {
                 SkillDto(it.name, it.description, it.triggers, it.stepsJson, it.enabled)
+            },
+            conversations = allConvs.map { c ->
+                ConversationDto(
+                    id = c.id,
+                    startedAt = c.startedAt,
+                    updatedAt = c.updatedAt,
+                    title = c.title,
+                )
+            },
+            messages = allMsgs.map { m ->
+                MessageDto(
+                    id = m.id,
+                    conversationId = m.conversationId,
+                    author = m.author,
+                    text = m.text,
+                    providerName = m.providerName,
+                    createdAt = m.createdAt,
+                )
             },
         )
         json.encodeToString(export)
@@ -389,6 +409,32 @@ class MemoryRepository(private val dao: MemoryDao) {
                 )
             }
         }
+        // Restore conversations and messages if present
+        if (export.conversations.isNotEmpty()) {
+            val convIdMap = mutableMapOf<Long, Long>()
+            export.conversations.forEach { c ->
+                val newId = dao.insertConversation(
+                    ConversationEntity(
+                        startedAt = c.startedAt,
+                        updatedAt = c.updatedAt,
+                        title = c.title,
+                    ),
+                )
+                convIdMap[c.id] = newId
+            }
+            export.messages.forEach { m ->
+                val targetConvId = convIdMap[m.conversationId] ?: convIdMap.values.firstOrNull() ?: 1L
+                dao.insertMessage(
+                    MessageEntity(
+                        conversationId = targetConvId,
+                        author = m.author,
+                        text = m.text,
+                        providerName = m.providerName,
+                        createdAt = m.createdAt,
+                    ),
+                )
+            }
+        }
         added
     }
 
@@ -413,11 +459,31 @@ class MemoryRepository(private val dao: MemoryDao) {
 
     @Serializable
     data class MemoryExport(
-        val version: Int = 2,
+        val version: Int = 3,
         val exportedAt: Long = 0L,
         val facts: List<FactDto> = emptyList(),
         val memories: List<MemoryDto> = emptyList(),
         val skills: List<SkillDto> = emptyList(),
+        val conversations: List<ConversationDto> = emptyList(),
+        val messages: List<MessageDto> = emptyList(),
+    )
+
+    @Serializable
+    data class ConversationDto(
+        val id: Long,
+        val startedAt: Long,
+        val updatedAt: Long,
+        val title: String = "",
+    )
+
+    @Serializable
+    data class MessageDto(
+        val id: Long,
+        val conversationId: Long,
+        val author: String,
+        val text: String,
+        val providerName: String? = null,
+        val createdAt: Long = 0L,
     )
 
     @Serializable

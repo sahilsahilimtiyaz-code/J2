@@ -23,6 +23,26 @@ data class MasterJarvisBackup(
     val skills: List<BackupSkill>,
     val memories: List<BackupMemory>,
     val facts: Map<String, String>,
+    val conversations: List<BackupConversation> = emptyList(),
+    val messages: List<BackupMessage> = emptyList(),
+)
+
+@Serializable
+data class BackupConversation(
+    val id: Long,
+    val startedAt: Long,
+    val updatedAt: Long,
+    val title: String = "",
+)
+
+@Serializable
+data class BackupMessage(
+    val id: Long,
+    val conversationId: Long,
+    val author: String,
+    val text: String,
+    val providerName: String? = null,
+    val createdAt: Long = 0L,
 )
 
 @Serializable
@@ -113,6 +133,12 @@ class BackupRestoreRepository(
                 )
             },
             facts = factsMap,
+            conversations = decodedMemories.conversations.map { c ->
+                BackupConversation(c.id, c.startedAt, c.updatedAt, c.title)
+            },
+            messages = decodedMemories.messages.map { m ->
+                BackupMessage(m.id, m.conversationId, m.author, m.text, m.providerName, m.createdAt)
+            },
         )
 
         json.encodeToString(backup)
@@ -164,7 +190,55 @@ class BackupRestoreRepository(
                 if (added) memoriesRestored++
             }
 
-            "Backup successfully restored: $memoriesRestored memories and $skillsRestored skills loaded."
+            // 4. Restore Chat Conversations & Messages
+            var messagesRestored = 0
+            if (backup.conversations.isNotEmpty() || backup.messages.isNotEmpty()) {
+                val exportFormat = MemoryRepository.MemoryExport(
+                    version = 3,
+                    exportedAt = System.currentTimeMillis(),
+                    conversations = backup.conversations.map {
+                        MemoryRepository.ConversationDto(it.id, it.startedAt, it.updatedAt, it.title)
+                    },
+                    messages = backup.messages.map {
+                        MemoryRepository.MessageDto(it.id, it.conversationId, it.author, it.text, it.providerName, it.createdAt)
+                    },
+                )
+                memoryRepository.importJson(json.encodeToString(exportFormat))
+                messagesRestored = backup.messages.size
+            }
+
+            "Backup successfully restored: $memoriesRestored memories, $messagesRestored chats, and $skillsRestored skills loaded."
         }
+    }
+
+    // Google Login Real Chat Persistence & Sync Vault --------------------------
+
+    private fun googleChatSyncDir(): java.io.File {
+        val dir = java.io.File(context.filesDir, "google_chat_sync")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    private fun sanitizeEmail(email: String): String =
+        email.lowercase().replace(Regex("[^a-z0-9_]"), "_").ifBlank { "anonymous" }
+
+    suspend fun saveGoogleAccountChatBackup(email: String): Boolean = withContext(Dispatchers.IO) {
+        if (email.isBlank()) return@withContext false
+        runCatching {
+            val fullExportJson = memoryRepository.exportJson()
+            val targetFile = java.io.File(googleChatSyncDir(), "chats_${sanitizeEmail(email)}.json")
+            targetFile.writeText(fullExportJson)
+            true
+        }.getOrDefault(false)
+    }
+
+    suspend fun restoreGoogleAccountChatBackup(email: String): Int = withContext(Dispatchers.IO) {
+        if (email.isBlank()) return@withContext 0
+        runCatching {
+            val targetFile = java.io.File(googleChatSyncDir(), "chats_${sanitizeEmail(email)}.json")
+            if (!targetFile.exists() || targetFile.length() == 0L) return@withContext 0
+            val raw = targetFile.readText()
+            memoryRepository.importJson(raw)
+        }.getOrDefault(0)
     }
 }

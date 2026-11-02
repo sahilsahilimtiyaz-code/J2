@@ -106,6 +106,12 @@ interface MemoryDao {
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId AND id > :afterId ORDER BY id ASC")
     suspend fun messagesAfter(conversationId: Long, afterId: Long): List<MessageEntity>
 
+    @Query("SELECT * FROM conversations ORDER BY updatedAt DESC")
+    suspend fun allConversations(): List<ConversationEntity>
+
+    @Query("SELECT * FROM messages ORDER BY id ASC")
+    suspend fun allMessages(): List<MessageEntity>
+
     @Query("DELETE FROM messages")
     suspend fun clearMessages()
 
