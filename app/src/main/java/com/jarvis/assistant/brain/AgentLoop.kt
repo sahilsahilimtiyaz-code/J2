@@ -310,6 +310,7 @@ class AgentLoop(
             "navigate_to",
             "create_calendar_event",
             "send_whatsapp_message",
+            "send_whatsapp_voice_note",
             "send_sms",
             "call_contact",
             "control_flashlight",

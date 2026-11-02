@@ -121,3 +121,74 @@ Jarvis can now answer WhatsApp voice calls for you:
 9. **Fail-safe:** with the toggle on, call yourself with the phone's call volume at zero. Jarvis should still answer, but you should notice the poor pickup — this validates the acoustic path note above (not a bug).
 10. **Settings persists:** after a full app restart, the toggle and "Max caller exchanges" stay where you left them.
 
+
+## WhatsApp Voice Messages (2026-11-02)
+
+Jarvis can now send a **real WhatsApp voice note** in his own configured voice — the
+waveform/PTT bubble WhatsApp records itself, not an audio-file attachment.
+
+### Use it
+
+- **By voice or chat:** “Jarvis, send a voice message to Rahul saying I will call him
+  tonight.” The `send_whatsapp_voice_note` tool finds the chat, asks for your explicit
+  confirmation, speaks the line in your Fish Audio, ElevenLabs or system voice, records
+  it through WhatsApp's own microphone and presses Send.
+- **Tools screen:** `Send WhatsApp voice note` is listed under *Calls & SMS*.
+
+### Auto-replies (opt-in)
+
+In **Settings → Security → WhatsApp voice messages** you can allow a small list of
+contacts to receive an automatic spoken reply when they message you. The policy:
+
+- only listed contacts, only 1:1 text notifications, only while the screen is on,
+  unlocked and screen control is enabled;
+- refuses links, OTP/verification codes, passwords, payment or money requests, group
+  messages, media placeholders and anything that looks like a prompt injection;
+- enforces a per-contact cooldown (default 10 minutes) and a daily cap (default 12);
+- drafts a 1–2 sentence reply through your configured AI provider and sends it as a
+  voice note. Group auto-reply is intentionally not supported.
+
+### How it works, honestly
+
+Android gives no third-party app a way to write into WhatsApp's microphone or to set the
+PTT flag on a shared file. The Business Cloud API can send true voice notes but cannot
+use a personal WhatsApp number. So Jarvis uses WhatsApp's own recorder: it opens the
+exact chat, holds the mic and slides up to lock, plays the rendered WAV through the
+loudspeaker at full media volume, waits for the sentence to finish, then presses Send.
+This is the same acoustic limitation as the call receptionist: the phone must be
+**unlocked, off any headset/Bluetooth output, with media volume up**. No note is claimed as delivered unless the recording bar disappears and the composer
+returns; a new voice bubble with a duration upgrades that to a verified delivery. If
+WhatsApp's UI cannot be driven, Jarvis says so and offers an audio-file share handoff
+only when no recording has started (so it can never duplicate a note).
+
+The renderer uses the configured cloud voice and falls back to the Android system voice
+when `Fall back to system voice` is on. Notes are capped at 420 characters by default
+(80–700), and anything over 60 seconds is refused.
+
+### Test this on your phone
+
+1. Enable **Settings → Security → Allow screen control**, then **Allow WhatsApp voice
+   notes**. Disconnect Bluetooth/headphones and raise media volume.
+2. Say: “Jarvis, send a voice message to <a contact> saying hello, I will call you
+   shortly.” Approve the confirmation dialog.
+3. WhatsApp must open the right chat, show the recording bar, play Jarvis's voice, and
+   send a voice bubble. Check the action log for `send_whatsapp_voice_note`.
+4. Try a saved contact by name and an unsaved number with country code.
+5. For auto-reply, add that contact to the allowlist, enable it, and send yourself a
+   message from the contact's phone while this phone is unlocked. Verify one reply, then
+   verify the cooldown blocks a second immediate message.
+6. Negative checks: a link, an OTP, a group message and a locked/off screen must all be
+   refused or skipped.
+
+**Known limits:** WhatsApp's private UI can change with an update; the mic and send
+detection uses layered resource-id, label and geometric strategies and refuses rather
+than guessing. The acoustic recording sounds like a phone call, not studio audio.
+Auto-reply needs notification access and is deliberately limited to allowlisted 1:1
+contacts.
+
+### Launcher icon
+
+The only new image added to the workspace was the app showcase poster. Its arc-reactor
+mark was cropped cleanly (no caption) into the 1024 px app logo, an adaptive-icon
+foreground, round icons and legacy mipmap sizes; `ic_launcher.xml` and the manifest now
+use it.

@@ -193,3 +193,42 @@
 - [x] Verification: `gradle assembleDebug testDebugUnitTest` green — **39 tests / 0 failures / 0 errors** (34 previous + 5 new `WhatsAppCallAgentTest` covering window detection, farewell phrases, sanitization cap, and the prompt/turn builders); debug APK 47.7 MB.
 - [ ] Phone verification: real incoming WhatsApp call answered on-screen, Jarvis heard by the caller through the loudspeaker, engaged replies to real caller speech, farewell → hang-up, Stop banner + `end_whatsapp_call` abort properly.
 
+
+## 2026-11-02 — WhatsApp voice messages, verified recorder automation, logo
+
+- [x] **Research first:** confirmed a WhatsApp voice note is a PTT Opus message whose
+  `ptt` flag is set by the client protocol, not by Android's `ACTION_SEND`; a personal
+  WhatsApp number cannot use the Business Cloud API for this, and Android has no
+  virtual-microphone API for unrooted apps. The only honest no-root path is WhatsApp's
+  own recorder plus acoustic playback.
+- [x] **`VoiceNoteAudio.kt`:** a RIFF/WAVE writer for 16-bit mono PCM, a
+  `VoiceNoteStudio` that collects Fish Audio/ElevenLabs streamed PCM (or falls back to
+  `TextToSpeech.synthesizeToFile`), a `VoiceNotePlayer` with transient audio focus and
+  an external-route guard, and real duration tracking.
+- [x] **`WhatsAppVoiceNoteAgent.kt`:** layered mic discovery (known view ids → label
+  hints → rightmost square control, explicitly excluding camera/attach/emoji), a
+  press-and-slide-up lock gesture with tap fallback, recording-bar verification, a
+  bounded playback wait, verified Send, a best-effort cancel, and a share fallback that
+  is only armed before recording starts.
+- [x] **Chat identity checks:** deep links for numbers, WhatsApp search for names, top-bar
+  title verification for name searches, and an abort if the composer/title never matches.
+  Voice bubbles are counted with their duration so the mic's own “Voice message” label
+  is never mistaken for a sent note.
+- [x] **Auto-reply policy:** `WhatsAppReplyPolicy` gates on opt-in, allowlist, screen
+  control, interactive/unlocked screen, safe body (no links, OTPs, secrets, payment,
+  group hints or injection phrases), per-contact cooldown and a daily cap. The
+  notification listener exposes a deduplicated WhatsApp text event, and JarvisCore
+  drafts through the configured provider with SecurityShield sanitisation and no tools.
+- [x] **Settings and tool:** `send_whatsapp_voice_note` registered and labelled; new
+  safety fields (enabled, fallback, max chars, auto-reply, allowlist, cooldown, daily
+  cap) persisted with a dedicated Settings card. `saveSafety` now copies the existing
+  safety document so unrelated fields cannot be wiped.
+- [x] **Launcher icon:** extracted the arc-reactor mark from the supplied showcase
+  poster into the app logo, adaptive foreground, round/legacy mipmaps and manifest.
+- [x] **Verification:** `gradle assembleDebug testDebugUnitTest` green — **48 tests / 0
+  failures / 0 errors** (39 previous + 9 new `WhatsAppVoiceNoteTest` covering
+  sanitisation, recording/bubble/invalid-number detection, allowlist and rate policy,
+  prompt safety and WAV headers); debug APK 46 MB.
+- [ ] **Phone verification:** real WhatsApp voice note by name and number, auto-reply on
+  an unlocked phone, cooldown/daily cap, refusal of links/OTP/groups, share fallback,
+  and the new launcher/round icon on the home screen.

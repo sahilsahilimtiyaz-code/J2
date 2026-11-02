@@ -306,6 +306,69 @@ class SendWhatsAppTool : Tool {
 }
 
 /**
+ * Sends a genuine WhatsApp voice message: Jarvis renders the line in his own
+ * configured voice, drives WhatsApp's recorder and sends the note.
+ */
+class SendWhatsAppVoiceNoteTool : Tool {
+
+    override val definition: ToolDefinition = ToolDefinition(
+        name = "send_whatsapp_voice_note",
+        description = "Send a real WhatsApp voice message to a contact name or phone number. " +
+            "Jarvis speaks the supplied text in his own voice, records it through WhatsApp's " +
+            "own microphone, sends it, and verifies the chat. The owner confirms first.",
+        parameters = objectSchema(
+            required = listOf("recipient", "message"),
+            properties = mapOf(
+                "recipient" to stringProperty("Contact name, or phone number with country code."),
+                "message" to stringProperty(
+                    "What Jarvis should say in the voice note. One or two short sentences.",
+                ),
+            ),
+        ),
+    )
+
+    override val label = "Send WhatsApp voice note"
+    override val category = ToolCategory.CONTACTS
+
+    override fun availability(context: Context): ToolAvailability {
+        val connected = JarvisAccessibilityService.isConnected()
+        return ToolAvailability(
+            label = if (connected) "Ready" else "Needs screen control",
+            ready = connected,
+        )
+    }
+
+    override suspend fun execute(arguments: JsonObject, context: ToolContext): ToolResult {
+        val recipient = arguments.argString("recipient")?.trim().orEmpty()
+        val message = arguments.argString("message")?.trim().orEmpty().take(700)
+        if (recipient.isBlank() || message.isBlank()) {
+            return ToolResult(false, "Give me both the recipient and what to say in the voice note.")
+        }
+        val core = runCatching {
+            com.jarvis.assistant.core.JarvisCore.get(context.appContext)
+        }.getOrNull() ?: return ToolResult(false, "Jarvis is not initialised yet.")
+        if (!core.settings.value.safety.voiceNoteEnabled) {
+            return ToolResult(
+                false,
+                "WhatsApp voice messages are switched off. Enable them in Settings, Security, " +
+                    "WhatsApp voice messages.",
+            )
+        }
+        val approved = context.confirmation.confirm(
+            title = "Send a WhatsApp voice message to $recipient?",
+            detail = "\u201c${message.take(300)}\u201d\n\nJarvis will speak this aloud in his " +
+                "configured voice and record it through WhatsApp. Keep the phone unlocked, " +
+                "on the loudspeaker and off any headset.",
+        )
+        if (!approved) {
+            return ToolResult(false, "The owner declined the WhatsApp voice message.")
+        }
+        val result = core.sendWhatsAppVoiceNoteNow(recipient, message)
+        return ToolResult(result.success, result.message)
+    }
+}
+
+/**
  * Reads or writes the system clipboard so Jarvis can copy summaries, code, links,
  * or read what the owner just copied.
  */

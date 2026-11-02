@@ -589,7 +589,7 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
             runCatching {
                 core.settingsRepository.update { current ->
                     current.copy(
-                        safety = SafetySettings(
+                        safety = current.safety.copy(
                             screenControlEnabled = screenControlEnabled,
                             blocklistKeywords = keywords,
                             callAssistantEnabled = callAssistantEnabled,
@@ -600,6 +600,42 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
                 core.setNotice("Safety settings saved.")
             }.onFailure {
                 core.setError(it.message?.take(400) ?: "Could not save the safety settings.")
+            }
+        }
+    }
+
+    fun saveWhatsAppVoiceNotes(
+        enabled: Boolean,
+        autoReplyEnabled: Boolean,
+        allowlistText: String,
+        maxChars: Int,
+        audioFallback: Boolean,
+        cooldownMinutes: Int,
+        dailyLimit: Int,
+    ) {
+        val contacts = allowlistText
+            .split(',', '\n', ';')
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinctBy { it.lowercase(Locale.UK) }
+        viewModelScope.launch {
+            runCatching {
+                core.settingsRepository.update { current ->
+                    current.copy(
+                        safety = current.safety.copy(
+                            voiceNoteEnabled = enabled,
+                            voiceNoteAutoReplyEnabled = autoReplyEnabled && contacts.isNotEmpty(),
+                            voiceNoteAllowedContacts = contacts,
+                            voiceNoteMaxChars = maxChars.coerceIn(80, 700),
+                            voiceNoteAudioFallbackEnabled = audioFallback,
+                            voiceNoteCooldownMinutes = cooldownMinutes.coerceIn(1, 240),
+                            voiceNoteDailyLimit = dailyLimit.coerceIn(1, 60),
+                        ),
+                    )
+                }
+                core.setNotice("WhatsApp voice note settings saved.")
+            }.onFailure {
+                core.setError(it.message?.take(400) ?: "Could not save the voice note settings.")
             }
         }
     }

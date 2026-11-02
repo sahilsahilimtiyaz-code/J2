@@ -529,6 +529,7 @@ private fun promptForTool(name: String, label: String): String = when (name) {
     "place_call" -> "Find a contact and ask before placing a call"
     "send_sms" -> "Draft an SMS message and ask for my confirmation"
     "send_whatsapp_message" -> "Prepare a WhatsApp message and ask for my confirmation"
+    "send_whatsapp_voice_note" -> "Send a WhatsApp voice message in your voice and ask me first"
     "remember_fact" -> "Remember that I prefer concise engineering briefings"
     "recall_memories" -> "Recall everything you remember about my preferences"
     "read_notifications" -> "Read and summarize my recent notifications"

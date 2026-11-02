@@ -129,6 +129,24 @@ data class SafetySettings(
     val callAssistantEnabled: Boolean = false,
     /** How many caller exchanges the call assistant may hold (clamped 2..12). */
     val callAssistantMaxTurns: Int = 6,
+    /**
+     * WhatsApp voice messages: Jarvis speaks the line and records it through
+     * WhatsApp's own microphone, producing a real PTT voice note. The manual
+     * tool still passes the Confirmation Gate.
+     */
+    val voiceNoteEnabled: Boolean = true,
+    /** Offer the audio-file share handoff when WhatsApp's recorder cannot be driven. */
+    val voiceNoteAudioFallbackEnabled: Boolean = true,
+    /** Longest spoken note; protects credit spend and WhatsApp's recording window. */
+    val voiceNoteMaxChars: Int = 420,
+    /** Opt-in: answer incoming WhatsApp messages with a voice note. */
+    val voiceNoteAutoReplyEnabled: Boolean = false,
+    /** Contacts (names or numbers) allowed to receive automatic voice replies. */
+    val voiceNoteAllowedContacts: List<String> = emptyList(),
+    /** Minutes between automatic replies to the same contact. */
+    val voiceNoteCooldownMinutes: Int = 10,
+    /** Hard daily cap on automatic replies, per device. */
+    val voiceNoteDailyLimit: Int = 12,
 )
 
 @Serializable

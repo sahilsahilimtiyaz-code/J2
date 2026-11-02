@@ -3,6 +3,7 @@ package com.jarvis.assistant.voice
 import android.content.Context
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import java.io.File
 import java.util.Locale
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
@@ -30,6 +31,7 @@ class SystemTtsEngine(context: Context) {
 
     private companion object {
         const val MAX_UTTERANCE_MS = 90_000L
+        const val MAX_SYNTHESIS_MS = 60_000L
         const val INIT_TIMEOUT_MS = 8_000L
     }
 
@@ -133,6 +135,93 @@ class SystemTtsEngine(context: Context) {
             return false
         }
         return answered
+    }
+
+    /**
+     * Renders [text] into [file] as a WAV using the platform engine, for the
+     * WhatsApp voice-note path. Returns true only when the engine reported
+     * completion and the file contains more than a bare WAV header.
+     */
+    suspend fun synthesizeToFile(
+        text: String,
+        file: File,
+        language: String = "en",
+    ): Boolean {
+        lastError = null
+        if (text.isBlank()) return false
+        if (!awaitReady()) {
+            lastError = "The Android system voice is not available on this phone."
+            return false
+        }
+        val tts = engine ?: return false
+        val utteranceId = UUID.randomUUID().toString()
+        val completion = CompletableDeferred<Boolean>()
+        synchronized(lock) { pending = completion }
+
+        val started = withContext(Dispatchers.Main) {
+            tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) = Unit
+
+                override fun onDone(utteranceId: String?) {
+                    finish(utteranceId, true)
+                }
+
+                @Deprecated("Superseded by the 21+ overload", ReplaceWith("onError(id, code)"))
+                override fun onError(utteranceId: String?) {
+                    finish(utteranceId, false)
+                }
+
+                override fun onError(utteranceId: String?, errorCode: Int) {
+                    lastError = "The system voice could not render the note (code $errorCode)."
+                    finish(utteranceId, false)
+                }
+
+                override fun onStop(utteranceId: String?, interrupted: Boolean) {
+                    finish(utteranceId, false)
+                }
+            })
+
+            val locale = runCatching { Locale.forLanguageTag(language) }
+                .getOrDefault(Locale.getDefault())
+            runCatching {
+                if (tts.isLanguageAvailable(locale) >= TextToSpeech.LANG_AVAILABLE) {
+                    tts.language = locale
+                }
+            }
+            runCatching { file.parentFile?.mkdirs() }
+            val result = runCatching {
+                tts.synthesizeToFile(text, null, file, utteranceId)
+            }.getOrDefault(TextToSpeech.ERROR)
+            if (result == TextToSpeech.ERROR) {
+                lastError = "The system voice refused to render the note."
+                finish(utteranceId, false)
+                false
+            } else {
+                true
+            }
+        }
+
+        if (!started) {
+            synchronized(lock) {
+                if (pending === completion) pending = null
+            }
+            return false
+        }
+
+        val done = try {
+            kotlinx.coroutines.withTimeoutOrNull(MAX_SYNTHESIS_MS) { completion.await() } ?: false
+        } catch (e: CancellationException) {
+            runCatching { tts.stop() }
+            finish(utteranceId, false)
+            throw e
+        }
+        synchronized(lock) {
+            if (pending === completion) pending = null
+        }
+        if (!done && lastError == null) {
+            lastError = "The system voice did not finish rendering in time."
+        }
+        return done && file.exists() && file.length() > 44L
     }
 
     private fun finish(utteranceId: String?, success: Boolean) {

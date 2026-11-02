@@ -124,7 +124,7 @@ internal object AppAutomation {
     }
 
     /** Type into a specific editable node located by its screen bounds, with a focus fallback. */
-    private suspend fun typeIntoEditable(spot: Rect, text: String): Boolean {
+    internal suspend fun typeIntoEditable(spot: Rect, text: String): Boolean {
         val node = findNode(predicate = { _, bounds ->
             abs(bounds.centerX() - spot.centerX()) < 2 &&
                 abs(bounds.centerY() - spot.centerY()) < 2
@@ -151,7 +151,7 @@ internal object AppAutomation {
         return worked
     }
 
-    private suspend fun foregroundPackage(): String =
+    internal suspend fun foregroundPackage(): String =
         withContext(Dispatchers.Main) {
             JarvisAccessibilityService.serviceInstance()?.rootInActiveWindow
                 ?.packageName?.toString().orEmpty()
@@ -175,7 +175,7 @@ internal object AppAutomation {
         )
 
     /** The message input on a WhatsApp chat screen. */
-    private suspend fun findChatInputSpot(): Rect? =
+    internal suspend fun findChatInputSpot(): Rect? =
         findByViewId("entry")?.let { boundsOf(it) }
             ?: findByViewId("input_replace")?.let { boundsOf(it) }
             ?: findSpot(

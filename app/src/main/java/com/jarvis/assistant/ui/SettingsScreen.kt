@@ -364,6 +364,7 @@ fun SettingsScreen(
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             PermissionsCard(state = state, onOpenWizard = viewModel::openPermissions)
                             SafetyCard(state = state, viewModel = viewModel)
+                            WhatsAppVoiceNoteCard(state = state, viewModel = viewModel)
                         }
                     }
                 }

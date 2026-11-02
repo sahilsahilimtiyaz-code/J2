@@ -1,6 +1,7 @@
 package com.jarvis.assistant.core
 
 import android.Manifest
+import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -9,6 +10,7 @@ import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Bundle
+import android.os.PowerManager
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -35,8 +37,10 @@ import com.jarvis.assistant.memory.MemoryRepository
 import com.jarvis.assistant.memory.MemoryType
 import com.jarvis.assistant.persona.GreetingEngine
 import com.jarvis.assistant.persona.PersonaBuilder
+import com.jarvis.assistant.service.JarvisNotificationListenerService
 import com.jarvis.assistant.service.ListeningServiceController
 import com.jarvis.assistant.service.NotificationHelper
+import com.jarvis.assistant.service.WhatsAppIncomingMessage
 import com.jarvis.assistant.settings.AppSettings
 import com.jarvis.assistant.settings.OwnerProfile
 import com.jarvis.assistant.settings.PersonaSettings
@@ -56,17 +60,24 @@ import com.jarvis.assistant.tools.ScreenVisionCapture
 import com.jarvis.assistant.tools.ToolRegistry
 import com.jarvis.assistant.tools.WhatsAppCallAutomation
 import com.jarvis.assistant.tools.WhatsAppCallConversation
+import com.jarvis.assistant.tools.WhatsAppReplyPolicy
+import com.jarvis.assistant.tools.WhatsAppVoiceNoteSender
+import com.jarvis.assistant.tools.WhatsAppVoiceNotes
 import com.jarvis.assistant.voice.AndroidSttEngine
 import com.jarvis.assistant.voice.AudioChunk
 import com.jarvis.assistant.voice.AudioPlayer
 import com.jarvis.assistant.voice.ElevenLabsTtsEngine
 import com.jarvis.assistant.voice.FishAudioTtsEngine
+import com.jarvis.assistant.voice.RenderedVoiceNote
 import com.jarvis.assistant.voice.SttEvent
 import com.jarvis.assistant.voice.SystemTtsEngine
 import com.jarvis.assistant.voice.TtsConfig
 import com.jarvis.assistant.voice.TtsEngine
+import com.jarvis.assistant.voice.VoiceNotePlayer
+import com.jarvis.assistant.voice.VoiceNoteStudio
 import com.jarvis.assistant.voice.WakeWord
 import com.jarvis.assistant.voice.isRecoverableSttError
+import java.time.LocalDate
 import java.util.Locale
 import java.util.UUID
 import kotlin.coroutines.coroutineContext
@@ -177,6 +188,9 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         }
         whatsappCallJob?.cancel()
         whatsappCallJob = null
+        whatsappReplyJob?.cancel()
+        whatsappReplyJob = null
+        voiceNotePlayer.stop()
     }
 
     fun startManualListening() {
@@ -309,6 +323,10 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         // owner has switched it on in Settings, Safety.
         JarvisAccessibilityService.windowStateListener = { pkg, className ->
             handleWhatsAppWindowEvent(pkg, className)
+        }
+        // Incoming WhatsApp text notifications feed the opt-in voice auto-reply.
+        JarvisNotificationListenerService.incomingWhatsAppListener = { event ->
+            handleIncomingWhatsAppMessage(event)
         }
     }
 
@@ -895,6 +913,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         "see_screen" -> "Looking at your screen..."
         "analyze_screen" -> "Reading the screen..."
         "send_whatsapp_message" -> "Sending the WhatsApp message..."
+        "send_whatsapp_voice_note" -> "Recording the WhatsApp voice message..."
         "answer_whatsapp_call" -> "Answering the WhatsApp call..."
         "end_whatsapp_call" -> "Ending the WhatsApp call..."
         "clipboard_control" -> "Accessing clipboard..."
@@ -3050,6 +3069,351 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         }
     }
 
+    // WhatsApp voice messages -------------------------------------------------
+
+    private val voiceNoteStudio = VoiceNoteStudio(
+        cacheDir = appContext.cacheDir,
+        fish = fishTts,
+        eleven = elevenTts,
+        systemTts = systemTts,
+    )
+    private val voiceNotePlayer = VoiceNotePlayer(appContext)
+    private val voiceNoteLock = Any()
+    private var voiceNoteActive = false
+    private var savedVoiceNoteVolume: Int? = null
+    private var whatsappReplyJob: Job? = null
+    private val autoReplyLock = Any()
+    private val autoReplyLastAt = mutableMapOf<String, Long>()
+    private var autoReplyDay: String = ""
+    private var autoReplyCountToday: Int = 0
+
+    private fun whatsAppInstalled(): Boolean {
+        val manager = appContext.packageManager
+        return runCatching { manager.getPackageInfo(WhatsAppVoiceNotes.PACKAGE, 0) }.isSuccess ||
+            runCatching { manager.getPackageInfo(WhatsAppVoiceNotes.BUSINESS_PACKAGE, 0) }.isSuccess
+    }
+
+    /**
+     * Renders [message] in Jarvis's configured voice and sends it as a genuine
+     * WhatsApp voice note through WhatsApp's own recorder.
+     *
+     * The owner's microphone stream is paused first, media volume is raised, and
+     * the rendered line is played through the loudspeaker so WhatsApp's recorder
+     * captures it. Every stage is verified; a failed send is never reported as
+     * delivered. Manual sends pass the Confirmation Gate in the tool.
+     */
+    suspend fun sendWhatsAppVoiceNoteNow(
+        recipient: String,
+        message: String,
+        autoReply: Boolean = false,
+    ): ScreenResult {
+        val current = settings.value
+        val cleanRecipient = recipient.trim()
+        if (!current.safety.voiceNoteEnabled) {
+            return ScreenResult(
+                false,
+                "WhatsApp voice messages are switched off in Settings, Security.",
+                verified = false,
+            )
+        }
+        if (!current.safety.screenControlEnabled) {
+            return ScreenResult(
+                false,
+                "Screen control is off, so I cannot reach WhatsApp's recorder.",
+                verified = false,
+            )
+        }
+        if (!ready()) {
+            return ScreenResult(
+                false,
+                "Accessibility is disconnected, so I cannot drive WhatsApp.",
+                verified = false,
+            )
+        }
+        if (!whatsAppInstalled()) {
+            return ScreenResult(false, "WhatsApp is not installed, sir.", verified = false)
+        }
+        if (cleanRecipient.isBlank()) {
+            return ScreenResult(false, "Tell me who the voice note is for.", verified = false)
+        }
+        val spoken = WhatsAppVoiceNotes.sanitizeSpokenText(
+            raw = message,
+            maxChars = current.safety.voiceNoteMaxChars,
+        )
+        if (spoken.isBlank()) {
+            return ScreenResult(false, "There was nothing to say in the voice note.", verified = false)
+        }
+        if (autoReply && (_state.value.generating || _state.value.speaking || whatsappCallSessionActive)) {
+            return ScreenResult(false, "Jarvis is busy with another spoken task.", verified = false)
+        }
+        synchronized(voiceNoteLock) {
+            if (voiceNoteActive) {
+                return ScreenResult(
+                    false,
+                    "I am already recording a WhatsApp voice note, sir.",
+                    verified = false,
+                )
+            }
+            voiceNoteActive = true
+        }
+
+        var resumeListening = false
+        var rendered: RenderedVoiceNote? = null
+        var keepRenderedFile = false
+        try {
+            val controller = JarvisAccessibilityService.controller()
+                ?: return ScreenResult(
+                    false,
+                    "Screen control is disconnected, so I cannot reach WhatsApp.",
+                    verified = false,
+                )
+            voiceNotePlayer.externalAudioRoute()?.let { route ->
+                return ScreenResult(
+                    false,
+                    "A $route is connected. WhatsApp can only record my voice through the " +
+                        "loudspeaker, so please disconnect it and try again.",
+                    verified = false,
+                )
+            }
+
+            interruptSpeech()
+            val note = voiceNoteStudio.render(spoken, ttsConfig(current.voice))
+                ?: return ScreenResult(
+                    false,
+                    voiceNoteStudio.lastError ?: "I could not render the voice note.",
+                    verified = false,
+                )
+            rendered = note
+            if (note.durationMs > MAX_VOICE_NOTE_MS) {
+                return ScreenResult(
+                    false,
+                    "That note came out too long for a WhatsApp voice message, sir.",
+                    verified = false,
+                )
+            }
+
+            resumeListening = _state.value.micLocked && !userPausedMic
+            pauseMainListeningForCall()
+            savedVoiceNoteVolume = audioManager?.getStreamVolume(AudioManager.STREAM_MUSIC)
+            audioManager?.let { manager ->
+                manager.setStreamVolume(
+                    AudioManager.STREAM_MUSIC,
+                    manager.getStreamMaxVolume(AudioManager.STREAM_MUSIC),
+                    0,
+                )
+            }
+
+            _state.update {
+                it.copy(toolActivity = "Recording the WhatsApp voice message...")
+            }
+            val sender = WhatsAppVoiceNoteSender(
+                context = appContext,
+                controller = controller,
+                player = voiceNotePlayer,
+            ) { phase ->
+                _state.update { it.copy(toolActivity = phase) }
+            }
+            val result = sender.send(
+                recipient = cleanRecipient,
+                isNumber = WhatsAppVoiceNotes.isNumberLike(cleanRecipient),
+                note = note,
+            )
+
+            var finalResult = result
+            if (!result.success &&
+                current.safety.voiceNoteAudioFallbackEnabled &&
+                sender.fallbackSafe &&
+                !autoReply
+            ) {
+                keepRenderedFile = true
+                val fallback = sender.sharePreparedAudio(cleanRecipient, note)
+                val reason = sender.lastError?.takeIf { it.isNotBlank() }
+                finalResult = fallback.copy(
+                    message = buildString {
+                        append(fallback.message)
+                        if (reason != null) {
+                            append("\n\nWhy: ").append(reason)
+                        }
+                    },
+                )
+            }
+            logVoiceNoteEvent(
+                toolName = if (autoReply) "whatsapp_voice_auto_reply" else "send_whatsapp_voice_note",
+                detail = finalResult.message,
+                success = finalResult.success,
+            )
+            return finalResult
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val message = "The WhatsApp voice note failed: ${e.message?.take(300) ?: "unknown error"}."
+            logVoiceNoteEvent(
+                toolName = if (autoReply) "whatsapp_voice_auto_reply" else "send_whatsapp_voice_note",
+                detail = message,
+                success = false,
+            )
+            return ScreenResult(false, message, verified = false)
+        } finally {
+            voiceNotePlayer.stop()
+            savedVoiceNoteVolume?.let { volume ->
+                runCatching {
+                    audioManager?.setStreamVolume(AudioManager.STREAM_MUSIC, volume, 0)
+                }
+            }
+            savedVoiceNoteVolume = null
+            if (!keepRenderedFile) {
+                rendered?.file?.delete()
+            }
+            _state.update { it.copy(toolActivity = null) }
+            synchronized(voiceNoteLock) { voiceNoteActive = false }
+            if (resumeListening && !userPausedMic) {
+                runCatching { startListeningInternal(interrupt = false, isAutoLoop = true) }
+            }
+        }
+    }
+
+    /**
+     * Opt-in auto-reply entry point. The policy checks the allowlist, screen
+     * state, safety gates and rate limits before a single token is spent.
+     */
+    private fun handleIncomingWhatsAppMessage(event: WhatsAppIncomingMessage) {
+        if (_state.value.generating || _state.value.speaking || whatsappCallSessionActive) return
+        val current = settings.value
+        val safety = current.safety
+        val powerManager = appContext.getSystemService(PowerManager::class.java)
+        val keyguard = appContext.getSystemService(KeyguardManager::class.java)
+        val now = System.currentTimeMillis()
+        val today = LocalDate.now().toString()
+        val senderKey = WhatsAppReplyPolicy.normalize(event.sender)
+        val lastReply: Long
+        val repliesToday: Int
+        synchronized(autoReplyLock) {
+            if (autoReplyDay != today) {
+                autoReplyDay = today
+                autoReplyCountToday = 0
+            }
+            lastReply = autoReplyLastAt[senderKey] ?: 0L
+            repliesToday = autoReplyCountToday
+        }
+        val decision = WhatsAppReplyPolicy.evaluate(
+            sender = event.sender,
+            body = event.body,
+            enabled = safety.voiceNoteAutoReplyEnabled && safety.voiceNoteEnabled,
+            screenControlEnabled = safety.screenControlEnabled,
+            screenInteractive = powerManager?.isInteractive == true,
+            screenLocked = keyguard?.isKeyguardLocked == true,
+            allowlist = safety.voiceNoteAllowedContacts,
+            lastReplyAt = lastReply,
+            repliesToday = repliesToday,
+            cooldownMs = safety.voiceNoteCooldownMinutes * 60_000L,
+            dailyLimit = safety.voiceNoteDailyLimit,
+            now = now,
+        )
+        if (!decision.allowed) return
+
+        synchronized(autoReplyLock) {
+            autoReplyLastAt[senderKey] = now
+            autoReplyCountToday += 1
+        }
+        _state.update {
+            it.copy(notice = "WhatsApp message from ${event.sender} — composing a voice reply.")
+        }
+        whatsappReplyJob?.cancel()
+        whatsappReplyJob = scope.launch {
+            try {
+                val reply = draftWhatsAppReply(current, event.sender, event.body)
+                if (reply.isNullOrBlank()) {
+                    logVoiceNoteEvent(
+                        "whatsapp_voice_auto_reply",
+                        "No reply was drafted for ${event.sender}.",
+                        false,
+                    )
+                    return@launch
+                }
+                val result = sendWhatsAppVoiceNoteNow(event.sender, reply, autoReply = true)
+                setNotice(
+                    if (result.success) {
+                        "Replied to ${event.sender} on WhatsApp with a voice note."
+                    } else {
+                        result.message
+                    },
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logVoiceNoteEvent(
+                    "whatsapp_voice_auto_reply",
+                    "Auto-reply failed: ${e.message?.take(300) ?: "unknown error"}",
+                    false,
+                )
+            }
+        }
+    }
+
+    private suspend fun draftWhatsAppReply(
+        current: AppSettings,
+        sender: String,
+        body: String,
+    ): String? = withContext(Dispatchers.IO) {
+        val providers = runCatching { resolveProviders(current) }.getOrDefault(emptyList())
+        if (providers.isEmpty()) return@withContext null
+        val safeBody = runCatching {
+            com.jarvis.assistant.security.SecurityShield.sanitizeUntrustedText(
+                raw = body,
+                source = "notification:whatsapp",
+            )
+        }.getOrDefault(body).take(600)
+        val memoryContext = runCatching { memoryRepository.promptContext(safeBody) }
+            .getOrDefault("")
+        val persona = runCatching { personaBuilder.build(current, memoryContext) }
+            .getOrDefault("")
+        val system = (persona + "\n\n" + WhatsAppReplyPolicy.replySystemRules()).trim()
+        val prompt = WhatsAppReplyPolicy.buildReplyPrompt(
+            ownerName = current.profile.name,
+            sender = sender,
+            body = safeBody,
+        )
+        for (provider in providers) {
+            val buffer = StringBuilder()
+            val completed = runCatching {
+                providerRegistry.forKind(provider.kind).stream(
+                    request = ChatRequest(
+                        messages = listOf(
+                            LlmMessage.system(system),
+                            LlmMessage.user(prompt),
+                        ),
+                        tools = emptyList(),
+                    ),
+                    config = provider,
+                ).collect { event ->
+                    if (event is LlmEvent.TextDelta) buffer.append(event.text)
+                }
+            }.isSuccess
+            if (completed) {
+                val clean = WhatsAppVoiceNotes.sanitizeSpokenText(buffer.toString(), 360)
+                if (clean.isNotBlank()) return@withContext clean
+            }
+        }
+        null
+    }
+
+    private fun logVoiceNoteEvent(toolName: String, detail: String, success: Boolean) {
+        scope.launch {
+            runCatching {
+                actionLogStore.record(
+                    ActionLogEntry(
+                        id = "voice_note_${System.currentTimeMillis()}_${nextId++}",
+                        toolName = toolName,
+                        label = "WhatsApp voice message",
+                        detail = detail.take(240),
+                        success = success,
+                        timestamp = System.currentTimeMillis(),
+                    ),
+                )
+            }
+        }
+    }
+
     // SkillBridge implementation ----------------------------------------------
 
     override suspend fun saveSkill(
@@ -3106,6 +3470,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         private const val LISTEN_WINDOW_MS = 600_000L
         private const val LISTEN_RETRY_MS = 400L
         private const val STARTUP_GRACE_MS = 400L
+        private const val MAX_VOICE_NOTE_MS = 60_000L
 
         @Volatile
         private var instance: JarvisCore? = null

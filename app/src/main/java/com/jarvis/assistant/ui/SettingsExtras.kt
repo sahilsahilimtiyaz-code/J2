@@ -493,6 +493,164 @@ fun SafetyCard(
 }
 
 @Composable
+fun WhatsAppVoiceNoteCard(
+    state: JarvisUiState,
+    viewModel: JarvisViewModel,
+) {
+    val safety = state.settings.safety
+    var enabled by remember(safety.voiceNoteEnabled) { mutableStateOf(safety.voiceNoteEnabled) }
+    var autoReply by remember(safety.voiceNoteAutoReplyEnabled) {
+        mutableStateOf(safety.voiceNoteAutoReplyEnabled)
+    }
+    var allowlist by remember(safety.voiceNoteAllowedContacts) {
+        mutableStateOf(safety.voiceNoteAllowedContacts.joinToString(", "))
+    }
+    var maxChars by remember(safety.voiceNoteMaxChars) {
+        mutableStateOf(safety.voiceNoteMaxChars.toString())
+    }
+    var fallback by remember(safety.voiceNoteAudioFallbackEnabled) {
+        mutableStateOf(safety.voiceNoteAudioFallbackEnabled)
+    }
+    var cooldown by remember(safety.voiceNoteCooldownMinutes) {
+        mutableStateOf(safety.voiceNoteCooldownMinutes.toString())
+    }
+    var dailyLimit by remember(safety.voiceNoteDailyLimit) {
+        mutableStateOf(safety.voiceNoteDailyLimit.toString())
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.32f),
+        ),
+        shape = RoundedCornerShape(18.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = "WhatsApp voice messages",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                text = "Jarvis speaks the line in your configured voice, records it through " +
+                    "WhatsApp's own microphone and sends a genuine voice note. Android cannot " +
+                    "inject audio into another app, so this is an acoustic recording: keep the " +
+                    "phone unlocked, off any headset, and media volume up. Every manual send " +
+                    "still asks for your confirmation.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = enabled, onCheckedChange = { enabled = it })
+                Spacer(Modifier.width(8.dp))
+                Column {
+                    Text("Allow WhatsApp voice notes", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        "Adds the send_whatsapp_voice_note tool. You can say: \u201cJarvis, send " +
+                            "a voice message to Rahul saying I will call him tonight.\u201d",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = autoReply, onCheckedChange = { autoReply = it })
+                Spacer(Modifier.width(8.dp))
+                Column {
+                    Text("Auto-reply to allowed contacts", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        "When a listed contact messages you and the phone is unlocked, Jarvis " +
+                            "drafts a short reply and sends it as a voice note. Links, OTPs, " +
+                            "payment requests and group chats are refused.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            OutlinedTextField(
+                value = allowlist,
+                onValueChange = { allowlist = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Allowed contacts (comma separated)") },
+                supportingText = {
+                    Text("Names or phone numbers, exactly as WhatsApp shows them. Empty disables auto-reply.")
+                },
+                minLines = 2,
+                maxLines = 3,
+                shape = RoundedCornerShape(14.dp),
+            )
+
+            OutlinedTextField(
+                value = maxChars,
+                onValueChange = { maxChars = it.filter(Char::isDigit) },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Maximum note characters") },
+                supportingText = { Text("80 to 700. Shorter notes sound better and cost less.") },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+            )
+
+            OutlinedTextField(
+                value = cooldown,
+                onValueChange = { cooldown = it.filter(Char::isDigit) },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Minutes between auto-replies to the same contact") },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+            )
+
+            OutlinedTextField(
+                value = dailyLimit,
+                onValueChange = { dailyLimit = it.filter(Char::isDigit) },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Daily auto-reply limit") },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+            )
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(checked = fallback, onCheckedChange = { fallback = it })
+                Spacer(Modifier.width(8.dp))
+                Column {
+                    Text("Offer an audio-file fallback", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        "If WhatsApp's recorder cannot be driven, open its share screen with " +
+                            "the rendered audio and say plainly that it is not yet sent.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            TextButton(
+                onClick = {
+                    viewModel.saveWhatsAppVoiceNotes(
+                        enabled = enabled,
+                        autoReplyEnabled = autoReply,
+                        allowlistText = allowlist,
+                        maxChars = maxChars.toIntOrNull() ?: 420,
+                        audioFallback = fallback,
+                        cooldownMinutes = cooldown.toIntOrNull() ?: 10,
+                        dailyLimit = dailyLimit.toIntOrNull() ?: 12,
+                    )
+                },
+                contentPadding = PaddingValues(horizontal = 4.dp),
+            ) {
+                Text("Save voice note settings")
+            }
+        }
+    }
+}
+
+@Composable
 fun ActionLogCard(
     state: JarvisUiState,
     onOpenLog: () -> Unit,

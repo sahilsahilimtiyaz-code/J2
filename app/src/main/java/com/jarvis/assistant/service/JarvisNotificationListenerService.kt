@@ -19,6 +19,15 @@ data class CapturedNotification(
     val isClearable: Boolean,
 )
 
+/** A WhatsApp message notification, reduced to what a spoken reply needs. */
+data class WhatsAppIncomingMessage(
+    val sender: String,
+    val body: String,
+    val key: String,
+    val postedAt: Long,
+    val packageName: String,
+)
+
 /**
  * Tier 2 phone control: reads, summarises and dismisses status-bar notifications.
  *
@@ -46,6 +55,7 @@ class JarvisNotificationListenerService : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         refreshSnapshot()
+        notifyIncomingWhatsApp(sbn)
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
@@ -96,6 +106,55 @@ class JarvisNotificationListenerService : NotificationListenerService() {
         cache.addAll(list)
     }
 
+    /**
+     * Hands a WhatsApp text notification to the runtime once. Calls, ongoing
+     * notifications, media placeholders and repeated updates are filtered here
+     * so the auto-reply policy only ever sees a real incoming line.
+     */
+    private fun notifyIncomingWhatsApp(sbn: StatusBarNotification?) {
+        if (sbn == null) return
+        if (!sbn.packageName.startsWith(WHATSAPP_PACKAGE_PREFIX)) return
+        if (sbn.isOngoing) return
+        val notification = sbn.notification ?: return
+        if (notification.category == Notification.CATEGORY_CALL ||
+            notification.category == Notification.CATEGORY_MISSED_CALL
+        ) {
+            return
+        }
+        val extras = notification.extras ?: return
+        val sender = extras.getCharSequence(Notification.EXTRA_TITLE)
+            ?.toString()?.trim().orEmpty()
+        val longText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)
+            ?.toString()?.trim().orEmpty()
+        val shortText = extras.getCharSequence(Notification.EXTRA_TEXT)
+            ?.toString()?.trim().orEmpty()
+        val body = longText.ifBlank { shortText }
+        if (sender.isBlank() || body.isBlank()) return
+        val lower = body.lowercase()
+        if (PLACEHOLDER_BODIES.any { lower == it || lower.startsWith("$it ") }) return
+
+        val dedupeKey = "${sbn.key}|${body.hashCode()}"
+        val now = System.currentTimeMillis()
+        synchronized(recentWhatsApp) {
+            val stale = recentWhatsApp.filterValues { now - it > WHATSAPP_DEDUPE_MS }.keys
+            stale.forEach { recentWhatsApp.remove(it) }
+            if (recentWhatsApp.containsKey(dedupeKey)) return
+            recentWhatsApp[dedupeKey] = now
+            while (recentWhatsApp.size > 30) {
+                recentWhatsApp.remove(recentWhatsApp.keys.first())
+            }
+        }
+        val listener = incomingWhatsAppListener ?: return
+        val event = WhatsAppIncomingMessage(
+            sender = sender.take(80),
+            body = body.take(700),
+            key = sbn.key,
+            postedAt = sbn.postTime,
+            packageName = sbn.packageName,
+        )
+        runCatching { listener(event) }
+    }
+
     private fun redactSensitiveCodes(title: String, body: String): String {
         val combined = "$title $body".lowercase()
         val looksLikeOtp = OTP_KEYWORDS.any { combined.contains(it) } &&
@@ -109,6 +168,30 @@ class JarvisNotificationListenerService : NotificationListenerService() {
 
     companion object {
         private const val MAX_NOTIFICATIONS = 40
+        private const val WHATSAPP_PACKAGE_PREFIX = "com.whatsapp"
+        private const val WHATSAPP_DEDUPE_MS = 30_000L
+        private val recentWhatsApp = LinkedHashMap<String, Long>()
+
+        /** Set once by JarvisCore; receives real incoming WhatsApp text messages. */
+        @Volatile
+        var incomingWhatsAppListener: ((WhatsAppIncomingMessage) -> Unit)? = null
+
+        private val PLACEHOLDER_BODIES = listOf(
+            "voice message",
+            "voice note",
+            "photo",
+            "video",
+            "sticker",
+            "gif",
+            "document",
+            "contact card",
+            "location",
+            "missed voice call",
+            "missed video call",
+            "missed call",
+            "you have a new message",
+            "new message",
+        )
         private val OTP_KEYWORDS = listOf(
             "otp",
             "verification code",

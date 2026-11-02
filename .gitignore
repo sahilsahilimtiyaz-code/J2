@@ -23,3 +23,6 @@ captures/
 .DS_Store
 
 .tools/
+
+# Local build scratch (SDK/Gradle toolchain) and preview assets
+artifacts/

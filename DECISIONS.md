@@ -258,3 +258,48 @@
 - **Opt-in, not sneak.** Auto-answering rides `SafetySettings.callAssistantEnabled` (default off) and dual-gates with `screenControlEnabled`; a 45 s debounce prevents event-storm re-entry and one volatile session guard prevents double sessions. Voice users keep manual control via `answer_whatsapp_call` (with an optional note Jarvis may share) and `end_whatsapp_call` regardless of the auto toggle.
 - **Verification:** `assembleDebug testDebugUnitTest` green (39/39, 0 failures/errors), APK 47.7 MB. Phone checklist items for the real call flow remain outstanding — they cannot be verified without a real WhatsApp caller.
 
+
+## 2026-11-02 — Why WhatsApp voice notes are recorded through WhatsApp itself
+
+- **PTT is a protocol flag, not a file type.** A WhatsApp voice note is an Ogg/Opus
+  `AudioMessage` with `ptt: true` and `mimetype: audio/ogg; codecs=opus`; a plain
+  `ACTION_SEND` of the same file lands as an ordinary audio attachment because the share
+  importer never sets that flag. Sources checked: Meta's audio-message docs
+  (https://developers.facebook.com/documentation/business-messaging/whatsapp/messages/audio-messages)
+  and the Baileys PTT issues (https://github.com/WhiskeySockets/Baileys/issues/1797).
+- **The Business Cloud API is not a loophole.** It supports real voice notes with
+  `voice: true`, but a number must be removed from the personal WhatsApp app before it
+  can be registered to a WABA, and the channel is business-scoped. It is not usable for
+  this personal assistant without a second dedicated number and a Meta business setup.
+- **Android cannot inject into another app's microphone.** `VOICE_COMMUNICATION` capture
+  is privacy-sensitive; two ordinary apps cannot capture concurrently, and the platform
+  exposes no virtual microphone. Android's own sharing-audio-input documentation makes
+  this explicit (https://developer.android.com/media/platform/sharing-audio-input).
+  Root, a HAL module or a virtual audio device would be required for a clean feed.
+- **The chosen path is the recorder itself.** Jarvis renders the line to a WAV, opens the
+  verified chat, presses and slides up on the mic to lock recording, plays the WAV
+  through the loudspeaker at max media volume, waits out the line and tail, then presses
+  Send. It refuses when a headset/Bluetooth route is connected, because the acoustic loop
+  cannot work there. Quality is disclosed as phone-call-like, not studio quality.
+- **Verified or not reported.** Success requires the recording bar to disappear and the
+  composer to return; the stronger signal is a new voice bubble with a duration. If the
+  bubble cannot be seen, the result says “pressed Send but did not visibly confirm”
+  rather than claiming delivery. Failures before recording starts may open WhatsApp's
+  share sheet with the rendered file, explicitly as an unsent audio-file handoff; after
+  recording starts the fallback is disabled so a real note cannot be duplicated.
+- **Auto-reply is deliberately narrow.** It is opt-in, allowlist-only, screen-on and
+  unlocked, refuses links/OTPs/secrets/payments/group-looking messages and prompt
+  injection, sanitises the notification body with SecurityShield, gives the model no
+  tools, and enforces per-contact cooldown plus a daily cap. It never runs while Jarvis
+  is generating, speaking or on a WhatsApp call. Group auto-reply is not attempted
+  because WhatsApp does not expose a reliable group flag in the notification extras.
+- **Icon provenance.** The only new image in the workspace was the showcase poster
+  (`public/assets/aistudio/file_000...png`), not a dedicated square logo. The app's
+  arc-reactor mark was cropped tightly from the poster (excluding its caption), upscaled
+  with sharpening and exported as the 1024 px circular logo, a safe-zone adaptive
+  foreground, round launcher icons and legacy mipmaps. If the owner supplies a dedicated
+  logo file later, replacing `ic_app_logo.png`/`ic_app_logo_foreground.png` is enough.
+- **Verification context:** the local build used JDK 17, Gradle 9.6, Android SDK 37 and
+  build-tools 36; `assembleDebug testDebugUnitTest` passed with 48 tests (0 failures,
+  0 errors) and a 46 MB debug APK. Phone-only verification remains outstanding for real
+  WhatsApp UI, real TTS playback and the home-screen icon.
