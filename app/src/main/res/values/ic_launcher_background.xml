@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Deep Jarvis navy behind the new app logo inside the launcher mask. -->
+    <color name="ic_launcher_background">#061B2B</color>
+</resources>

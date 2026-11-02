@@ -1,0 +1,25 @@
+# Android / Gradle
+.gradle/
+build/
+**/build/
+local.properties
+*.iml
+.idea/
+
+# Signing material and local secrets must never be committed.
+*.jks
+*.keystore
+*.p12
+*.pem
+signing-secrets.txt
+KEYSTORE_BASE64.txt
+SIGNING_SECRETS.txt
+.env
+.env.*
+
+# Android Studio captures and OS files
+captures/
+.externalNativeBuild/
+.DS_Store
+
+.tools/

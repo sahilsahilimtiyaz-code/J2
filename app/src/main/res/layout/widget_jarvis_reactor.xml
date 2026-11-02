@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/bg_widget_glass"
+    android:gravity="center"
+    android:orientation="vertical"
+    android:padding="12dp">
+
+    <ImageView
+        android:id="@+id/widget_reactor_icon"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:contentDescription="@string/app_name"
+        android:src="@drawable/ic_jarvis" />
+
+    <TextView
+        android:id="@+id/widget_title"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:letterSpacing="0.2"
+        android:text="J.A.R.V.I.S."
+        android:textColor="#00E5FF"
+        android:textSize="14sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/widget_status"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:letterSpacing="0.1"
+        android:text="ONLINE • READY"
+        android:textColor="#80D8FF"
+        android:textSize="10sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:gravity="center"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/widget_btn_listen"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_marginEnd="3dp"
+            android:layout_weight="1"
+            android:backgroundTint="#1A00E5FF"
+            android:text="MIC"
+            android:textColor="#00E5FF"
+            android:textSize="10sp" />
+
+        <Button
+            android:id="@+id/widget_btn_diag"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_marginHorizontal="3dp"
+            android:layout_weight="1"
+            android:backgroundTint="#1A58E7AE"
+            android:text="DIAG"
+            android:textColor="#58E7AE"
+            android:textSize="10sp" />
+
+        <Button
+            android:id="@+id/widget_btn_stop"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_marginStart="3dp"
+            android:layout_weight="1"
+            android:backgroundTint="#26FF1744"
+            android:text="STOP"
+            android:textColor="#FF5252"
+            android:textSize="10sp" />
+    </LinearLayout>
+
+</LinearLayout>

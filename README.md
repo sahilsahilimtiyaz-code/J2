@@ -1,0 +1,123 @@
+# Jarvis for Android
+
+Jarvis is a private, native Kotlin personal assistant for Android 14+ (minSdk 31), built for one
+owner's Samsung Galaxy A54. It is sideloaded, never published on Google Play.
+
+**Current status: Phase 9 complete plus two 2026-11-01 passes: (A) a latched continuous microphone, glass neural-orb core, verified screen taps/scrolls, direct YouTube playback, live free-model discovery and the 8-screen holographic HUD; (B) true pixel vision for the model, one-shot verified WhatsApp sending, real web-search answers, a premium two-phase incoming-call screen with live captions, deeply buffered gapless TTS, autonomous thoughts on a 10-minute cadence, a cinematic boot video, a new logo/adaptive launcher icon and a professional neural orb.**
+
+Local `assembleDebug` and `testDebugUnitTest` are green (JDK 17, Gradle 9.6.0, AGP 9.5.0, SDK 37.0; this project tree lives in `/sdcard/JAR2/J2-main`, where the aarch64 phone routes aapt2 through `/root/aapt2bin/aapt2`).
+
+## What works now
+
+- **Brain & Live Free Model Discovery:** OpenRouter, Google Gemini, Groq, xAI Grok, Together, OpenAI, Ollama, and Anthropic, with streaming, fallback order, tool calling, and automatic **Free Models** discovery (`Fetch Free Models` button + `Free models only` toggle).
+- **Voice (Fixed & Hardened):** Fish Audio and ElevenLabs streaming 24 kHz 16-bit PCM into one gapless player (with `Flow invariant` crash fixed and automatic Fish model fallback `s2.1-pro-free` -> `s1` -> `speech-1.6`), Android system voice fallback, echo-safe wake-word barge-in and manual interruption, and BCP-47 speech recognition with automatic fallback from on-device to standard `SpeechRecognizer` so Samsung devices never fail with `"That language is not supported by the recogniser."`
+- **Phone tools (Tier 1):** Open any app, YouTube search, web search, media, volume, ringer, torch, timers, alarms, calls, SMS, navigation, calendar, share, settings screens, battery and network status.
+- **Notifications (Tier 2):** Read recent status-bar notifications, summarise them, and dismiss them by app, keyword, or all (`read_notifications`, `dismiss_notifications`), with automatic OTP/security-code redaction.
+- **Screen control (Tier 3):** Both single-step tools (`read_screen`, `tap_screen`, `type_on_screen`, `scroll_screen`, `press_system_key`) and the multi-step **`automate_screen`** observe–decide–act–verify loop (up to 15 steps) with a persistent **"Jarvis is controlling the screen"** notification (`Stop` button) and an in-app **STOP** banner that halts control within 1 second.
+- **Memory:** Local Room database with FTS4 search, 3D Holographic Memory Globe visualization, automatic background fact extraction, JSON export/import, and "forget everything".
+- **Always-on:** Microphone foreground service with wake-word detection and one long-lived recognizer flow. Listening stays latched through replies and TTS until you stop it from the mic button, the notification, or the Quick Settings tile; the app no longer hands the mic between a keeper and the recognizer.
+
+## Latched Microphone & Neural-Orb Core (2026-11-01)
+
+- **One capture flow:** `SttEngine` no longer starts an `AudioRecord` "mic keeper" or releases the microphone between turns. It keeps one recognizer flow armed and re-arms in place after every final result or recoverable error, so there is no deliberate stop/start gap.
+- **Latched state:** `JarvisCore` no longer clears `listening` when you send a command, when it starts generating, or when TTS begins. The only in-app way to clear the latch is an explicit stop: the mic button, the ongoing notification's Stop action, or the Quick Settings tile. All three call `stopListening()`.
+- **Echo-safe barge-in:** finals received while Jarvis is generating, and for 1.2 s after speech ends, are discarded. During TTS the recognizer stays armed, but only a plain stop/cancel phrase or a wake-word-addressed command can interrupt; transcripts that match the reply being spoken are treated as echo. The first 700 ms of playback are ignored to avoid the onset, and the in-app Stop control always interrupts immediately.
+- **Platform boundary:** Android may still end a `SpeechRecognizer` session on silence, audio-focus changes or on-device fallback. The app re-arms immediately and never intentionally cycles the mic, but the OS privacy indicator can blink at those platform boundaries; an app cannot pin one `SpeechRecognizer` session forever.
+- **Neural orb:** the home and boot core (`ArcReactor`) is now a glass sphere with a radial gradient, a 3D projected synaptic lattice, two counter-rotating orbital rings, firing filaments, a white-hot center and a specular highlight. `ReactorGlyph` uses a mini orb with four synaptic nodes in the header and bottom navigation. No triangle remains in draw code, the launcher icon or the widget.
+- **Verified here:** `assembleDebug testDebugUnitTest` is green (34 tests, 0 failures/errors/skips); the debug APK is 40 MB. Physical-device appearance and the OS privacy indicator still need the phone check below.
+
+## Vision, WhatsApp, Gapless Voice & Call Experience (2026-11-01 evening pass)
+
+- **Jarvis can literally see:** `JarvisAccessibilityService` declares `canTakeScreenshot` and captures real pixels (`takeScreenshot` → `HardwareBuffer` → downscaled JPEG). The capture is carried to the LLM as an image attachment (`AttachedImage`), appended as a final user turn by the OpenAI-compatible, Gemini and Anthropic adapters, with an automatic retry without the image if a provider rejects it.
+- **New vision tools:** `see_screen` returns the screenshot plus a sanitized text-label merge, and `analyze_screen` is the structured no-image variant. `tap_screen_coordinates` takes **percent** coordinates (x/y 0–100) scaled by the real display size.
+- **The automation planner sees too:** every step of `automate_screen` attaches a fresh screenshot and reasons in percent coordinates off the pixels, so videos, maps and pop-ups that never appear as nodes can be tapped.
+- **One-shot WhatsApp:** `send_whatsapp_message` resolves the contact, opens the exact chat through `wa.me` (name-only fallback opens WhatsApp's own search), types the message, presses Send with a real gesture plus a verified node-click fallback, and confirms the send by watching the input clear. It never asks the model to drive UI itself; the Confirmation Gate still guards the actual send.
+- **Greetings are answered locally:** a deterministic gate in `JarvisCore.send` intercepts bare greetings (hi / hello / good morning..., up to about two words plus a wake word) with a fresh Persona greeting and never hands them to the model — a bare "hi" can no longer open Spotify.
+- **Web search answers in the conversation:** `web_search` fetches live DuckDuckGo results (instant-answer API, then the `lite`/`html` result page) and returns real titles, snippets and URLs; the persona forbids cheapening out by casually opening a browser — the browser is only for explicit "open ..." requests.
+- **Premium incoming-call screen:** ringing phase wraps the app logo in staggered sonar rings over a reason card with wide tactile Decline/Answer pills; the in-call phase shows the audio-reactive reactor, a live duration timer and a live caption bubble fed by `CoreState.spokenCaption` so the owner can read everything Jarvis says while he says it.
+- **Gapless voice:** `AudioPlayer` keeps a 0.25 s pre-roll (6 000 frames) before `track.play()`, a deep ~2.5 s jitter buffer, normal-priority playback instead of low-latency, and a fast non-blocking Stop. Fish Audio's stream slice grew 4 KB → 16 KB (≈256 ms of audio at 16 kHz) so each write feeds the buffer comfortably; the "voice splits mid-word" stutter is addressed at both ends.
+- **Autonomous thoughts arrive on time:** notification briefings ~8 min, spontaneous thoughts ~10 min, wellbeing-care milestones ~15 min, compliments after ~8 active minutes, and screen-health reminders share a 10-minute minimum cooldown instead of 30.
+- **Cinematic boot + new identity:** the boot screen plays the owner's muted, looping intro video full-screen (Arc-Reactor fallback if the video ever fails), the app runs the new logo as `ic_app_logo`, and the launcher uses an adaptive icon (`#061B2B` navy backdrop) so the app tiles match the mark.
+- **Real photo capture:** `open_camera` honours the requested lens (joint AOSP/CameraX/Samsung extras so "back camera" opens the rear lens), and `take_photo` runs an `ACTION_IMAGE_CAPTURE` session, presses the shutter itself and verifies the file in `Pictures/Jarvis/`.
+
+## The 8-Screen Holographic Interface
+
+1. **Boot Animation:** The owner's cinematic intro video plays full-screen, muted and looping, with the `J.A.R.V.I.S.` logotype, glowing progress bar and 5-step startup checklist (`LOADING AI CORE`, `CONNECTING MODULES`, `CALIBRATING INTERFACE`, `INITIALIZING VOICE`, `SYSTEMS ONLINE`). If the asset ever fails, the glass Arc Reactor boot screen takes over.
+2. **Home Screen:** Interactive `AI MODEL` selector pill bar, live `SYSTEM STABLE / CPU / GPU` and `MEMORY / STORAGE` HUD telemetry, central glass neural-orb Arc Reactor with 3D perspective holographic side panels, time-of-day greeting card, and 4 quick action tiles (`Web Search`, `Generate`, `Tools`, `Memory`).
+3. **Voice Assistant Mode:** `"Listening..."` header, live voice spectrum waveform, 3D rotating particle/wireframe `HolographicGlobe`, spoken prompt, quick suggestion pills (`Web Search`, `YouTube`, `Summarize`, `Analyze`), and glowing circular microphone orb.
+4. **AI Response / Chat View:** Glassmorphic `J.A.R.V.I.S.` card, Sources & Executed Tools badges, embedded 3D `ParticleWaveCanvas` visualization, `Regenerate` / `Copy` / `+ More` actions, and `Ask anything...` composer bar.
+5. **Tools Section:** `All`, `Productivity`, `Media`, `Analysis` category tabs, `Search tools...` bar, and glassmorphic tool cards with `● Online` / `● Local` / `● Connected` status badges.
+6. **Memory Visualization:** Interactive 3D `HolographicGlobe` with floating cluster cards (`Projects`, `Ideas`, `Research`, `Personal`, `Media`), `Total Memories` summary card with mini bar chart, and full note editor.
+7. **Settings Hub:** 7 glassmorphic rows (`AI Model`, `Voice Settings`, `Appearance`, `Connections`, `System`, `Security`, `About`) with live model fetching, encrypted API key storage, and the permission wizard.
+8. **Quick Panel:** Swipe from the right edge for `QUICK ACCESS` (`Camera Vision`, `Screenshot`, `YouTube`, `Summarize`, `Translate`), `SYSTEM` (`Network`, `Battery`, `Temperature`, `Performance`), and `NOW PLAYING` (`JARVIS Voice Active` waveform).
+
+## Reference-Board Visual Alignment (2026-11-01)
+
+- **Palette:** switched from teal-cyan to the board's electric blue (`#2E9BFF` core, `#8BD8FF` highlights), deeper navy glass, and copper rim light on the backdrop.
+- **Type:** bundled **Rajdhani** (SIL OFL) for the J.A.R.V.I.S. logotype, large screen headings, HUD labels and numerals. Body copy stays on the platform sans for readability.
+- **Proportions:** boot reactor now fills 90% of the content width, the home reactor is 252 dp inside a 286 dp stage, the voice globe is 272 dp, and the microphone orb is 108 dp inside 148 dp pulse rings.
+- **Screen structure:** Tools, Memory and Settings now show the reference's large heading below the JARVIS header instead of a small cyan subtitle. The voice screen no longer shows the bottom bar, matching the board.
+- **Details:** colored tool icon wells and the board's labels (`Video Analysis`, `File Manager`, `Camera Vision`, `Terminal`), circular response avatar, compact user bubble, thumbnail source cards, and a streamlined three-card quick panel.
+- **Known, intentional differences:** chat keeps the bottom navigation for usability (the board's chat mock has no nav), Android's own status/navigation bars are outside the app's drawing surface, and source thumbnails are generated locally rather than using the board's IBM/Veritasium/Nature images.
+
+## Test This on Your Phone (2026-11-01 Evening Batch)
+
+1. **Greeting gate:** Launch the app with a model configured and say only "hi". Jarvis must answer with a fresh spoken greeting and open no app, start no search and run no tool. Then say "Jarvis, good morning" — same result. Then say "hi, what's the weather" — that must go to the model normally.
+2. ** Seeing the screen:** Open any visual app (Maps, YouTube, Gallery) and say "Jarvis, look at my screen" or "what's on my screen right now?". Jarvis must capture real pixels and describe actual visible content (video titles, buttons, imagery), not just the text list. While he does, say "tap the <thing you can see>" and watch the pixel-guided percent tap land.
+3. **WhatsApp end-to-end:** Say "Jarvis, send hi to <a contact> on WhatsApp". Jarvis must open the exact chat, type the greeting, press the green Send arrow himself and confirm "Message sent to ..." only after the input clears. Watch WhatsApp: the message must actually leave. Then try a phone-number send and a name-only send.
+4. **Web search:** Say "Jarvis, search who won today's football match". He must answer from fetched search results without opening Chrome or Google. Then explicitly say "open YouTube" — only then is the browser/app route allowed.
+5. **Gapless voice:** Ask a long five-sentence question. Listen for word splits or double-speaking at sentence seams; long paragraphs should run gapless now. Tap Stop mid-reply — it should cut off instantly.
+6. **Incoming call:** In Settings, schedule a reminder ("Jarvis, remind me in 2 minutes to stretch"). Verify the new call UI: expanding sonar rings around the logo, a reason card with the reminder text, wide pills. Answer — Jarvis speaks the reminder and the caption bubble shows exactly what he is saying; the timer runs; End Call silences him instantly.
+7. **Thought cadence:** Keep the screen on and Jarvis idle. A thought or information briefing should arrive near the 8–10 minute mark, not 30 minutes late.
+8. **Camera lenses & photo:** Say "Jarvis, open my back camera" — the rear lens must be the live one. Then say "Jarvis, take a photo" — the shutter gets pressed automatically and Pictures/Jarvis/<name>.jpg lands in the gallery.
+9. **Boot video & logo:** Reboot/relaunch the app: the intro video plays muted (no sound) and looping; if it ever breaks, Jarvis still boots through the reactor fallback. Check the launcher icon — the new logo on the deep-navy adaptive background.
+
+## Test This on Your Phone (2026-11-01 Reliability Pass)
+
+1. **Microphone latch:** Open the app, turn on listening, and stay quiet for 30 seconds. Say "Jarvis, what's my battery at?" and let the full reply finish. The mic must stay on through the reply and switch off only when you tap the mic button, the notification Stop, or the Quick Settings tile. Repeat once with the screen locked and confirm the command is captured from the first word.
+2. **Play a song:** Say "Jarvis, play Starboy" (or any song). The YouTube player must open on the resolved video and audio must start. If it opens paused, Jarvis taps Play and confirms audio.
+3. **Open YouTube and tap a video:** Say "Jarvis, open YouTube", then "scroll down" twice, then "tap the first video". The feed must scroll and the tapped video must open; the tool result must say verified only when the player actually changed.
+4. **Screen control in other apps:** In Chrome or Settings, say "scroll down" and "tap <visible label>". If Android does not visibly respond, Jarvis must say the action was unverified instead of claiming success.
+5. **Animations:** Open the voice screen, watch the layered spectrum react to your voice, confirm the holographic side-panel scanlines and bottom-nav indicator animate, and confirm the boot progress bar fills smoothly.
+6. **Neural orb:** Check Home, the voice screen, the small header mark, the launcher icon and the widget. The core must read as a glass sphere with a lattice, orbital rings and a bright center; no triangle should appear anywhere.
+
+## Test This on Your Phone (Phase 6 & Bug-Fix Checklist)
+
+1. **Boot & Home HUD:** Launch **Jarvis**. Verify the 5-step boot animation completes smoothly and opens the Home screen with the spinning Arc Reactor, 3D side panels, and live telemetry.
+2. **Live Free Model Discovery:** Tap the **AI MODEL** bar at the top of the Home screen (or open **Settings -> AI Model -> Fetch Models**). Toggle **Free models only** on, tap any free model (e.g., `Gemini 2.5 Flash` or an OpenRouter `:free` model), and send a message.
+3. **Fish Audio / ElevenLabs Voice:** Open **Settings -> Voice Settings**, select **Fish Audio**, save your API key and voice reference ID (leave model as `s2.1-pro-free` or blank), and tap **Test voice**. Verify Jarvis speaks clearly without any `Flow exception transparency` or `Flow invariant` error.
+4. **Microphone & Voice Assistant Screen:** Tap the central neural orb or the bottom-center Reactor button. Verify the **Voice Assistant** screen (Screen 3) opens with the 3D rotating particle globe, listens without any `"language not supported"` error, and transcribes your speech.
+5. **Background Listening (No 1-Second Flicker):** Open **Settings -> Security -> Open permission wizard** (or **Settings -> Voice Settings**), turn on **Background listening**, and watch the microphone indicator. Verify it stays calm and does not toggle on/off every second. Say `"Jarvis, what's my battery at?"`
+6. **Tier 2 Notification Reading:** In **Settings -> Security -> Open permission wizard**, tap **Notification access (Tier 2)** and enable **Jarvis**. Ask: `"Jarvis, read and summarize my notifications"` and `"Dismiss my notifications"`.
+7. **Tier 3 Multi-Step Screen Automation & Stop Control:** In the permission wizard, enable **Accessibility: screen control (Tier 3)** (using *App info -> ⋮ -> Allow restricted settings* if greyed out). Ask: `"Jarvis, open Settings and turn on dark mode"`. Verify:
+   - The persistent **"Jarvis is controlling the screen"** notification and the red in-app **STOP** banner appear showing `STEP N/15`.
+   - Tapping **STOP** halts automation within 1 second.
+   - Banking and password apps are refused automatically.
+8. **Swipe Quick Panel:** Swipe inward from the right edge of the screen to open the **Quick Panel** (Screen 8) and test `Summarize`, `YouTube`, `Torch`, and live system readings.
+
+## WhatsApp Voice-Call Receptionist (2026-11-01, late evening)
+
+Jarvis can now answer WhatsApp voice calls for you:
+
+1. **He detects the ringing call** through the accessibility service (WhatsApp's incoming-call window class) when you turn on **Settings → Security → "Answer WhatsApp calls for sir"** (off by default).
+2. **He presses the green answer button himself** — by view id, label, or the classic bottom-right green FAB geometry — and only claims success after the active-call controls actually appear.
+3. **He opens the call in his own voice**: "Hello, this is Jarvis, speaking for sir. Sir is not available at the moment…" using your configured Fish Audio / ElevenLabs / system voice.
+4. **He engages with what the caller says**: the caller's words are transcribed from the loudspeaker path, sanitized (codes and card numbers redacted), and answered by the model in short spoken sentences — acknowledging news, asking a follow-up, or taking a message — for a bounded number of exchanges (2–12, default 6). Farewells end the call politely.
+5. **He can do it on demand**: say "answer the call" (tool `answer_whatsapp_call`, optionally with a note) or "end the call" (`end_whatsapp_call`) once a call is active.
+6. **He informs you and logs everything**: action-log records per turn, in-app status, and graceful Stop handling (Stop banner or `stopAll` hangs up for you).
+
+**How the caller hears him (please read):** Android does not allow one app to pump audio into another app's phone call, so Jarvis speaks through the loudspeaker at max call volume and WhatsApp's own microphone carries his voice to the caller; the caller is heard by Jarvis the same acoustic way, through the phone's speech recognition. Keep the phone off your ear (speaker, volume up, no headset) during a handled call. If AI/provider/recognizer access fails mid-call, Jarvis degrades gracefully — a courtesy line ends the call rather than pretending he heard something.
+
+### Test this on your phone (WhatsApp call feature)
+
+1. **Turn it on:** Settings → Security → enable **Answer WhatsApp calls for sir** (also keep **Allow screen control** on) and tap **Save safety settings**.
+2. **Have someone call your WhatsApp number.** Jarvis should tap Answer within ~2 s of the call popping; verify the call screen shows Jarvis's active call and the action log records `answer_whatsapp_call`.
+3. **The intro:** the caller must hear, through the speaker, "this is Jarvis… sir is not available at the moment…" in your configured voice (not a robot system voice).
+4. **The engagement:** have the caller answer a question ("I'm calling about dinner on Friday") and verify Jarvis acknowledges it and either asks one short follow-up or offers to take a message.
+5. **A message:** have the caller say "please tell him I called tomorrow" — Jarvis should confirm the message and say goodbye, then hang up by itself.
+6. **Farewell:** caller says "thanks, bye" — Jarvis ends the call.
+7. **Stop control:** while Jarvis is on a call, press the in-app **STOP** (banner or notification). The call must hang up.
+8. **Manual path:** leave auto-answer OFF; when a call rings, say "answer the WhatsApp call" in Jarvis's app, or open the tool `answer_whatsapp_call`. Then say "end the call".
+9. **Fail-safe:** with the toggle on, call yourself with the phone's call volume at zero. Jarvis should still answer, but you should notice the poor pickup — this validates the acoustic path note above (not a bug).
+10. **Settings persists:** after a full app restart, the toggle and "Max caller exchanges" stay where you left them.
+

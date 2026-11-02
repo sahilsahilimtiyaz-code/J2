@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Jarvis</string>
+
+    <!-- Foreground listening service -->
+    <string name="voice_channel_name">Jarvis voice</string>
+    <string name="voice_channel_description">Shows when Jarvis is listening or speaking</string>
+    <string name="alert_channel_name">Jarvis alerts</string>
+    <string name="alert_channel_description">Confirmations, voice problems and memory notices</string>
+    <string name="screen_control_channel_name">Jarvis screen control</string>
+    <string name="screen_control_channel_description">Shown while Jarvis is performing a multi-step screen task</string>
+    <string name="listening_title">Jarvis is listening</string>
+    <string name="listening_text">Say “Jarvis” followed by your request.</string>
+    <string name="listening_text_wake_free">Listening for your next request.</string>
+    <string name="action_stop_listening">Stop listening</string>
+    <string name="action_stop_screen_control">Stop</string>
+    <string name="screen_control_title">Jarvis is controlling the screen</string>
+    <string name="action_open_jarvis">Open Jarvis</string>
+    <string name="tile_label">Jarvis listening</string>
+    <string name="notification_listener_label">Jarvis notification reader</string>
+
+    <!-- Accessibility -->
+    <string name="accessibility_service_label">Jarvis screen control</string>
+    <string name="accessibility_service_description">Lets Jarvis read the screen, tap what you ask for, type, and scroll. Every action is spoken or shown before it happens, banking and password apps are blocked, and an explicit Stop ends control. No screen content is sent anywhere without your request.</string>
+</resources>
