@@ -1,3 +1,5 @@
+import java.util.Base64
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
@@ -12,6 +14,19 @@ val keyPassword = providers.environmentVariable("JARVIS_KEY_PASSWORD").orNull
 val hasStableSigning = listOf(keystorePath, keystorePassword, keyAlias, keyPassword)
     .all { !it.isNullOrBlank() }
 
+val ciRunNumber = providers.environmentVariable("GITHUB_RUN_NUMBER").orNull?.toIntOrNull() ?: 0
+val computedVersionCode = 100 + ciRunNumber
+val computedVersionName = if (ciRunNumber > 0) "1.0.$ciRunNumber" else "1.0.0"
+
+val localDebugKeystore = file("${rootDir}/debug.keystore")
+val localDebugKeystoreBase64 = file("${rootDir}/debug.keystore.base64")
+if (!localDebugKeystore.exists() && localDebugKeystoreBase64.exists()) {
+    runCatching {
+        val cleanBase64 = localDebugKeystoreBase64.readText().replace(Regex("\\s+"), "")
+        localDebugKeystore.writeBytes(Base64.getDecoder().decode(cleanBase64))
+    }
+}
+
 android {
     namespace = "com.jarvis.assistant"
     compileSdk = 37
@@ -20,8 +35,8 @@ android {
         applicationId = "com.jarvis.assistant"
         minSdk = 31
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = computedVersionCode
+        versionName = computedVersionName
     }
 
     buildFeatures {
@@ -32,8 +47,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-
-    val localDebugKeystore = file("${rootDir}/debug.keystore")
 
     signingConfigs {
         if (hasStableSigning) {

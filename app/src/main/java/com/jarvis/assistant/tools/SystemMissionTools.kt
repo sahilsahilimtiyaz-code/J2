@@ -258,28 +258,27 @@ class SendWhatsAppTool : Tool {
             return ToolResult(false, "The owner declined sending the WhatsApp message.")
         }
 
-        // Resolve the contact first so the flow never opens a dead end.
-        val digitsOnly = recipient.filter { it.isDigit() }.takeIf { it.length >= 7 }
+        val digitsOnly = recipient.filter { it.isDigit() }
+            .takeIf { it.length >= 7 && recipient.none(Char::isLetter) }
         val resolvedName: String
         val resolvedNumber: String?
         if (digitsOnly != null) {
             resolvedName = recipient
             resolvedNumber = digitsOnly
         } else {
-            val match = resolveTarget(context, recipient)
-            if (match == null) {
-                resolvedName = recipient
-                resolvedNumber = null
+            val match = if (context.permissions.isGranted(android.Manifest.permission.READ_CONTACTS)) {
+                runCatching { resolveTarget(context, recipient) }.getOrNull()
             } else {
-                resolvedName = match.name
-                resolvedNumber = match.number
+                null
             }
+            resolvedName = match?.name ?: recipient
+            resolvedNumber = match?.number
         }
 
         val result = withContext(Dispatchers.IO) {
             val controller = JarvisAccessibilityService.controller()
             if (controller != null) {
-                if (resolvedNumber != null) {
+                if (digitsOnly != null && resolvedNumber != null) {
                     AppAutomation.sendToNumber(
                         controller = controller,
                         phoneDigits = resolvedNumber,
@@ -287,11 +286,21 @@ class SendWhatsAppTool : Tool {
                         message = message,
                     )
                 } else {
-                    AppAutomation.sendToContactByName(
+                    val byName = AppAutomation.sendToContactByName(
                         controller = controller,
-                        contactName = resolvedName,
+                        contactName = recipient,
                         message = message,
                     )
+                    if (byName.success || resolvedNumber == null) {
+                        byName
+                    } else {
+                        AppAutomation.sendToNumber(
+                            controller = controller,
+                            phoneDigits = resolvedNumber,
+                            displayName = resolvedName,
+                            message = message,
+                        )
+                    }
                 }
             } else {
                 ScreenResult(

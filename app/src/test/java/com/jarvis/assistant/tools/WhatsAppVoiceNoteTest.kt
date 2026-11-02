@@ -225,4 +225,23 @@ class WhatsAppVoiceNoteTest {
             file.delete()
         }
     }
+
+    @Test
+    fun `contact label matcher finds Azhar in recent chat rows and contact titles`() {
+        assertTrue(WhatsAppVoiceNotes.matchesContactLabel("Azhar", "azhar"))
+        assertTrue(WhatsAppVoiceNotes.matchesContactLabel("Azhar Khan", "Azhar"))
+        assertTrue(WhatsAppVoiceNotes.matchesContactLabel("Md Azhar", "Azhar"))
+        assertTrue(WhatsAppVoiceNotes.matchesContactLabel("Azhar, Hey how are you, 10:42 AM", "Azhar"))
+        assertFalse(WhatsAppVoiceNotes.matchesContactLabel("Priya Sharma", "Azhar"))
+    }
+
+    @Test
+    fun `search bar detector matches modern Ask Meta AI pill and classic search controls`() {
+        assertTrue(WhatsAppVoiceNotes.isSearchBarNode("Ask Meta AI or Search", ""))
+        assertTrue(WhatsAppVoiceNotes.isSearchBarNode("Search...", ""))
+        assertTrue(WhatsAppVoiceNotes.isSearchBarNode("", "com.whatsapp:id/my_search_bar"))
+        assertTrue(WhatsAppVoiceNotes.isSearchBarNode("", "com.whatsapp:id/search_bar_inner_layout"))
+        assertTrue(WhatsAppVoiceNotes.isSearchBarNode("", "com.whatsapp:id/menuitem_search"))
+        assertFalse(WhatsAppVoiceNotes.isSearchBarNode("Azhar", "com.whatsapp:id/conversations_row_contact_name"))
+    }
 }

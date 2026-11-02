@@ -40,7 +40,7 @@ jobs:
         with:
           gradle-version: "9.6.0"
 
-      - name: Configure stable signing when secrets exist
+      - name: Configure stable signing
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -48,24 +48,31 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          if [ -z "${KEYSTORE_BASE64:-}" ]; then
-            echo "No signing secrets configured. This bootstrap APK uses the CI debug key."
-            echo "It cannot update over a build signed with a different key."
-            exit 0
-          fi
-          if [ -z "${KEYSTORE_PASSWORD:-}" ] || [ -z "${KEY_ALIAS:-}" ] || [ -z "${KEY_PASSWORD:-}" ]; then
-            echo "::error::Signing is incomplete. Add all four repository secrets."
-            exit 1
-          fi
           key_path="$RUNNER_TEMP/jarvis-signing.keystore"
-          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$key_path"
-          chmod 600 "$key_path"
-          {
-            echo "JARVIS_KEYSTORE_PATH=$key_path"
-            echo "JARVIS_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
-            echo "JARVIS_KEY_ALIAS=$KEY_ALIAS"
-            echo "JARVIS_KEY_PASSWORD=$KEY_PASSWORD"
-          } >> "$GITHUB_ENV"
+          if [ -n "${KEYSTORE_BASE64:-}" ] && [ -n "${KEYSTORE_PASSWORD:-}" ] && [ -n "${KEY_ALIAS:-}" ] && [ -n "${KEY_PASSWORD:-}" ]; then
+            echo "Using repository signing secrets for APK signing."
+            printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$key_path"
+            chmod 600 "$key_path"
+            {
+              echo "JARVIS_KEYSTORE_PATH=$key_path"
+              echo "JARVIS_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+              echo "JARVIS_KEY_ALIAS=$KEY_ALIAS"
+              echo "JARVIS_KEY_PASSWORD=$KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
+          elif [ -f "debug.keystore.base64" ]; then
+            echo "Using committed debug.keystore.base64 for consistent in-place APK updates."
+            tr -d '[:space:]' < debug.keystore.base64 | base64 --decode > "$key_path"
+            cp "$key_path" debug.keystore
+            chmod 600 "$key_path" debug.keystore
+            {
+              echo "JARVIS_KEYSTORE_PATH=$key_path"
+              echo "JARVIS_KEYSTORE_PASSWORD=android"
+              echo "JARVIS_KEY_ALIAS=androiddebugkey"
+              echo "JARVIS_KEY_PASSWORD=android"
+            } >> "$GITHUB_ENV"
+          else
+            echo "Warning: No signing key found; falling back to default debug keystore."
+          fi
 
       - name: Run unit tests and build debug APK
         run: gradle testDebugUnitTest assembleDebug --stacktrace

@@ -267,3 +267,19 @@
   - Wired `G Login >` to Android's native `AccountManager.newChooseAccountIntent` for `"com.google"` device accounts with an in-app Google Sign-In fallback sheet, persisting `AuthSession` across launches and syncing the owner's display name.
   - Added an Account Session card at the top of Settings to view the active Google/Guest session or switch/sign out at any time.
 - [x] **Verification:** `gradle testDebugUnitTest assembleDebug` green (55 unit tests passing, 0 failures/errors).
+
+## 2026-11-02 — WhatsApp Recent-Chat & Modern Search Automation Fix, In-Place APK Updates & Dark-Navy Framed Arc Reactor Icons
+
+- [x] **WhatsApp Contact Selection & Search Fix (`AppAutomation.kt`, `WhatsAppVoiceNoteAgent.kt`, `SystemMissionTools.kt`):**
+  - Implemented `AppAutomation.openWhatsAppChatByName` with a 4-stage contact opening strategy shared by `send_whatsapp_voice_note` and `send_whatsapp_message`:
+    1. **Keep active conversation** if already open to the target contact.
+    2. **Direct Recent Chats List Scan**: scans visible conversation rows on the WhatsApp Chats screen (and scrolls down once if needed) to tap the contact (`"Azhar"`) directly without requiring the search bar when the contact is already in recent chats.
+    3. **Modern Search Bar & Classic Search Icon (`findWhatsAppSearchSpot`, `isSearchBarNode`)**: matches modern full-width `"Ask Meta AI or Search"` / `"Search..."` pill bars (`my_search_bar`, `search_bar_inner_layout`, `search_holder`, `search_src_text`) as well as classic `menuitem_search` icons regardless of width.
+    4. **"New chat" FAB Fallback (`findWhatsAppNewChatSpot`)**: taps WhatsApp's floating New Chat button (`fab` / `menuitem_new_conversation`) to search contacts when the top search bar is collapsed.
+  - Fixed RecyclerView child `TextView` matching (`findWhatsAppContactRowSpot`, `tapSpotOrAncestor`): matches contact names rendered on non-clickable child `TextView` nodes (`conversations_row_contact_name`, `contactpicker_row_name`) and resolves the tap target via the clickable ancestor row container or physical coordinate gesture.
+- [x] **Seamless In-Place APK Updates Without Uninstalling (`app/build.gradle.kts`, `.github/workflows/build.yml`, `AndroidManifest.xml`):**
+  - Configured `app/build.gradle.kts` and `.github/workflows/build.yml` to automatically decode the committed `debug.keystore.base64` into `debug.keystore` whenever repository signing secrets are not set, ensuring every GitHub Actions artifact APK is signed with the exact same certificate.
+  - Set `versionCode = 100 + GITHUB_RUN_NUMBER` in `app/build.gradle.kts` and `android:allowBackup="true"` in `AndroidManifest.xml` so every new GitHub Actions build installs cleanly over existing installations without deleting the app or losing data.
+- [x] **Dark-Navy Framed Arc Reactor Launcher & System Icons (`mipmap-*`, `drawable-nodpi/*`, `drawable/ic_jarvis.xml`, `values/ic_launcher_background.xml`):**
+  - Framed the uploaded circular triangular Arc Reactor emblem inside a dark navy (`#061116`) icon frame across all 5 `mipmap-{mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}` launcher and round icon densities, adaptive icon foreground (`ic_app_logo_foreground.png`), in-app emblem (`ic_app_logo.png`), and vector icon (`ic_jarvis.xml`).
+- [x] **Verification:** `gradle testDebugUnitTest assembleDebug` green (57 unit tests passing, 0 failures/errors).

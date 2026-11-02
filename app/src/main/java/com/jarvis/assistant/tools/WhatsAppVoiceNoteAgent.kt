@@ -121,6 +121,21 @@ object WhatsAppVoiceNotes {
             lower.contains("audio")
     }
 
+    val SEARCH_VIEW_IDS = listOf(
+        "menuitem_search",
+        "my_search_bar",
+        "search_bar_inner_layout",
+        "search_holder",
+        "search_bar",
+        "search_src_text",
+        "search_text",
+        "search_input",
+        "search_icon",
+        "search_button",
+        "search_view",
+        "action_search",
+    )
+
     fun isVoiceNoteSendLabel(label: String): Boolean {
         val normalized = label.lowercase().replace(Regex("[^a-z]"), "")
         return normalized == "send" ||
@@ -134,6 +149,44 @@ object WhatsAppVoiceNotes {
             normalized == "delete" ||
             normalized == "trash" ||
             normalized == "discard"
+    }
+
+    /**
+     * Matches a contact or chat row label against the spoken [queryName] (e.g. "Azhar"
+     * matching "Azhar", "Azhar Khan", "Md Azhar", or a row description containing the name).
+     */
+    fun matchesContactLabel(candidateLabel: String, queryName: String): Boolean {
+        val cleanQuery = queryName.trim().lowercase()
+        val cleanCandidate = candidateLabel.trim().lowercase()
+        if (cleanQuery.isBlank() || cleanCandidate.isBlank()) return false
+
+        val normQuery = cleanQuery.filter { it.isLetterOrDigit() }
+        val normCandidate = cleanCandidate.filter { it.isLetterOrDigit() }
+        if (normQuery.isBlank() || normCandidate.isBlank()) return false
+        if (normCandidate == normQuery || normCandidate.contains(normQuery)) return true
+
+        val queryTokens = cleanQuery.split(Regex("[^a-z0-9]+")).filter { it.length >= 2 }
+        val candidateTokens = cleanCandidate.split(Regex("[^a-z0-9]+")).filter { it.isNotBlank() }
+        return queryTokens.isNotEmpty() && queryTokens.all { qt ->
+            candidateTokens.any { ct -> ct == qt || ct.startsWith(qt) }
+        }
+    }
+
+    /**
+     * Detects both classic WhatsApp search icon nodes and modern full-width
+     * "Ask Meta AI or Search" / "Search..." pill bar nodes.
+     */
+    fun isSearchBarNode(label: String, viewId: String): Boolean {
+        val shortId = viewId.substringAfterLast('/').lowercase()
+        if (shortId in SEARCH_VIEW_IDS) return true
+        val normLabel = label.lowercase().filter { it.isLetterOrDigit() }
+        if (normLabel.isBlank()) return false
+        return normLabel == "search" ||
+            normLabel.contains("askmetaai") ||
+            normLabel.contains("searchchat") ||
+            normLabel.contains("searchcontact") ||
+            normLabel.contains("searchorstart") ||
+            (normLabel.startsWith("search") && normLabel.length <= 32)
     }
 }
 
@@ -339,11 +392,14 @@ class WhatsAppVoiceNoteSender(
         if (note.durationMs > MAX_NOTE_DURATION_MS) {
             return failure("That note is longer than WhatsApp's comfortable recording limit, sir.")
         }
-        val chatOpened = if (isNumber) {
-            openChat(recipient, isNumber = true) ||
-                (displayName != recipient && openChat(displayName, isNumber = false))
-        } else {
-            openChat(recipient, isNumber = false)
+        val hasNamedContact = displayName.any { it.isLetter() }
+        val chatOpened = when {
+            hasNamedContact && isNumber ->
+                openChat(displayName, isNumber = false) || openChat(recipient, isNumber = true)
+            isNumber ->
+                openChat(recipient, isNumber = true)
+            else ->
+                openChat(recipient, isNumber = false)
         }
         if (!chatOpened) {
             return failure(lastError ?: "I could not open the WhatsApp chat for $displayName.")
@@ -470,53 +526,16 @@ class WhatsAppVoiceNoteSender(
             return true
         }
 
-        // A name: if WhatsApp already has the matching chat open, keep it.
-        if (AppAutomation.findChatInputSpot() != null && headerMatches(recipient, isNumber = false)) {
-            return true
+        // Named contact: scan visible recent chats first, then modern search bar, then New Chat FAB.
+        val openResult = AppAutomation.openWhatsAppChatByName(controller, recipient)
+        if (!openResult.success) {
+            return failOpen(openResult.message)
         }
-        if (!waitForWhatsApp(1_000L)) {
-            val launch = runCatching {
-                service.packageManager.getLaunchIntentForPackage(packageName)
-                    ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }.getOrNull()
-            if (launch == null || runCatching { service.startActivity(launch) }.isFailure) {
-                lastError = "WhatsApp would not open, sir."
-                return false
-            }
-            if (!waitForWhatsApp(FOREGROUND_TIMEOUT_MS)) {
-                lastError = "WhatsApp did not come to the foreground."
-                return false
-            }
-            delay(1_800L)
-        }
-
-        // Leave any unrelated chat before searching.
-        if (AppAutomation.findChatInputSpot() != null) {
-            runCatching { controller.press("back") }
-            delay(900L)
-        }
-        val search = findSearchSpot()
-            ?: return failOpen("I could not reach WhatsApp's search button.")
-        if (!(AppAutomation.tapSpot(search) || AppAutomation.tapNodeAction(search))) {
-            return failOpen("WhatsApp's search button did not respond.")
-        }
-        delay(1_100L)
-        val field = AppAutomation.findChatInputSpot()
-            ?: return failOpen("WhatsApp's search field never appeared.")
-        if (!AppAutomation.typeIntoEditable(field, recipient)) {
-            return failOpen("I could not type \"$recipient\" into WhatsApp's search.")
-        }
-        delay(2_200L)
-        val row = findContactRow(recipient)
-            ?: return failOpen("No WhatsApp chat matched \"$recipient\".")
-        if (!(AppAutomation.tapSpot(row) || AppAutomation.tapNodeAction(row))) {
-            return failOpen("The WhatsApp chat for \"$recipient\" would not open.")
-        }
-        delay(2_000L)
         if (!waitForComposer(COMPOSER_TIMEOUT_MS)) {
             return failOpen("The chat opened, but its composer never appeared.")
         }
-        if (!headerMatches(recipient, isNumber = false)) {
+        val topLabels = AppAutomation.whatsAppTopHeaderLabels()
+        if (topLabels.isNotEmpty() && !AppAutomation.whatsAppHeaderMatches(recipient, isNumber = false)) {
             return failOpen(
                 "I opened a chat, but I could not confirm it belongs to \"$recipient\", " +
                     "so I stopped before recording anything.",
@@ -549,68 +568,6 @@ class WhatsAppVoiceNoteSender(
             delay(250L)
         }
         return AppAutomation.findChatInputSpot() != null
-    }
-
-    private suspend fun findSearchSpot() =
-        AppAutomation.findByViewId("menuitem_search")?.let { AppAutomation.boundsOf(it) }
-            ?: AppAutomation.findSpot(predicate = { node, bounds ->
-                node.isClickable &&
-                    bounds.centerY() in 60..320 &&
-                    bounds.width() in 50..320 &&
-                    bounds.height() in 50..320 &&
-                    AppAutomation.normalized(AppAutomation.labelOf(node)).contains("search")
-            })
-
-    private suspend fun findContactRow(contactName: String) =
-        AppAutomation.findSpot(predicate = { node, bounds ->
-            val label = AppAutomation.normalized(AppAutomation.labelOf(node))
-            node.isClickable &&
-                label.isNotBlank() &&
-                label.contains(AppAutomation.normalized(contactName)) &&
-                bounds.centerY() > 260 &&
-                bounds.width() > 300 &&
-                bounds.height() in 60..420
-        })
-
-    private suspend fun headerMatches(recipient: String, isNumber: Boolean): Boolean {
-        val headerLabels = labelsNearTop()
-        if (headerLabels.isEmpty()) return false
-        if (isNumber) {
-            val wanted = WhatsAppVoiceNotes.digitsOf(recipient)
-            return headerLabels.any { label ->
-                val digits = WhatsAppVoiceNotes.digitsOf(label)
-                digits.length >= 7 &&
-                    (digits.endsWith(wanted.takeLast(7)) || wanted.endsWith(digits.takeLast(7)))
-            }
-        }
-        val wanted = AppAutomation.normalized(recipient)
-        if (wanted.isBlank()) return false
-        return headerLabels.any { label ->
-            AppAutomation.normalized(label).contains(wanted)
-        }
-    }
-
-    private suspend fun labelsNearTop(): List<String> = withContext(Dispatchers.Main) {
-        val service = JarvisAccessibilityService.serviceInstance()
-            ?: return@withContext emptyList()
-        val root = service.rootInActiveWindow ?: return@withContext emptyList()
-        val labels = LinkedHashSet<String>()
-        var walked = 0
-        fun walk(node: AccessibilityNodeInfo) {
-            if (walked++ > 2_500 || labels.size > 80) return
-            val bounds = AppAutomation.boundsOf(node)
-            if (bounds != null && bounds.centerY() in 40..300) {
-                val text = node.text?.toString()?.trim().orEmpty()
-                val desc = node.contentDescription?.toString()?.trim().orEmpty()
-                if (text.isNotBlank()) labels += text
-                if (desc.isNotBlank()) labels += desc
-            }
-            for (index in 0 until node.childCount) {
-                node.getChild(index)?.let { walk(it) }
-            }
-        }
-        runCatching { walk(root) }
-        labels.toList()
     }
 
     // --------------------------------------------------------------- recording
