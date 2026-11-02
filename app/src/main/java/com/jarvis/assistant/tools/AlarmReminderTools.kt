@@ -70,22 +70,12 @@ class ScheduleReminderTool : Tool {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                alarmManager.setExactAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    triggerCal.timeInMillis,
-                    pendingIntent,
-                )
-            } else {
-                alarmManager.setExact(
-                    AlarmManager.RTC_WAKEUP,
-                    triggerCal.timeInMillis,
-                    pendingIntent,
-                )
-            }
+            val exactAllowed = scheduleAlarmSafely(alarmManager, triggerCal.timeInMillis, pendingIntent)
 
             val timeStr = String.format("%02d:%02d", triggerCal.get(Calendar.HOUR_OF_DAY), triggerCal.get(Calendar.MINUTE))
-            ToolResult(true, "Reminder scheduled for $timeStr: \"$message\".")
+            saveWidgetNextReminder(context.appContext, "$timeStr · ${message.take(36)}")
+            val suffix = if (exactAllowed) "" else " (using window alarm; allow Alarms & Reminders in Settings for exact second precision)"
+            ToolResult(true, "Reminder scheduled for $timeStr: \"$message\"$suffix.")
         }
     }
 }
@@ -107,8 +97,8 @@ class ScheduleMorningBriefingTool : Tool {
     override val category = ToolCategory.TIME
 
     override suspend fun execute(arguments: JsonObject, context: ToolContext): ToolResult {
-        val hour = arguments.argInt("hour") ?: 7
-        val minute = arguments.argInt("minute") ?: 30
+        val hour = (arguments.argInt("hour") ?: 7).coerceIn(0, 23)
+        val minute = (arguments.argInt("minute") ?: 30).coerceIn(0, 59)
 
         return withContext(Dispatchers.IO) {
             val alarmManager = context.appContext.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
@@ -125,7 +115,12 @@ class ScheduleMorningBriefingTool : Tool {
 
             val intent = Intent(context.appContext, JarvisAlarmReceiver::class.java).apply {
                 putExtra(JarvisIncomingCallActivity.EXTRA_TITLE, "Morning Briefing")
-                putExtra(JarvisIncomingCallActivity.EXTRA_MESSAGE, "Good morning, sir. All systems are online. Shall I brief you on today's schedule and notifications?")
+                putExtra(
+                    JarvisIncomingCallActivity.EXTRA_MESSAGE,
+                    "Good morning, sir. All systems are online. Shall I brief you on today's schedule and notifications?",
+                )
+                putExtra(JarvisAlarmReceiver.EXTRA_DAILY_HOUR, hour)
+                putExtra(JarvisAlarmReceiver.EXTRA_DAILY_MINUTE, minute)
             }
 
             val pendingIntent = PendingIntent.getBroadcast(
@@ -135,22 +130,61 @@ class ScheduleMorningBriefingTool : Tool {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                alarmManager.setExactAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    cal.timeInMillis,
-                    pendingIntent,
-                )
-            } else {
-                alarmManager.setExact(
-                    AlarmManager.RTC_WAKEUP,
-                    cal.timeInMillis,
-                    pendingIntent,
-                )
-            }
+            val exactAllowed = scheduleAlarmSafely(alarmManager, cal.timeInMillis, pendingIntent)
 
             val timeStr = String.format("%02d:%02d", hour, minute)
-            ToolResult(true, "Morning briefing call configured for $timeStr daily.")
+            saveWidgetNextReminder(context.appContext, "$timeStr Daily · Morning Briefing")
+            val suffix = if (exactAllowed) "" else " (standard window alarm)"
+            ToolResult(true, "Morning briefing call configured for $timeStr daily$suffix.")
         }
+    }
+}
+
+internal fun scheduleAlarmSafely(
+    alarmManager: AlarmManager,
+    triggerAtMillis: Long,
+    pendingIntent: PendingIntent,
+): Boolean {
+    val canExact = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        runCatching { alarmManager.canScheduleExactAlarms() }.getOrDefault(false)
+    } else {
+        true
+    }
+    return try {
+        if (canExact) {
+            alarmManager.setExactAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                triggerAtMillis,
+                pendingIntent,
+            )
+            true
+        } else {
+            alarmManager.setAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                triggerAtMillis,
+                pendingIntent,
+            )
+            false
+        }
+    } catch (_: SecurityException) {
+        runCatching {
+            alarmManager.setAndAllowWhileIdle(
+                AlarmManager.RTC_WAKEUP,
+                triggerAtMillis,
+                pendingIntent,
+            )
+        }
+        false
+    }
+}
+
+internal fun saveWidgetNextReminder(context: Context, summary: String) {
+    runCatching {
+        context.getSharedPreferences("jarvis_widget_prefs", Context.MODE_PRIVATE)
+            .edit()
+            .putString("next_reminder", summary)
+            .putLong("updated_at", System.currentTimeMillis())
+            .apply()
+        com.jarvis.assistant.service.JarvisWidgetProvider.updateAll(context)
     }
 }

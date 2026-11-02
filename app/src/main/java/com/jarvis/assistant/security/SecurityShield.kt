@@ -272,9 +272,28 @@ object SecurityShield {
             ) == 1
         }.getOrDefault(false)
 
+        val hardwareBacked = runCatching {
+            val keyStore = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+            val secretKey = keyStore.getKey("jarvis_master_key_v1", null) as? javax.crypto.SecretKey
+            if (secretKey != null) {
+                val factory = javax.crypto.SecretKeyFactory.getInstance(
+                    secretKey.algorithm,
+                    "AndroidKeyStore",
+                )
+                val keyInfo = factory.getKeySpec(
+                    secretKey,
+                    android.security.keystore.KeyInfo::class.java,
+                ) as? android.security.keystore.KeyInfo
+                @Suppress("DEPRECATION")
+                keyInfo?.isInsideSecureHardware ?: true
+            } else {
+                true
+            }
+        }.getOrDefault(true)
+
         val currentThreats = _threats.value
         return SecurityAuditStatus(
-            keystoreHardwareBacked = true,
+            keystoreHardwareBacked = hardwareBacked,
             promptFirewallActive = true,
             uriExploitGuardActive = true,
             credentialRedactorActive = true,

@@ -630,21 +630,45 @@ fun WhatsAppVoiceNoteCard(
                 }
             }
 
-            TextButton(
-                onClick = {
-                    viewModel.saveWhatsAppVoiceNotes(
-                        enabled = enabled,
-                        autoReplyEnabled = autoReply,
-                        allowlistText = allowlist,
-                        maxChars = maxChars.toIntOrNull() ?: 420,
-                        audioFallback = fallback,
-                        cooldownMinutes = cooldown.toIntOrNull() ?: 10,
-                        dailyLimit = dailyLimit.toIntOrNull() ?: 12,
-                    )
-                },
-                contentPadding = PaddingValues(horizontal = 4.dp),
+            val latestWa = remember(state.actions, state.devicePresence) {
+                com.jarvis.assistant.service.JarvisNotificationListenerService.latestWhatsAppMessage()
+            }
+            if (latestWa != null) {
+                Text(
+                    text = "Latest WhatsApp from ${latestWa.sender}: \u201c${latestWa.body.take(120)}\u201d",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Save voice note settings")
+                TextButton(
+                    onClick = {
+                        viewModel.saveWhatsAppVoiceNotes(
+                            enabled = enabled,
+                            autoReplyEnabled = autoReply,
+                            allowlistText = allowlist,
+                            maxChars = maxChars.toIntOrNull() ?: 420,
+                            audioFallback = fallback,
+                            cooldownMinutes = cooldown.toIntOrNull() ?: 10,
+                            dailyLimit = dailyLimit.toIntOrNull() ?: 12,
+                        )
+                    },
+                    contentPadding = PaddingValues(horizontal = 4.dp),
+                ) {
+                    Text("Save voice note settings")
+                }
+
+                TextButton(
+                    onClick = viewModel::replyLatestWhatsAppWithVoice,
+                    contentPadding = PaddingValues(horizontal = 4.dp),
+                ) {
+                    Text("Reply to latest WhatsApp with voice >")
+                }
             }
         }
     }

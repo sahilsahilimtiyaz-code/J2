@@ -8,6 +8,8 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -39,7 +41,7 @@ interface ActionLogDao {
         SkillEntity::class,
         ActionLogEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 abstract class JarvisDatabase : RoomDatabase() {
@@ -48,6 +50,19 @@ abstract class JarvisDatabase : RoomDatabase() {
 
     companion object {
         private const val NAME = "jarvis.db"
+
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE memories ADD COLUMN tags TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE memories ADD COLUMN expiresAt INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE skills ADD COLUMN description TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE action_log ADD COLUMN argumentsJson TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE action_log ADD COLUMN undoArgumentsJson TEXT NOT NULL DEFAULT ''")
+                db.execSQL(
+                    "UPDATE skills SET stepsJson = REPLACE(REPLACE(stepsJson, 'read_battery_status', 'get_device_status'), 'read_time', 'get_current_time')",
+                )
+            }
+        }
 
         @Volatile
         private var instance: JarvisDatabase? = null
@@ -59,6 +74,7 @@ abstract class JarvisDatabase : RoomDatabase() {
                     JarvisDatabase::class.java,
                     NAME,
                 )
+                    .addMigrations(MIGRATION_1_2)
                     .fallbackToDestructiveMigrationOnDowngrade()
                     .build()
                     .also { instance = it }

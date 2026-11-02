@@ -182,66 +182,37 @@ fun HudIconButton(
     }
 }
 
-/** The little reactor glyph used as the app mark in headers. */
+/** The reactor glyph used as the app mark in headers, rendering the official app logo. */
 @Composable
 fun ReactorGlyph(
     modifier: Modifier = Modifier,
     color: Color = JarvisPalette.Cyan,
 ) {
-    Canvas(modifier = modifier) {
-        val r = size.minDimension / 2f
-        val c = Offset(size.width / 2f, size.height / 2f)
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(color.copy(alpha = 0.55f), Color.Transparent),
-                center = c,
-                radius = r,
-            ),
-            radius = r,
-            center = c,
-        )
-        drawCircle(color.copy(alpha = 0.75f), radius = r * 0.74f, center = c, style = Stroke(1.2.dp.toPx()))
-        drawCircle(color.copy(alpha = 0.30f), radius = r * 0.92f, center = c, style = Stroke(1f))
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(
-                    Color.White.copy(alpha = 0.92f),
-                    color.copy(alpha = 0.55f),
-                    Color.Transparent,
-                ),
-                center = c,
-                radius = r * 0.55f,
-            ),
-            radius = r * 0.55f,
-            center = c,
-        )
-        drawCircle(
-            color = color.copy(alpha = 0.85f),
-            radius = r * 0.34f,
-            center = c,
-            style = Stroke(1.1.dp.toPx()),
-        )
-        repeat(4) { index ->
-            val angle = (index.toFloat() / 4f) * 2f * PI.toFloat()
-            val nx = c.x + cos(angle) * r * 0.48f
-            val ny = c.y + sin(angle) * r * 0.48f
-            drawLine(
-                color = color.copy(alpha = 0.45f),
-                start = c,
-                end = Offset(nx, ny),
-                strokeWidth = 0.9.dp.toPx(),
-                cap = StrokeCap.Round,
-            )
+    Box(
+        modifier = modifier.clip(CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(modifier = Modifier.matchParentSize()) {
+            val r = size.minDimension / 2f
+            val c = Offset(size.width / 2f, size.height / 2f)
             drawCircle(
-                color = if (index == 0) {
-                    JarvisPalette.Amber.copy(alpha = 0.90f)
-                } else {
-                    Color.White.copy(alpha = 0.85f)
-                },
-                radius = 1.3.dp.toPx(),
-                center = Offset(nx, ny),
+                brush = Brush.radialGradient(
+                    colors = listOf(color.copy(alpha = 0.40f), Color.Transparent),
+                    center = c,
+                    radius = r,
+                ),
+                radius = r,
+                center = c,
             )
         }
+        androidx.compose.foundation.Image(
+            painter = androidx.compose.ui.res.painterResource(id = com.jarvis.assistant.R.drawable.ic_app_logo),
+            contentDescription = "J.A.R.V.I.S. Logo",
+            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+            modifier = Modifier
+                .matchParentSize()
+                .clip(CircleShape),
+        )
     }
 }
 

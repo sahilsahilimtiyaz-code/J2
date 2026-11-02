@@ -172,6 +172,31 @@ class ScreenController(private val service: AccessibilityService) {
     }.getOrDefault(packageName)
 
     /**
+     * Returns the human-readable text/contentDescription of the accessibility node
+     * whose bounds contain ([x], [y]), so coordinate-based taps can check safety rules.
+     */
+    fun describePoint(x: Int, y: Int): String {
+        val root = service.rootInActiveWindow ?: return ""
+        val labels = mutableListOf<String>()
+        walked = 0
+        walk(root) { node ->
+            val bounds = Rect()
+            node.getBoundsInScreen(bounds)
+            if (bounds.contains(x, y)) {
+                val t = node.text?.toString()?.trim().orEmpty()
+                val d = node.contentDescription?.toString()?.trim().orEmpty()
+                val id = node.viewIdResourceName?.substringAfterLast('/')?.trim().orEmpty()
+                val combined = listOf(t, d, id).filter { it.isNotBlank() }.joinToString(" ")
+                if (combined.isNotBlank()) {
+                    labels += combined
+                }
+            }
+            true
+        }
+        return labels.takeLast(3).joinToString(" ")
+    }
+
+    /**
      * Captures a structural and media fingerprint of the current screen so that
      * post-step verification can confirm whether an action took effect.
      */

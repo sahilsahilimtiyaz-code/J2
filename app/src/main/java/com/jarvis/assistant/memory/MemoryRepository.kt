@@ -31,17 +31,32 @@ class MemoryRepository(private val dao: MemoryDao) {
 
     suspend fun search(query: String, limit: Int = DEFAULT_RETRIEVAL): List<MemoryEntity> =
         withContext(Dispatchers.IO) {
-            if (query.isBlank()) return@withContext dao.allMemories().take(limit)
+            val now = System.currentTimeMillis()
+            runCatching { dao.pruneExpiredMemories(now) }
+            if (query.isBlank()) {
+                return@withContext dao.allMemories()
+                    .filter { it.expiresAt <= 0L || it.expiresAt > now }
+                    .take(limit)
+            }
 
             val match = ftsExpression(query)
             if (match != null) {
                 val hits = runCatching { dao.searchMemories(match, limit) }.getOrDefault(emptyList())
+                    .filter { it.expiresAt <= 0L || it.expiresAt > now }
                 if (hits.isNotEmpty()) {
-                    dao.markUsed(hits.map { it.id }, System.currentTimeMillis())
+                    dao.markUsed(hits.map { it.id }, now)
                     return@withContext hits
                 }
             }
             dao.searchMemoriesLike(query.trim(), limit)
+                .filter { it.expiresAt <= 0L || it.expiresAt > now }
+        }
+
+    suspend fun searchConversationMessages(query: String, limit: Int = 8): List<MessageEntity> =
+        withContext(Dispatchers.IO) {
+            val clean = query.trim()
+            if (clean.isBlank()) return@withContext dao.recentMessages(limit)
+            dao.searchMessages(clean, limit)
         }
 
     // Writes ------------------------------------------------------------------
@@ -55,19 +70,34 @@ class MemoryRepository(private val dao: MemoryDao) {
         type: String = MemoryType.FACT,
         importance: Int = 3,
         source: String = "chat",
+        tags: String = "",
+        expiresAt: Long = 0L,
     ): Boolean = withContext(Dispatchers.IO) {
         val clean = text.trim().replace(Regex("\\s+"), " ")
         if (clean.length < 3) return@withContext false
         val fingerprint = fingerprint(clean)
         if (fingerprint.isBlank()) return@withContext false
+        val cleanTags = tags.split(",")
+            .map { it.trim().lowercase(Locale.UK) }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .joinToString(",")
 
         val existing = dao.memoryByFingerprint(fingerprint)
         if (existing != null) {
+            val mergedTags = (existing.tags.split(",") + cleanTags.split(","))
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .distinct()
+                .joinToString(",")
             dao.updateMemory(
                 existing.copy(
                     text = clean,
+                    type = type.takeIf { it.isNotBlank() } ?: existing.type,
                     importance = maxOf(existing.importance, importance.coerceIn(1, 5)),
                     lastUsedAt = System.currentTimeMillis(),
+                    tags = mergedTags,
+                    expiresAt = if (expiresAt > 0L) expiresAt else existing.expiresAt,
                 ),
             )
             return@withContext false
@@ -80,6 +110,8 @@ class MemoryRepository(private val dao: MemoryDao) {
                 type = type.takeIf { it.isNotBlank() } ?: MemoryType.FACT,
                 importance = importance.coerceIn(1, 5),
                 source = source,
+                tags = cleanTags,
+                expiresAt = expiresAt.coerceAtLeast(0L),
             ),
         )
         true
@@ -91,6 +123,7 @@ class MemoryRepository(private val dao: MemoryDao) {
                 text = memory.text.trim(),
                 fingerprint = fingerprint(memory.text),
                 importance = memory.importance.coerceIn(1, 5),
+                tags = memory.tags.split(",").map { it.trim() }.filter { it.isNotBlank() }.distinct().joinToString(","),
             ),
         )
     }
@@ -141,11 +174,16 @@ class MemoryRepository(private val dao: MemoryDao) {
      * plus the memories that match this request.
      */
     suspend fun promptContext(query: String): String = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        runCatching { dao.pruneExpiredMemories(now) }
         val factLines = dao.facts()
             .filter { it.value.isNotBlank() }
             .joinToString(separator = "\n") { "- ${it.key}: ${it.value}" }
         val notes = search(query, DEFAULT_RETRIEVAL)
-            .joinToString(separator = "\n") { "- ${it.text}" }
+            .joinToString(separator = "\n") {
+                val tagSuffix = if (it.tags.isNotBlank()) " [${it.tags}]" else ""
+                "- (${it.type}) ${it.text}$tagSuffix"
+            }
         buildString {
             append("Immutable core memory:\n")
             append("- developer: Octavian (Creator and Chief Architect of J.A.R.V.I.S.)\n")
@@ -240,10 +278,18 @@ class MemoryRepository(private val dao: MemoryDao) {
             exportedAt = System.currentTimeMillis(),
             facts = dao.facts().map { FactDto(it.key, it.value, it.source) },
             memories = dao.allMemories().map {
-                MemoryDto(it.text, it.type, it.importance, it.source, it.createdAt)
+                MemoryDto(
+                    text = it.text,
+                    type = it.type,
+                    importance = it.importance,
+                    source = it.source,
+                    createdAt = it.createdAt,
+                    tags = it.tags,
+                    expiresAt = it.expiresAt,
+                )
             },
             skills = dao.skills().map {
-                SkillDto(it.name, it.triggers, it.stepsJson, it.enabled)
+                SkillDto(it.name, it.description, it.triggers, it.stepsJson, it.enabled)
             },
         )
         json.encodeToString(export)
@@ -259,13 +305,25 @@ class MemoryRepository(private val dao: MemoryDao) {
             }
         }
         export.memories.forEach { memory ->
-            if (remember(memory.text, memory.type, memory.importance, memory.source)) added++
+            if (
+                remember(
+                    text = memory.text,
+                    type = memory.type,
+                    importance = memory.importance,
+                    source = memory.source,
+                    tags = memory.tags,
+                    expiresAt = memory.expiresAt,
+                )
+            ) {
+                added++
+            }
         }
         export.skills.forEach { skill ->
             runCatching {
                 dao.insertSkill(
                     SkillEntity(
                         name = skill.name,
+                        description = skill.description,
                         triggers = skill.triggers,
                         stepsJson = skill.stepsJson,
                         enabled = skill.enabled,
@@ -295,7 +353,7 @@ class MemoryRepository(private val dao: MemoryDao) {
 
     @Serializable
     data class MemoryExport(
-        val version: Int = 1,
+        val version: Int = 2,
         val exportedAt: Long = 0L,
         val facts: List<FactDto> = emptyList(),
         val memories: List<MemoryDto> = emptyList(),
@@ -312,11 +370,14 @@ class MemoryRepository(private val dao: MemoryDao) {
         val importance: Int = 3,
         val source: String = "import",
         val createdAt: Long = 0L,
+        val tags: String = "",
+        val expiresAt: Long = 0L,
     )
 
     @Serializable
     data class SkillDto(
         val name: String,
+        val description: String = "",
         val triggers: String,
         val stepsJson: String,
         val enabled: Boolean = true,

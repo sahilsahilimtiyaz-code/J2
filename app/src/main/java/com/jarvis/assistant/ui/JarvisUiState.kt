@@ -92,6 +92,9 @@ data class JarvisUiState(
     val proposals: List<com.jarvis.assistant.memory.Proposal> = emptyList(),
     val conversationMode: Boolean = false,
     val floatingHudActive: Boolean = false,
+    val activePlan: com.jarvis.assistant.brain.TaskPlan? = null,
+    val sharedPayload: com.jarvis.assistant.brain.SharedContentPayload? = null,
+    val conversationSearchHits: List<com.jarvis.assistant.memory.MessageEntity> = emptyList(),
 ) {
     val showSettings: Boolean
         get() = tab == JarvisTab.SETTINGS

@@ -208,6 +208,59 @@ fun SettingsScreen(
                     }
                 }
 
+                // 0. Account Session (G Login / Guest)
+                item(key = "account_session_card") {
+                    GlassPanel(
+                        modifier = Modifier.fillMaxWidth(),
+                        corner = 20.dp,
+                        accent = JarvisPalette.CyanBright,
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            ReactorGlyph(modifier = Modifier.size(34.dp))
+                            Spacer(Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                val auth = state.settings.auth
+                                Text(
+                                    text = when (auth.mode) {
+                                        com.jarvis.assistant.settings.AuthMode.GOOGLE ->
+                                            "Google Account · ${auth.displayName.ifBlank { "Connected" }}"
+                                        com.jarvis.assistant.settings.AuthMode.GUEST ->
+                                            "Guest Access Mode"
+                                        com.jarvis.assistant.settings.AuthMode.NONE ->
+                                            "Not Signed In"
+                                    },
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = JarvisPalette.Ice,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                                Text(
+                                    text = if (auth.mode == com.jarvis.assistant.settings.AuthMode.GOOGLE && auth.email.isNotBlank()) {
+                                        auth.email
+                                    } else {
+                                        "Local device profile · Switch to Google Login anytime"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = JarvisPalette.TextDim,
+                                )
+                            }
+                            TextButton(onClick = viewModel::signOut) {
+                                Text(
+                                    text = if (state.settings.auth.mode == com.jarvis.assistant.settings.AuthMode.GOOGLE) {
+                                        "Switch / Sign Out"
+                                    } else {
+                                        "G Login >"
+                                    },
+                                    color = JarvisPalette.CyanBright,
+                                )
+                            }
+                        }
+                    }
+                }
+
                 // 1. AI Model
                 item(key = "hub_ai_model") {
                     SettingsHubRow(

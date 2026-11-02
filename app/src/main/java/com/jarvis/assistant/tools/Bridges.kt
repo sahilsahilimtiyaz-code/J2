@@ -8,8 +8,20 @@ interface MemoryBridge {
     /** Stores a memory and describes the outcome for the tool result. */
     suspend fun remember(text: String, type: String, importance: Int): String
 
+    /** Stores a memory with optional comma-separated tags and expiration timestamp. */
+    suspend fun rememberAdvanced(
+        text: String,
+        type: String,
+        importance: Int,
+        tags: String = "",
+        expiresAt: Long = 0L,
+    ): String = remember(text, type, importance)
+
     /** Returns memorable lines matching [query]. */
     suspend fun search(query: String, limit: Int): List<String>
+
+    /** Searches past conversation transcripts for [query]. */
+    suspend fun searchHistory(query: String, limit: Int = 5): List<String> = emptyList()
 
     /** Deletes matching memories and reports how many were removed. */
     suspend fun forget(query: String): String

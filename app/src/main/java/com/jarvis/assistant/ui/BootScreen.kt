@@ -189,6 +189,12 @@ fun BootScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Bottom,
         ) {
+            com.jarvis.assistant.ui.components.ReactorGlyph(
+                modifier = Modifier.size(84.dp),
+            )
+
+            Spacer(Modifier.height(14.dp))
+
             Row(horizontalArrangement = Arrangement.Center) {
                 title.forEachIndexed { index, character ->
                     Text(

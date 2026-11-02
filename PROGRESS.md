@@ -232,3 +232,38 @@
 - [ ] **Phone verification:** real WhatsApp voice note by name and number, auto-reply on
   an unlocked phone, cooldown/daily cap, refusal of links/OTP/groups, share fallback,
   and the new launcher/round icon on the home screen.
+
+## 2026-11-02 — Phase 0 Stabilization & Phase 1 Core Intelligence (Phase 1A & Phase 1B)
+
+- [x] **Build Fix (`gradle.properties`, `.github/workflows/build.yml`):** Removed broken `android.aapt2FromMavenOverride=/root/aapt2bin/aapt2` override that caused `:app:processDebugResources FAILED`, and updated CI to run `gradle testDebugUnitTest assembleDebug --stacktrace`.
+- [x] **Phase 0 Stabilization:**
+  - Resolved duplicate `create_calendar_event` tool registration across all 55 tools (`create_calendar_event` + `schedule_calendar_event`).
+  - Repaired seeded skills ("Morning Routine" & "Device Diagnostics") to invoke real registered tools (`get_device_status`, `get_current_time`, `run_diagnostics`, `read_notifications`, `search_youtube`), added `SkillRepository.validateSteps`, persisted `SkillEntity.description` in Room v2 (`MIGRATION_1_2`), and fixed `SkillTools` to propagate `ToolResult(false, ...)` on failure.
+  - Made `SkillsScreen`, `ProposalsScreen`, and `ActionLogScreen` reachable from `ToolsScreen` and `QuickPanel`.
+  - Sanitized `WebSearchTool` snippets via `SecurityShield`, added risky-target confirmation to `TapCoordinatesTool`, dynamically verified hardware-backed keystore status in `SecurityShield.audit`, added `canScheduleExactAlarms()` fallback in `scheduleAlarmSafely`, and added daily morning briefing rescheduling in `JarvisAlarmReceiver`.
+- [x] **Phase 1A — Default Assistant, Share Sheet, App Shortcuts, Interactive Widget & Quick Settings:**
+  - Implemented main-thread `SpeechRecognizer` delegation inside `JarvisRecognitionService`.
+  - Added static App Shortcuts (`res/xml/shortcuts.xml`) for *Summon Voice*, *System Diagnostics*, and *AI Task Planner*.
+  - Added Android Share Sheet (`ACTION_SEND`, `ACTION_SEND_MULTIPLE`, `ACTION_PROCESS_TEXT`) and `ACTION_VOICE_COMMAND` support in `AndroidManifest.xml` and `MainActivity.kt`, plus `SharedContentBanner` on `HomeScreen`.
+  - Upgraded `JarvisWidgetProvider` (`widget_jarvis_reactor.xml`) and `JarvisTileService` with live battery %, assistant status, and next reminder telemetry.
+- [x] **Phase 1B — Advanced AI Task Planner, Context Budgeter, Advanced Memory & Action History Retry/Undo:**
+  - Implemented `TaskPlanner` & `ToolContextBudgeter` (`brain/TaskPlanner.kt`) with multi-step plan generation, per-step tool execution & verification, automatic retry, cancellation, and interactive `TaskExecutionTimelineCard` on `HomeScreen` + Task Planner bar on `ToolsScreen`.
+  - Added `important_date`, `recurring_task`, `tags`, temporary memory expiry (`expiresAt`), and past conversation history search (`searchConversationMessages`) in Room v2 and `MemoryScreen`.
+  - Added search, filter chips (`All`, `Succeeded`, `Failed`, `Undoable`), **Retry**, and **Undo Setting** in `ActionLogScreen`.
+  - Added unit tests in `Phase1IntelligenceTest.kt` (53 total unit tests passing).
+
+## 2026-11-02 — WhatsApp Voice-Reply Polish, Official Triangular Arc-Reactor Logo & Post-Boot Google / Guest Login
+
+- [x] **WhatsApp Voice Message Reply Polish (`WhatsAppVoiceNoteAgent.kt`, `JarvisNotificationListenerService.kt`, `JarvisCore.kt`, `SystemMissionTools.kt`, `SettingsExtras.kt`):**
+  - Added incoming WhatsApp message history tracking (`JarvisNotificationListenerService.latestWhatsAppMessage(senderQuery)`, `recentWhatsAppMessages()`) with fallback to active status-bar notifications so Jarvis always knows who last messaged on WhatsApp and what they said.
+  - Upgraded `send_whatsapp_voice_note` (`SendWhatsAppVoiceNoteTool`) to support `recipient = "last" / "latest" / "reply"` (automatic last-sender resolution), `message = "auto" / "reply"` (`JarvisCore.draftWhatsAppVoiceReplyNow` contextual reply drafting), and Android Contacts phone-number lookup (`resolveTarget` → `wa.me/<digits>` direct chat opening with automatic fallback to in-app name search).
+  - Added `holdMicAndPlay` continuous press-and-hold gesture fallback in `WhatsAppVoiceNoteSender`: when a WhatsApp build does not latch on the upward slide-to-lock gesture, Jarvis holds the mic button continuously (`note.durationMs + 950L`) while playing the rendered voice note over the loudspeaker and releasing to send.
+  - Added a live incoming WhatsApp message preview and **"Reply to latest WhatsApp with voice >"** action button in Settings → Security (`WhatsAppVoiceNoteCard`).
+- [x] **Official Triangular Arc-Reactor App Logo (`ic_app_logo.png` & `mipmap-*`):**
+  - Replaced `drawable-nodpi/ic_app_logo.png`, `drawable-nodpi/ic_app_logo_foreground.png` (safe-zone padded for Android adaptive icon masks), and all 5 `mipmap-{mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}/ic_launcher.png` & `ic_launcher_round.png` densities with bicubic-scaled exports of the uploaded official logo (`/public/assets/aistudio/ic_app_logo_e1371f83.png`).
+  - Updated `ReactorGlyph` (`Hud.kt`) and `BootScreen.kt` to render `R.drawable.ic_app_logo`.
+- [x] **Post-Loading Google Login / Guest Gateway (`AuthScreen.kt`, `SettingsModels.kt`, `SettingsRepository.kt`, `JarvisApp.kt`, `SettingsScreen.kt`):**
+  - Added `AuthScreen` immediately after the boot sequence when not yet authenticated, featuring the new Arc-Reactor logo and the exact `G Login >` / `Or` / `Guest >` layout.
+  - Wired `G Login >` to Android's native `AccountManager.newChooseAccountIntent` for `"com.google"` device accounts with an in-app Google Sign-In fallback sheet, persisting `AuthSession` across launches and syncing the owner's display name.
+  - Added an Account Session card at the top of Settings to view the active Google/Guest session or switch/sign out at any time.
+- [x] **Verification:** `gradle testDebugUnitTest assembleDebug` green (55 unit tests passing, 0 failures/errors).

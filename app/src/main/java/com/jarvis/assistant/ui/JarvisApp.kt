@@ -142,6 +142,12 @@ fun JarvisApp(vm: JarvisViewModel = viewModel()) {
                     onFinished = { bootFinished = true },
                 )
 
+                !state.settings.auth.isAuthenticated -> AuthScreen(
+                    defaultName = state.settings.profile.name,
+                    onGoogleSignIn = vm::signInWithGoogle,
+                    onGuestSignIn = vm::continueAsGuest,
+                )
+
                 !state.onboardingComplete -> OnboardingScreen(
                     state = state,
                     onSave = vm::saveProfile,
@@ -174,14 +180,19 @@ fun JarvisApp(vm: JarvisViewModel = viewModel()) {
                                 onFetchModels = vm::fetchAllAvailableModels,
                                 onSetFreeModelsOnly = vm::setFreeModelsOnly,
                                 onSelectQuickModel = vm::selectQuickModel,
+                                onCancelPlan = vm::cancelActivePlan,
+                                onDismissPlan = vm::dismissActivePlan,
+                                onRetryFailedPlanSteps = vm::retryFailedPlanSteps,
+                                onActOnSharedContent = vm::actOnSharedContent,
+                                onClearSharedContent = vm::clearSharedContent,
                             )
 
                             JarvisTab.MEMORY -> MemoryScreen(
                                 state = state,
                                 onSelectTab = vm::selectTab,
                                 onToggleMic = vm::toggleListening,
-                                onAdd = { text, type, importance ->
-                                    vm.addMemory(text, type, importance)
+                                onAdd = { text, type, importance, tags, tempHours ->
+                                    vm.addMemory(text, type, importance, tags, tempHours)
                                 },
                                 onUpdate = vm::updateMemory,
                                 onDelete = vm::deleteMemory,
@@ -189,6 +200,7 @@ fun JarvisApp(vm: JarvisViewModel = viewModel()) {
                                 onExport = vm::exportMemories,
                                 onImport = vm::importMemories,
                                 onExtract = vm::extractMemoriesNow,
+                                onSearchConversations = vm::searchConversations,
                             )
 
                             JarvisTab.TOOLS -> ToolsScreen(
@@ -196,6 +208,7 @@ fun JarvisApp(vm: JarvisViewModel = viewModel()) {
                                 onSelectTab = vm::selectTab,
                                 onToggleMic = vm::toggleListening,
                                 onRunToolPrompt = vm::runQuickCommand,
+                                onLaunchTaskPlan = vm::executeTaskPlan,
                             )
 
                             JarvisTab.LOG -> ActionLogScreen(
@@ -203,6 +216,8 @@ fun JarvisApp(vm: JarvisViewModel = viewModel()) {
                                 onSelectTab = vm::selectTab,
                                 onToggleMic = vm::toggleListening,
                                 onClear = vm::clearActionLog,
+                                onRetryEntry = vm::retryActionLogEntry,
+                                onUndoEntry = vm::undoActionLogEntry,
                             )
 
                             JarvisTab.SKILLS -> SkillsScreen(

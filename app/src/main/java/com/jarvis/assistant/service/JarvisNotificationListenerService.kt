@@ -144,7 +144,6 @@ class JarvisNotificationListenerService : NotificationListenerService() {
                 recentWhatsApp.remove(recentWhatsApp.keys.first())
             }
         }
-        val listener = incomingWhatsAppListener ?: return
         val event = WhatsAppIncomingMessage(
             sender = sender.take(80),
             body = body.take(700),
@@ -152,6 +151,8 @@ class JarvisNotificationListenerService : NotificationListenerService() {
             postedAt = sbn.postTime,
             packageName = sbn.packageName,
         )
+        recordWhatsAppMessage(event)
+        val listener = incomingWhatsAppListener ?: return
         runCatching { listener(event) }
     }
 
@@ -171,10 +172,61 @@ class JarvisNotificationListenerService : NotificationListenerService() {
         private const val WHATSAPP_PACKAGE_PREFIX = "com.whatsapp"
         private const val WHATSAPP_DEDUPE_MS = 30_000L
         private val recentWhatsApp = LinkedHashMap<String, Long>()
+        private val whatsappHistory = CopyOnWriteArrayList<WhatsAppIncomingMessage>()
 
         /** Set once by JarvisCore; receives real incoming WhatsApp text messages. */
         @Volatile
         var incomingWhatsAppListener: ((WhatsAppIncomingMessage) -> Unit)? = null
+
+        internal fun recordWhatsAppMessage(event: WhatsAppIncomingMessage) {
+            whatsappHistory.removeAll {
+                it.sender.equals(event.sender, ignoreCase = true) && it.body == event.body
+            }
+            whatsappHistory.add(0, event)
+            while (whatsappHistory.size > 20) {
+                whatsappHistory.removeAt(whatsappHistory.lastIndex)
+            }
+        }
+
+        /**
+         * Returns the most recent incoming WhatsApp message, optionally filtered by
+         * [senderQuery]. Falls back to scanning active status-bar notifications if
+         * no WhatsApp event was captured since service start.
+         */
+        fun latestWhatsAppMessage(senderQuery: String? = null): WhatsAppIncomingMessage? {
+            val query = senderQuery?.trim().orEmpty()
+            val normalizedQuery = query.lowercase()
+            val isGenericLast = normalizedQuery.isBlank() ||
+                normalizedQuery in setOf("last", "latest", "recent", "reply", "them", "him", "her", "sender")
+            val fromHistory = if (isGenericLast) {
+                whatsappHistory.firstOrNull()
+            } else {
+                whatsappHistory.firstOrNull {
+                    it.sender.lowercase().contains(normalizedQuery) ||
+                        normalizedQuery.contains(it.sender.lowercase())
+                }
+            }
+            if (fromHistory != null) return fromHistory
+
+            // Fallback: inspect current active notifications snapshot for WhatsApp
+            val fromActive = snapshot().firstOrNull { notif ->
+                notif.packageName.startsWith(WHATSAPP_PACKAGE_PREFIX) &&
+                    notif.title.isNotBlank() &&
+                    notif.text.isNotBlank() &&
+                    (isGenericLast || notif.title.lowercase().contains(normalizedQuery))
+            }
+            return fromActive?.let {
+                WhatsAppIncomingMessage(
+                    sender = it.title,
+                    body = it.text,
+                    key = it.key,
+                    postedAt = it.postedAt,
+                    packageName = it.packageName,
+                )
+            }
+        }
+
+        fun recentWhatsAppMessages(): List<WhatsAppIncomingMessage> = whatsappHistory.toList()
 
         private val PLACEHOLDER_BODIES = listOf(
             "voice message",

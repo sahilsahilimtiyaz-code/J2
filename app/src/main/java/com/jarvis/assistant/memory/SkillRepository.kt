@@ -33,8 +33,10 @@ class SkillRepository(
     ): SkillDefinition = withContext(Dispatchers.IO) {
         val triggersStr = triggers.joinToString(";") { it.trim().lowercase(Locale.ROOT) }
         val stepsJson = json.encodeToString(ListSerializer(SkillStep.serializer()), steps)
+        val cleanDesc = description.trim()
         val entity = SkillEntity(
             name = name.trim(),
+            description = cleanDesc,
             triggers = triggersStr,
             stepsJson = stepsJson,
             enabled = true,
@@ -42,12 +44,27 @@ class SkillRepository(
         val id = dao.insertSkill(entity)
         SkillDefinition(
             id = id,
-            name = name,
-            description = description,
+            name = name.trim(),
+            description = cleanDesc,
             triggers = triggers,
             steps = steps,
             enabled = true,
         )
+    }
+
+    fun validateSteps(steps: List<SkillStep>, availableTools: Set<String>): String? =
+        Companion.validateSteps(steps, availableTools)
+
+    companion object {
+        fun validateSteps(steps: List<SkillStep>, availableTools: Set<String>): String? {
+            if (steps.isEmpty()) return "A skill must contain at least one step."
+            val unknown = steps.map { it.toolName.trim() }.filter { it.isBlank() || it !in availableTools }
+            return if (unknown.isNotEmpty()) {
+                "Unknown tool(s) in skill steps: ${unknown.joinToString(", ")}"
+            } else {
+                null
+            }
+        }
     }
 
     suspend fun deleteSkill(id: Long) = withContext(Dispatchers.IO) {
@@ -73,7 +90,11 @@ class SkillRepository(
         var allSuccess = true
 
         for ((index, step) in skill.steps.withIndex()) {
-            // Convert arguments map to JSON string
+            val canonicalTool = when (step.toolName) {
+                "read_battery_status" -> "get_device_status"
+                "read_time" -> "get_current_time"
+                else -> step.toolName
+            }
             val argsJson = json.encodeToString(
                 kotlinx.serialization.json.JsonObject.serializer(),
                 kotlinx.serialization.json.JsonObject(
@@ -81,11 +102,11 @@ class SkillRepository(
                 )
             )
 
-            val result = toolRegistry.execute(step.toolName, argsJson)
+            val result = toolRegistry.execute(canonicalTool, argsJson)
             stepResults.add(
                 StepResult(
                     stepIndex = index + 1,
-                    toolName = step.toolName,
+                    toolName = canonicalTool,
                     success = result.success,
                     output = result.content,
                 ),
@@ -97,10 +118,13 @@ class SkillRepository(
             }
         }
 
+        val details = stepResults.joinToString("\n") {
+            "Step ${it.stepIndex} (${it.toolName}): ${it.output}"
+        }
         val summary = if (allSuccess) {
-            "Skill '${skill.name}' completed all ${skill.steps.size} steps successfully."
+            "Skill '${skill.name}' completed all ${skill.steps.size} steps successfully.\n$details"
         } else {
-            "Skill '${skill.name}' stopped at step ${stepResults.size} of ${skill.steps.size}."
+            "Skill '${skill.name}' stopped at step ${stepResults.size} of ${skill.steps.size}.\n$details"
         }
 
         SkillExecutionResult(
@@ -112,14 +136,39 @@ class SkillRepository(
     }
 
     suspend fun seedDefaultsIfEmpty() = withContext(Dispatchers.IO) {
-        if (dao.skills().isNotEmpty()) return@withContext
+        val existing = dao.skills()
+        if (existing.isNotEmpty()) {
+            // Repair any legacy seeded skills that referenced deprecated tool names or lacked descriptions
+            for (entity in existing) {
+                val repairedStepsJson = entity.stepsJson
+                    .replace("\"read_battery_status\"", "\"get_device_status\"")
+                    .replace("\"read_time\"", "\"get_current_time\"")
+                val repairedDesc = when {
+                    entity.description.isNotBlank() -> entity.description
+                    entity.name.equals("Morning Routine", ignoreCase = true) ->
+                        "Checks battery & connectivity, unread notifications, and plays morning lo-fi."
+                    entity.name.equals("Device Diagnostics", ignoreCase = true) ->
+                        "Comprehensive check of device battery, time, and hardware health."
+                    else -> entity.description
+                }
+                if (repairedStepsJson != entity.stepsJson || repairedDesc != entity.description) {
+                    dao.updateSkill(
+                        entity.copy(
+                            stepsJson = repairedStepsJson,
+                            description = repairedDesc,
+                        ),
+                    )
+                }
+            }
+            return@withContext
+        }
 
         saveSkill(
             name = "Morning Routine",
-            description = "Checks battery, unread notifications, and plays morning lo-fi.",
+            description = "Checks battery & connectivity, unread notifications, and plays morning lo-fi.",
             triggers = listOf("morning routine", "start my day", "good morning jarvis routine"),
             steps = listOf(
-                SkillStep(toolName = "read_battery_status", description = "Check battery power"),
+                SkillStep(toolName = "get_device_status", description = "Check battery and connectivity"),
                 SkillStep(toolName = "read_notifications", description = "Brief on unread alerts"),
                 SkillStep(
                     toolName = "search_youtube",
@@ -131,11 +180,12 @@ class SkillRepository(
 
         saveSkill(
             name = "Device Diagnostics",
-            description = "Comprehensive check of device battery, time, and connectivity.",
+            description = "Comprehensive check of device battery, time, and hardware health.",
             triggers = listOf("diagnostics", "check system", "system health check"),
             steps = listOf(
-                SkillStep(toolName = "read_battery_status", description = "Check battery"),
-                SkillStep(toolName = "read_time", description = "Verify sync time"),
+                SkillStep(toolName = "get_device_status", description = "Check battery and network status"),
+                SkillStep(toolName = "get_current_time", description = "Verify sync time"),
+                SkillStep(toolName = "run_diagnostics", description = "Inspect RAM, CPU and thermal telemetry"),
             ),
         )
     }
@@ -149,6 +199,7 @@ class SkillRepository(
         return SkillDefinition(
             id = id,
             name = name,
+            description = description,
             triggers = triggerList,
             steps = stepList,
             enabled = enabled,

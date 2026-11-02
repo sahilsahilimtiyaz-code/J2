@@ -23,7 +23,21 @@ data class ActionLogEntry(
     val detail: String,
     val success: Boolean,
     val timestamp: Long,
-)
+    val argumentsJson: String = "",
+    val undoArgumentsJson: String = "",
+) {
+    val isUndoable: Boolean
+        get() = success && undoArgumentsJson.isNotBlank()
+
+    val isRetryable: Boolean
+        get() = toolName !in NON_RETRYABLE_TOOLS
+
+    companion object {
+        private val NON_RETRYABLE_TOOLS = setOf(
+            "whatsapp_voice_auto_reply",
+        )
+    }
+}
 
 /**
  * The local action log required by the safety rules: what Jarvis did, when and
@@ -89,6 +103,8 @@ class ActionLogStore(
         detail = detail,
         success = success,
         timestamp = timestamp,
+        argumentsJson = argumentsJson,
+        undoArgumentsJson = undoArgumentsJson,
     )
 
     private fun ActionLogEntity.toEntry(): ActionLogEntry = ActionLogEntry(
@@ -98,6 +114,8 @@ class ActionLogStore(
         detail = detail,
         success = success,
         timestamp = timestamp,
+        argumentsJson = argumentsJson,
+        undoArgumentsJson = undoArgumentsJson,
     )
 
     private companion object {

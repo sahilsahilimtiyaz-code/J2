@@ -54,6 +54,9 @@ interface MemoryDao {
     @Query("UPDATE memories SET lastUsedAt = :now, useCount = useCount + 1 WHERE rowid IN (:ids)")
     suspend fun markUsed(ids: List<Long>, now: Long)
 
+    @Query("DELETE FROM memories WHERE expiresAt > 0 AND expiresAt <= :now")
+    suspend fun pruneExpiredMemories(now: Long)
+
     @Query("DELETE FROM memories")
     suspend fun clearMemories()
 
@@ -97,6 +100,9 @@ interface MemoryDao {
     @Query("SELECT * FROM messages ORDER BY id DESC LIMIT :limit")
     suspend fun recentMessages(limit: Int): List<MessageEntity>
 
+    @Query("SELECT * FROM messages WHERE text LIKE '%' || :query || '%' ORDER BY createdAt DESC LIMIT :limit")
+    suspend fun searchMessages(query: String, limit: Int): List<MessageEntity>
+
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId AND id > :afterId ORDER BY id ASC")
     suspend fun messagesAfter(conversationId: Long, afterId: Long): List<MessageEntity>
 
@@ -121,6 +127,9 @@ interface MemoryDao {
 
     @Insert
     suspend fun insertSkill(skill: SkillEntity): Long
+
+    @Update
+    suspend fun updateSkill(skill: SkillEntity)
 
     @Query("SELECT * FROM skills ORDER BY createdAt DESC")
     fun observeSkills(): Flow<List<SkillEntity>>

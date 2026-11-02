@@ -306,28 +306,36 @@ class SendWhatsAppTool : Tool {
 }
 
 /**
- * Sends a genuine WhatsApp voice message: Jarvis renders the line in his own
- * configured voice, drives WhatsApp's recorder and sends the note.
+ * Sends or replies with a genuine WhatsApp voice message: Jarvis renders the line in
+ * his own configured voice (Fish Audio, ElevenLabs, or System TTS), opens the chat
+ * (via direct wa.me deep link when the contact's number is known, or verified search),
+ * drives WhatsApp's recorder and sends the voice note.
+ *
+ * Also supports replying to the latest incoming WhatsApp notification when `recipient`
+ * is `"last"`, `"latest"`, `"reply"`, or omitted.
  */
 class SendWhatsAppVoiceNoteTool : Tool {
 
     override val definition: ToolDefinition = ToolDefinition(
         name = "send_whatsapp_voice_note",
-        description = "Send a real WhatsApp voice message to a contact name or phone number. " +
-            "Jarvis speaks the supplied text in his own voice, records it through WhatsApp's " +
-            "own microphone, sends it, and verifies the chat. The owner confirms first.",
+        description = "Send or reply with a real WhatsApp voice message in Jarvis's own voice. " +
+            "Pass a contact name, phone number, or 'last' to reply to the most recent incoming " +
+            "WhatsApp message. If 'message' is set to 'auto' when replying, Jarvis drafts a " +
+            "contextual spoken reply to what they wrote. The owner confirms before sending.",
         parameters = objectSchema(
-            required = listOf("recipient", "message"),
+            required = listOf("message"),
             properties = mapOf(
-                "recipient" to stringProperty("Contact name, or phone number with country code."),
+                "recipient" to stringProperty(
+                    "Contact name, phone number with country code, or 'last' to reply to the latest WhatsApp sender.",
+                ),
                 "message" to stringProperty(
-                    "What Jarvis should say in the voice note. One or two short sentences.",
+                    "What Jarvis should say in the voice note (1-2 short sentences), or 'auto' to draft a reply to their last message.",
                 ),
             ),
         ),
     )
 
-    override val label = "Send WhatsApp voice note"
+    override val label = "Send / reply WhatsApp voice note"
     override val category = ToolCategory.CONTACTS
 
     override fun availability(context: Context): ToolAvailability {
@@ -339,14 +347,13 @@ class SendWhatsAppVoiceNoteTool : Tool {
     }
 
     override suspend fun execute(arguments: JsonObject, context: ToolContext): ToolResult {
-        val recipient = arguments.argString("recipient")?.trim().orEmpty()
-        val message = arguments.argString("message")?.trim().orEmpty().take(700)
-        if (recipient.isBlank() || message.isBlank()) {
-            return ToolResult(false, "Give me both the recipient and what to say in the voice note.")
-        }
+        val rawRecipient = arguments.argString("recipient")?.trim().orEmpty()
+        val rawMessage = arguments.argString("message")?.trim().orEmpty().take(700)
+
         val core = runCatching {
             com.jarvis.assistant.core.JarvisCore.get(context.appContext)
         }.getOrNull() ?: return ToolResult(false, "Jarvis is not initialised yet.")
+
         if (!core.settings.value.safety.voiceNoteEnabled) {
             return ToolResult(
                 false,
@@ -354,16 +361,80 @@ class SendWhatsAppVoiceNoteTool : Tool {
                     "WhatsApp voice messages.",
             )
         }
+
+        // 1. Resolve latest incoming WhatsApp message if replying
+        val isReplyToLast = rawRecipient.isBlank() ||
+            rawRecipient.lowercase() in setOf("last", "latest", "recent", "reply", "them", "him", "her", "sender")
+        val latestIncoming = com.jarvis.assistant.service.JarvisNotificationListenerService
+            .latestWhatsAppMessage(if (isReplyToLast) null else rawRecipient)
+
+        val targetName = if (isReplyToLast) {
+            latestIncoming?.sender ?: return ToolResult(
+                false,
+                "I do not see a recent incoming WhatsApp message to reply to. Tell me the contact's name or number.",
+            )
+        } else {
+            rawRecipient
+        }
+
+        // 2. Resolve spoken message (draft automatically if 'auto' or blank on a reply)
+        val wantAutoDraft = rawMessage.isBlank() ||
+            rawMessage.lowercase() in setOf("auto", "reply", "draft")
+        val spokenMessage = if (wantAutoDraft) {
+            val incomingBody = latestIncoming?.body
+                ?: return ToolResult(
+                    false,
+                    "Tell me what you would like me to say in the WhatsApp voice note to $targetName.",
+                )
+            core.draftWhatsAppVoiceReplyNow(targetName, incomingBody)
+                ?: "Hello $targetName, this is Jarvis replying on ${core.settings.value.profile.title.ifBlank { "sir" }}'s behalf. I have passed your message along."
+        } else {
+            rawMessage
+        }
+
+        // 3. Resolve phone number from Contacts when possible so wa.me opens the exact chat in 1 step
+        val digitsOnly = targetName.filter { it.isDigit() }.takeIf { it.length >= 7 && targetName.none(Char::isLetter) }
+        val resolvedName: String
+        val resolvedTarget: String
+        if (digitsOnly != null) {
+            resolvedName = targetName
+            resolvedTarget = digitsOnly
+        } else {
+            val contactMatch = if (context.permissions.isGranted(android.Manifest.permission.READ_CONTACTS)) {
+                runCatching { resolveTarget(context, targetName) }.getOrNull()
+            } else {
+                null
+            }
+            if (contactMatch != null) {
+                resolvedName = contactMatch.name
+                resolvedTarget = contactMatch.number
+            } else {
+                resolvedName = targetName
+                resolvedTarget = targetName
+            }
+        }
+
+        val incomingContextLine = latestIncoming
+            ?.takeIf { it.sender.equals(targetName, ignoreCase = true) || isReplyToLast }
+            ?.let { "Replying to ${it.sender}: \u201c${it.body.take(140)}\u201d\n\n" }
+            .orEmpty()
+
         val approved = context.confirmation.confirm(
-            title = "Send a WhatsApp voice message to $recipient?",
-            detail = "\u201c${message.take(300)}\u201d\n\nJarvis will speak this aloud in his " +
-                "configured voice and record it through WhatsApp. Keep the phone unlocked, " +
-                "on the loudspeaker and off any headset.",
+            title = "Send WhatsApp voice note to $resolvedName?",
+            detail = "${incomingContextLine}Voice note: \u201c${spokenMessage.take(300)}\u201d\n\n" +
+                "Jarvis will speak this aloud in his configured voice and record it through " +
+                "WhatsApp. Keep the phone unlocked, on the loudspeaker and off any headset.",
         )
         if (!approved) {
             return ToolResult(false, "The owner declined the WhatsApp voice message.")
         }
-        val result = core.sendWhatsAppVoiceNoteNow(recipient, message)
+
+        val result = core.sendWhatsAppVoiceNoteNow(
+            recipient = resolvedTarget,
+            message = spokenMessage,
+            autoReply = false,
+            displayName = resolvedName,
+        )
         return ToolResult(result.success, result.message)
     }
 }

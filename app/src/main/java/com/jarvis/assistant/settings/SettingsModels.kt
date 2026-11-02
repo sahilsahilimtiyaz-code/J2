@@ -150,6 +150,24 @@ data class SafetySettings(
 )
 
 @Serializable
+enum class AuthMode {
+    NONE,
+    GOOGLE,
+    GUEST,
+}
+
+@Serializable
+data class AuthSession(
+    val mode: AuthMode = AuthMode.NONE,
+    val email: String = "",
+    val displayName: String = "",
+    val signedInAt: Long = 0L,
+) {
+    val isAuthenticated: Boolean
+        get() = mode != AuthMode.NONE
+}
+
+@Serializable
 data class AppSettings(
     val profile: OwnerProfile = OwnerProfile(),
     val providers: List<ProviderSettings> = defaultProviderSettings(),
@@ -158,6 +176,7 @@ data class AppSettings(
     val voice: VoiceSettings = VoiceSettings(),
     val safety: SafetySettings = SafetySettings(),
     val health: HealthSettings = HealthSettings(),
+    val auth: AuthSession = AuthSession(),
 ) {
     val defaultProvider: ProviderSettings?
         get() = providers.firstOrNull { it.id == defaultProviderId }

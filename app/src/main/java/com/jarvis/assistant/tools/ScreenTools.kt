@@ -208,6 +208,7 @@ class TapCoordinatesTool : Tool {
                     "Coordinate unit: 'percent' (default) or 'pixels'.",
                     listOf("percent", "pixels"),
                 ),
+                "label" to stringProperty("Optional description of the target control at these coordinates."),
             ),
         ),
     )
@@ -231,6 +232,7 @@ class TapCoordinatesTool : Tool {
             ?: arguments.argInt("y")?.toDouble()
             ?: return ToolResult(false, "Specify a y coordinate.")
         val unit = arguments.argString("unit")?.lowercase()?.takeIf { it.isNotBlank() } ?: "percent"
+        val targetHint = arguments.argString("label").orEmpty()
         val screen = context.screen!!
 
         val pixelCoords = when (unit) {
@@ -251,13 +253,28 @@ class TapCoordinatesTool : Tool {
                 (rawX / 100.0 * width) to (rawY / 100.0 * height)
             }
         }
-        val result = screen.tapCoordinates(pixelCoords.first.toInt(), pixelCoords.second.toInt())
+        val pxX = pixelCoords.first.toInt()
+        val pxY = pixelCoords.second.toInt()
+
+        val nodeLabelAtPoint = runCatching {
+            JarvisAccessibilityService.controller()?.describePoint(pxX, pxY).orEmpty()
+        }.getOrDefault("")
+        val combinedLabel = "$targetHint $nodeLabelAtPoint".trim()
+        if (combinedLabel.isNotBlank() && RISKY_SCREEN_LABELS.any { combinedLabel.lowercase().contains(it) }) {
+            val approved = context.confirmation.confirm(
+                title = "Tap \"$combinedLabel\" at ($pxX, $pxY)?",
+                detail = "That coordinate targets a control that can send, pay for or delete something.",
+            )
+            if (!approved) return ToolResult(false, "The owner declined the coordinate tap.")
+        }
+
+        val result = screen.tapCoordinates(pxX, pxY)
         return ToolResult(
             result.success,
             if (unit in setOf("px", "pixel", "pixels")) {
                 result.message
             } else {
-                "${result.message} (tapped at ${pixelCoords.first.toInt()}, ${pixelCoords.second.toInt()} px)"
+                "${result.message} (tapped at $pxX, $pxY px)"
             },
         )
     }

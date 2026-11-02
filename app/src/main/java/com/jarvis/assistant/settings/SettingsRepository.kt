@@ -70,6 +70,27 @@ class SettingsRepository(
             )
         }
 
+    suspend fun saveAuthSession(auth: AuthSession): AppSettings =
+        update { current ->
+            val nextProfile = if (auth.mode == AuthMode.GOOGLE &&
+                current.profile.name.isBlank() &&
+                auth.displayName.isNotBlank()
+            ) {
+                current.profile.copy(name = auth.displayName.trim()).sanitized()
+            } else {
+                current.profile
+            }
+            current.copy(
+                auth = auth,
+                profile = nextProfile,
+            )
+        }
+
+    suspend fun signOut(): AppSettings =
+        update { current ->
+            current.copy(auth = AuthSession(mode = AuthMode.NONE))
+        }
+
     suspend fun savePersona(persona: PersonaSettings): AppSettings =
         update { current ->
             current.copy(

@@ -317,7 +317,10 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             },
         )
         runCatching {
-            com.jarvis.assistant.service.ScreenUsageHealthService.ensureStarted(appContext)
+            if (settings.value.health.enabled) {
+                com.jarvis.assistant.service.ScreenUsageHealthService.ensureStarted(appContext)
+            }
+            com.jarvis.assistant.service.JarvisWidgetProvider.updateAll(appContext)
         }
         // Incoming WhatsApp call windows drive the call receptionist when the
         // owner has switched it on in Settings, Safety.
@@ -683,12 +686,41 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                 return
             }
 
+            // If the user's objective is a multi-step plan request, initialize the visual TaskPlan timeline
+            val allDefs = toolRegistry.definitions()
+            val availableToolSet = allDefs.map { it.name }.toSet()
+            if ( com.jarvis.assistant.brain.TaskPlanner.shouldCreatePlan(userText)) {
+                val initialPlan = com.jarvis.assistant.brain.TaskPlanner.buildPlanForObjective(
+                    objective = userText,
+                    availableTools = availableToolSet,
+                )
+                _state.update { it.copy(activePlan = initialPlan.copy(isRunning = true)) }
+            }
+
             val memoryContext = withContext(Dispatchers.IO) {
                 runCatching { memoryRepository.promptContext(userText) }.getOrDefault("")
             }
+            val sharedContext = _state.value.sharedPayload?.let { payload ->
+                buildString {
+                    append("\n\nShared content currently attached by the owner:\n")
+                    append("- Title: ${payload.title}\n")
+                    append("- Type: ${payload.mimeType}\n")
+                    if (payload.textOrUrl.isNotBlank()) {
+                        append("- Content / URL: ${payload.textOrUrl.take(2000)}\n")
+                    }
+                    if (payload.extractedPreview.isNotBlank()) {
+                        append("- Extracted preview: ${payload.extractedPreview.take(2000)}\n")
+                    }
+                }
+            }.orEmpty()
             val systemPrompt = withContext(Dispatchers.IO) {
-                personaBuilder.build(current, memoryContext)
+                personaBuilder.build(current, memoryContext + sharedContext)
             }
+
+            val selectedTools = com.jarvis.assistant.brain.ToolContextBudgeter.selectToolsForTurn(
+                userMessage = userText,
+                allTools = allDefs,
+            )
 
             agentLoop.run(
                 AgentRequest(
@@ -696,7 +728,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                     history = historyForPrompt(),
                     userMessage = userText,
                     providers = providers,
-                    tools = toolRegistry.definitions(),
+                    tools = selectedTools,
                 ),
             ).collect { event ->
                 when (event) {
@@ -708,6 +740,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                     is AgentEvent.ToolStarted -> {
                         flushTtsBuffer()
                         _state.update { state ->
+                            val updatedPlan = markPlanStepStarted(state.activePlan, userText, event.name)
                             state.copy(
                                 messages = state.messages.map { message ->
                                     if (message.id == assistantId && message.text.isNotBlank()) {
@@ -717,11 +750,17 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                                     }
                                 },
                                 toolActivity = toolActivityLabel(event.name),
+                                activePlan = updatedPlan,
                             )
                         }
                     }
 
                     is AgentEvent.ToolFinished -> _state.update { state ->
+                        val updatedPlan = markPlanStepFinished(
+                            state.activePlan,
+                            event.name,
+                            event.success,
+                        )
                         state.copy(
                             messages = state.messages.map { message ->
                                 if (message.id == assistantId && !message.tools.contains(event.name)) {
@@ -731,10 +770,30 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                                 }
                             },
                             toolActivity = if (event.success) "Done." else "A tool reported a problem.",
+                            activePlan = updatedPlan,
                         )
                     }
 
                     is AgentEvent.Completed -> {
+                        _state.update { state ->
+                            val finalizedPlan = state.activePlan?.let { plan ->
+                                val updatedSteps = plan.steps.map { step ->
+                                    if (step.status == com.jarvis.assistant.brain.PlanStepStatus.PENDING ||
+                                        step.status == com.jarvis.assistant.brain.PlanStepStatus.RUNNING
+                                    ) {
+                                        step.copy(status = com.jarvis.assistant.brain.PlanStepStatus.COMPLETED, verified = true)
+                                    } else {
+                                        step
+                                    }
+                                }
+                                plan.copy(
+                                    steps = updatedSteps,
+                                    isRunning = false,
+                                    summary = "Completed ${updatedSteps.count { it.status == com.jarvis.assistant.brain.PlanStepStatus.COMPLETED }}/${updatedSteps.size} steps.",
+                                )
+                            }
+                            state.copy(activePlan = finalizedPlan)
+                        }
                         completeTurn(assistantId, conversationId)
                     }
 
@@ -1735,8 +1794,38 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         }
     }
 
+    override suspend fun rememberAdvanced(
+        text: String,
+        type: String,
+        importance: Int,
+        tags: String,
+        expiresAt: Long,
+    ): String {
+        val created = memoryRepository.remember(
+            text = text,
+            type = type,
+            importance = importance,
+            source = "tool",
+            tags = tags,
+            expiresAt = expiresAt,
+        )
+        return if (created) {
+            "Saved to memory ($type): $text"
+        } else {
+            "Updated existing memory ($type): $text"
+        }
+    }
+
     override suspend fun search(query: String, limit: Int): List<String> =
-        memoryRepository.search(query, limit).map { it.text }
+        memoryRepository.search(query, limit).map {
+            val tagStr = if (it.tags.isNotBlank()) " [${it.tags}]" else ""
+            "(${it.type}) ${it.text}$tagStr"
+        }
+
+    override suspend fun searchHistory(query: String, limit: Int): List<String> =
+        memoryRepository.searchConversationMessages(query, limit).map { msg ->
+            "${msg.author.uppercase(Locale.ROOT)}: ${msg.text.take(180)}"
+        }
 
     override suspend fun forget(query: String): String {
         val matches = memoryRepository.search(query, 20)
@@ -1762,15 +1851,322 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         }
     }
 
-    fun addMemory(text: String, type: String = MemoryType.FACT, importance: Int = 3) {
+    fun addMemory(
+        text: String,
+        type: String = MemoryType.FACT,
+        importance: Int = 3,
+        tags: String = "",
+        temporaryHours: Int = 0,
+    ) {
         if (text.trim().length < 3) {
             setError("A memory needs at least a few words.")
             return
         }
+        val expiresAt = if (temporaryHours > 0) {
+            System.currentTimeMillis() + temporaryHours.coerceIn(1, 24 * 365) * 3_600_000L
+        } else {
+            0L
+        }
         scope.launch {
-            memoryRepository.remember(text.trim(), type, importance, source = "manual")
+            memoryRepository.remember(
+                text = text.trim(),
+                type = type,
+                importance = importance,
+                source = "manual",
+                tags = tags,
+                expiresAt = expiresAt,
+            )
             setNotice("Saved to memory.")
         }
+    }
+
+    suspend fun searchConversations(query: String): List<com.jarvis.assistant.memory.MessageEntity> =
+        memoryRepository.searchConversationMessages(query, limit = 15)
+
+    // Action Log Retry & Undo -------------------------------------------------
+
+    fun retryActionLogEntry(entry: ActionLogEntry) {
+        scope.launch {
+            _state.update { it.copy(toolActivity = "Retrying ${entry.label}...") }
+            val result = withContext(Dispatchers.IO) {
+                toolRegistry.execute(entry.toolName, entry.argumentsJson.ifBlank { "{}" })
+            }
+            _state.update {
+                it.copy(
+                    toolActivity = null,
+                    notice = if (result.success) "Retried ${entry.label}: ${result.content}" else null,
+                    error = if (!result.success) "Retry failed: ${result.content}" else null,
+                )
+            }
+        }
+    }
+
+    fun undoActionLogEntry(entry: ActionLogEntry) {
+        if (!entry.isUndoable) {
+            setError("This action cannot be automatically undone.")
+            return
+        }
+        scope.launch {
+            _state.update { it.copy(toolActivity = "Reverting ${entry.label}...") }
+            val result = withContext(Dispatchers.IO) {
+                toolRegistry.execute(entry.toolName, entry.undoArgumentsJson)
+            }
+            _state.update {
+                it.copy(
+                    toolActivity = null,
+                    notice = if (result.success) "Reverted ${entry.label}: ${result.content}" else null,
+                    error = if (!result.success) "Undo failed: ${result.content}" else null,
+                )
+            }
+        }
+    }
+
+    // Android Share Sheet Ingestion -------------------------------------------
+
+    fun ingestSharedContent(payload: com.jarvis.assistant.brain.SharedContentPayload) {
+        _state.update {
+            it.copy(
+                sharedPayload = payload,
+                notice = "Received shared ${payload.title}. Choose an action below or ask Jarvis.",
+            )
+        }
+    }
+
+    fun clearSharedContent() {
+        _state.update { it.copy(sharedPayload = null) }
+    }
+
+    fun actOnSharedContent(actionPrompt: String) {
+        val payload = _state.value.sharedPayload ?: return
+        val fullPrompt = buildString {
+            append(actionPrompt.trim())
+            append("\n\nShared item (${payload.mimeType}): ${payload.title}")
+            if (payload.textOrUrl.isNotBlank()) {
+                append("\nContent: ${payload.textOrUrl.take(2500)}")
+            }
+            if (payload.extractedPreview.isNotBlank()) {
+                append("\nExtracted text: ${payload.extractedPreview.take(2500)}")
+            }
+        }
+        send(fullPrompt)
+    }
+
+    // Task Planner Execution & Timeline Controls ------------------------------
+
+    private var planExecutionJob: Job? = null
+
+    fun executeTaskPlan(objective: String) {
+        val clean = objective.trim()
+        if (clean.isBlank()) return
+        planExecutionJob?.cancel()
+        val available = toolRegistry.definitions().map { it.name }.toSet()
+        val plan = com.jarvis.assistant.brain.TaskPlanner.buildPlanForObjective(clean, available)
+        _state.update { it.copy(activePlan = plan.copy(isRunning = true), error = null) }
+        planExecutionJob = scope.launch {
+            runPlanStepsInternal(plan)
+        }
+    }
+
+    fun cancelActivePlan() {
+        planExecutionJob?.cancel()
+        planExecutionJob = null
+        _state.update { state ->
+            val currentPlan = state.activePlan ?: return@update state
+            val updatedSteps = currentPlan.steps.map { step ->
+                if (step.status == com.jarvis.assistant.brain.PlanStepStatus.RUNNING ||
+                    step.status == com.jarvis.assistant.brain.PlanStepStatus.PENDING
+                ) {
+                    step.copy(status = com.jarvis.assistant.brain.PlanStepStatus.SKIPPED)
+                } else {
+                    step
+                }
+            }
+            state.copy(
+                activePlan = currentPlan.copy(
+                    steps = updatedSteps,
+                    isRunning = false,
+                    isCancelled = true,
+                    summary = "Plan cancelled by owner (${currentPlan.completedCount}/${currentPlan.steps.size} completed).",
+                ),
+                toolActivity = null,
+                notice = "Task plan cancelled.",
+            )
+        }
+    }
+
+    fun dismissActivePlan() {
+        planExecutionJob?.cancel()
+        planExecutionJob = null
+        _state.update { it.copy(activePlan = null) }
+    }
+
+    fun retryFailedPlanSteps() {
+        val currentPlan = _state.value.activePlan ?: return
+        if (currentPlan.isRunning) return
+        val resetSteps = currentPlan.steps.map { step ->
+            if (step.status == com.jarvis.assistant.brain.PlanStepStatus.FAILED ||
+                step.status == com.jarvis.assistant.brain.PlanStepStatus.SKIPPED
+            ) {
+                step.copy(status = com.jarvis.assistant.brain.PlanStepStatus.PENDING, output = "")
+            } else {
+                step
+            }
+        }
+        val reopened = currentPlan.copy(steps = resetSteps, isRunning = true, isCancelled = false, summary = "")
+        _state.update { it.copy(activePlan = reopened) }
+        planExecutionJob = scope.launch {
+            runPlanStepsInternal(reopened)
+        }
+    }
+
+    private suspend fun runPlanStepsInternal(initialPlan: com.jarvis.assistant.brain.TaskPlan) {
+        var workingPlan = initialPlan.copy(isRunning = true)
+        val outputs = mutableListOf<String>()
+
+        for ((idx, step) in workingPlan.steps.withIndex()) {
+            if (step.status == com.jarvis.assistant.brain.PlanStepStatus.COMPLETED) {
+                outputs += "✓ ${step.title}: ${step.output}"
+                continue
+            }
+            val runningStep = step.copy(
+                status = com.jarvis.assistant.brain.PlanStepStatus.RUNNING,
+                attempts = step.attempts + 1,
+            )
+            workingPlan = workingPlan.copy(
+                steps = workingPlan.steps.toMutableList().also { it[idx] = runningStep },
+            )
+            _state.update {
+                it.copy(
+                    activePlan = workingPlan,
+                    toolActivity = "Plan step ${step.index}/${workingPlan.steps.size}: ${step.title}",
+                )
+            }
+
+            var res = withContext(Dispatchers.IO) {
+                toolRegistry.execute(step.toolName, step.argumentsJson)
+            }
+            var totalAttempts = runningStep.attempts
+            if (!res.success && step.riskLevel == com.jarvis.assistant.brain.RiskLevel.LOW) {
+                // Retry once for recoverable low-risk read/search steps
+                delay(400L)
+                totalAttempts += 1
+                res = withContext(Dispatchers.IO) {
+                    toolRegistry.execute(step.toolName, step.argumentsJson)
+                }
+            }
+
+            val finishedStep = runningStep.copy(
+                status = if (res.success) {
+                    com.jarvis.assistant.brain.PlanStepStatus.COMPLETED
+                } else {
+                    com.jarvis.assistant.brain.PlanStepStatus.FAILED
+                },
+                output = res.content.take(300),
+                verified = res.success,
+                attempts = totalAttempts,
+            )
+            workingPlan = workingPlan.copy(
+                steps = workingPlan.steps.toMutableList().also { it[idx] = finishedStep },
+            )
+            _state.update { it.copy(activePlan = workingPlan) }
+            outputs += "${if (res.success) "✓" else "✗"} ${step.title}: ${res.content.take(220)}"
+        }
+
+        val doneCount = workingPlan.completedCount
+        val total = workingPlan.steps.size
+        val summaryText = "Executed $doneCount of $total planned steps for \"${workingPlan.objective}\".\n" +
+            outputs.joinToString("\n")
+        val finalized = workingPlan.copy(
+            isRunning = false,
+            summary = "Completed $doneCount/$total steps.",
+        )
+        val msg = CoreMessage(
+            id = newId("plan"),
+            author = ChatAuthor.JARVIS,
+            text = summaryText,
+            providerName = "Task Planner",
+            tools = workingPlan.steps.map { it.toolName }.distinct(),
+        )
+        _state.update { state ->
+            state.copy(
+                activePlan = finalized,
+                toolActivity = null,
+                messages = state.messages + msg,
+            )
+        }
+        speak("Task plan complete, ${settings.value.profile.title.ifBlank { "sir" }}. $doneCount of $total steps succeeded.")
+    }
+
+    private fun markPlanStepStarted(
+        currentPlan: com.jarvis.assistant.brain.TaskPlan?,
+        objective: String,
+        toolName: String,
+    ): com.jarvis.assistant.brain.TaskPlan {
+        val label = toolActivityLabel(toolName).removeSuffix("...")
+        if (currentPlan == null) {
+            val step = com.jarvis.assistant.brain.PlanStep(
+                id = "step_${System.currentTimeMillis()}_1",
+                index = 1,
+                title = label,
+                toolName = toolName,
+                riskLevel = com.jarvis.assistant.brain.TaskPlanner.riskForTool(toolName),
+                status = com.jarvis.assistant.brain.PlanStepStatus.RUNNING,
+                attempts = 1,
+            )
+            return com.jarvis.assistant.brain.TaskPlan(
+                id = "plan_${System.currentTimeMillis()}",
+                objective = objective.take(90),
+                steps = listOf(step),
+                isRunning = true,
+            )
+        }
+        val matchIdx = currentPlan.steps.indexOfFirst {
+            it.toolName == toolName && it.status == com.jarvis.assistant.brain.PlanStepStatus.PENDING
+        }
+        return if (matchIdx >= 0) {
+            val updated = currentPlan.steps.toMutableList()
+            val target = updated[matchIdx]
+            updated[matchIdx] = target.copy(
+                status = com.jarvis.assistant.brain.PlanStepStatus.RUNNING,
+                attempts = target.attempts + 1,
+            )
+            currentPlan.copy(steps = updated, isRunning = true)
+        } else {
+            val nextIdx = currentPlan.steps.size + 1
+            val newStep = com.jarvis.assistant.brain.PlanStep(
+                id = "step_${System.currentTimeMillis()}_$nextIdx",
+                index = nextIdx,
+                title = label,
+                toolName = toolName,
+                riskLevel = com.jarvis.assistant.brain.TaskPlanner.riskForTool(toolName),
+                status = com.jarvis.assistant.brain.PlanStepStatus.RUNNING,
+                attempts = 1,
+            )
+            currentPlan.copy(steps = currentPlan.steps + newStep, isRunning = true)
+        }
+    }
+
+    private fun markPlanStepFinished(
+        currentPlan: com.jarvis.assistant.brain.TaskPlan?,
+        toolName: String,
+        success: Boolean,
+    ): com.jarvis.assistant.brain.TaskPlan? {
+        if (currentPlan == null) return null
+        val matchIdx = currentPlan.steps.indexOfFirst {
+            it.toolName == toolName && it.status == com.jarvis.assistant.brain.PlanStepStatus.RUNNING
+        }
+        if (matchIdx < 0) return currentPlan
+        val updated = currentPlan.steps.toMutableList()
+        val target = updated[matchIdx]
+        updated[matchIdx] = target.copy(
+            status = if (success) {
+                com.jarvis.assistant.brain.PlanStepStatus.COMPLETED
+            } else {
+                com.jarvis.assistant.brain.PlanStepStatus.FAILED
+            },
+            verified = success,
+        )
+        return currentPlan.copy(steps = updated)
     }
 
     fun forgetEverything() {
@@ -2535,6 +2931,25 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                             pixelX = rawX.toInt()
                             pixelY = rawY.toInt()
                         }
+                        val nodeLabel = withContext(Dispatchers.Main) {
+                            runCatching {
+                                JarvisAccessibilityService.controller()?.describePoint(pixelX, pixelY).orEmpty()
+                            }.getOrDefault("")
+                        }
+                        val combinedRiskText = "${decision.reason} ${decision.target} $nodeLabel".lowercase(Locale.ROOT)
+                        val riskyWords = listOf(
+                            "send", "pay", "buy", "purchase", "order", "checkout",
+                            "delete", "remove", "erase", "uninstall", "transfer", "confirm", "submit",
+                        )
+                        if (riskyWords.any { combinedRiskText.contains(it) }) {
+                            val approved = requestConfirmation(
+                                title = "Tap coordinate ($pixelX, $pixelY)?",
+                                detail = "Step $step targets \"${nodeLabel.ifBlank { decision.reason }}\" which may send, pay for, or delete something.",
+                            )
+                            if (!approved) {
+                                return ScreenResult(false, "Owner declined risky coordinate tap at step $step.", verified = false)
+                            }
+                        }
                         val coordRes = tapCoordinates(pixelX, pixelY)
                         stepResult = coordRes
                         val verifyBadge = if (coordRes.verified) "VERIFIED (${coordRes.verificationSignal})" else "UNVERIFIED"
@@ -3102,13 +3517,18 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
      * captures it. Every stage is verified; a failed send is never reported as
      * delivered. Manual sends pass the Confirmation Gate in the tool.
      */
+    suspend fun draftWhatsAppVoiceReplyNow(sender: String, incomingBody: String): String? =
+        draftWhatsAppReply(settings.value, sender, incomingBody)
+
     suspend fun sendWhatsAppVoiceNoteNow(
         recipient: String,
         message: String,
         autoReply: Boolean = false,
+        displayName: String = recipient,
     ): ScreenResult {
         val current = settings.value
         val cleanRecipient = recipient.trim()
+        val cleanDisplayName = displayName.trim().ifBlank { cleanRecipient }
         if (!current.safety.voiceNoteEnabled) {
             return ScreenResult(
                 false,
@@ -3204,7 +3624,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             }
 
             _state.update {
-                it.copy(toolActivity = "Recording the WhatsApp voice message...")
+                it.copy(toolActivity = "Recording the WhatsApp voice message for $cleanDisplayName...")
             }
             val sender = WhatsAppVoiceNoteSender(
                 context = appContext,
@@ -3217,6 +3637,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                 recipient = cleanRecipient,
                 isNumber = WhatsAppVoiceNotes.isNumberLike(cleanRecipient),
                 note = note,
+                displayName = cleanDisplayName,
             )
 
             var finalResult = result
@@ -3226,7 +3647,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                 !autoReply
             ) {
                 keepRenderedFile = true
-                val fallback = sender.sharePreparedAudio(cleanRecipient, note)
+                val fallback = sender.sharePreparedAudio(cleanDisplayName, note)
                 val reason = sender.lastError?.takeIf { it.isNotBlank() }
                 finalResult = fallback.copy(
                     message = buildString {
@@ -3429,6 +3850,10 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                     stepsJson,
                 )
         }.getOrNull() ?: return@withContext "Invalid skill steps format."
+        val availableNames = toolRegistry.definitions().map { it.name }.toSet()
+        skillRepository.validateSteps(steps, availableNames)?.let { validationError ->
+            return@withContext validationError
+        }
         val saved = skillRepository.saveSkill(name, description, triggers, steps)
         "Saved routine '${saved.name}' with ${saved.steps.size} step(s)."
     }

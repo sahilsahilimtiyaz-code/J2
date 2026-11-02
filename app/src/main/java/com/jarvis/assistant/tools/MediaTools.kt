@@ -341,7 +341,15 @@ class WebSearchTool : Tool {
             val listed = results
                 .take(5)
                 .mapIndexed { index, hit ->
-                    "${index + 1}. ${hit.title} — ${hit.snippet.ifBlank { "(no snippet available)" }}\n   ${hit.url}"
+                    val safeTitle = com.jarvis.assistant.security.SecurityShield.sanitizeUntrustedText(
+                        hit.title,
+                        "web_search",
+                    )
+                    val safeSnippet = com.jarvis.assistant.security.SecurityShield.sanitizeUntrustedText(
+                        hit.snippet.ifBlank { "(no snippet available)" },
+                        "web_search",
+                    )
+                    "${index + 1}. $safeTitle — $safeSnippet\n   ${hit.url}"
                 }
                 .joinToString("\n")
             val text = buildString {

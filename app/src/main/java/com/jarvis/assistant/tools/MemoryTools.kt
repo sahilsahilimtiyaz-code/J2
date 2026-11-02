@@ -9,9 +9,8 @@ class RememberTool : Tool {
 
     override val definition: ToolDefinition = ToolDefinition(
         name = "remember_about_owner",
-        description = "Save one durable fact or preference about the owner so it is remembered " +
-            "after the app restarts. Use this whenever the owner says to remember something, or " +
-            "states a lasting detail such as their name, family, work, routine or taste. " +
+        description = "Save one durable or temporary fact, preference, project, important date, or recurring task " +
+            "about the owner so it is remembered across sessions. " +
             "Never store passwords, card numbers, one-time codes or API keys.",
         parameters = objectSchema(
             required = listOf("text"),
@@ -27,9 +26,15 @@ class RememberTool : Tool {
                         MemoryType.PERSON,
                         MemoryType.PROJECT,
                         MemoryType.ROUTINE,
+                        MemoryType.IMPORTANT_DATE,
+                        MemoryType.RECURRING_TASK,
                     ),
                 ),
-                "importance" to intProperty("1 low to 5 high. Use 4 or 5 for identity and close family."),
+                "importance" to intProperty("1 low to 5 high. Use 4 or 5 for identity, dates, and close family."),
+                "tags" to stringProperty("Optional comma-separated tags (e.g. \"work,trip,family\")."),
+                "temporary_hours" to intProperty(
+                    "Optional hours until this temporary memory automatically expires (0 or omitted = permanent).",
+                ),
             ),
         ),
     )
@@ -48,7 +53,14 @@ class RememberTool : Tool {
         }
         val type = arguments.argString("type") ?: MemoryType.FACT
         val importance = (arguments.argInt("importance") ?: 3).coerceIn(1, 5)
-        return ToolResult(true, memory.remember(text, type, importance))
+        val tags = arguments.argString("tags").orEmpty()
+        val tempHours = arguments.argInt("temporary_hours") ?: 0
+        val expiresAt = if (tempHours > 0) {
+            System.currentTimeMillis() + tempHours.coerceIn(1, 24 * 365) * 3_600_000L
+        } else {
+            0L
+        }
+        return ToolResult(true, memory.rememberAdvanced(text, type, importance, tags, expiresAt))
     }
 
     private fun looksLikeSecret(text: String): Boolean {
@@ -75,13 +87,14 @@ class SearchMemoryTool : Tool {
 
     override val definition: ToolDefinition = ToolDefinition(
         name = "search_memory",
-        description = "Search what Jarvis remembers about the owner. Use it when the answer may " +
-            "depend on a stored detail that is not already in the conversation.",
+        description = "Search what Jarvis remembers about the owner and optionally past conversation history. " +
+            "Use it when the answer may depend on a stored detail, project, date, or earlier chat.",
         parameters = objectSchema(
             required = listOf("query"),
             properties = mapOf(
-                "query" to stringProperty("Keywords to search for, e.g. \"sister birthday\"."),
+                "query" to stringProperty("Keywords to search for, e.g. \"sister birthday\" or \"trip\"."),
                 "limit" to intProperty("Maximum results, default 5."),
+                "include_history" to booleanProperty("Also search past conversation messages (default true)."),
             ),
         ),
     )
@@ -95,12 +108,24 @@ class SearchMemoryTool : Tool {
         val query = arguments.argString("query")
             ?: return ToolResult(false, "What should I look for?")
         val limit = (arguments.argInt("limit") ?: 5).coerceIn(1, 10)
+        val includeHistory = arguments.argBoolean("include_history") ?: true
         val results = memory.search(query, limit)
-        return if (results.isEmpty()) {
-            ToolResult(true, "I have nothing stored that matches \"$query\".")
-        } else {
-            ToolResult(true, results.joinToString("\n") { "- $it" })
+        val historyHits = if (includeHistory) memory.searchHistory(query, limit) else emptyList()
+        if (results.isEmpty() && historyHits.isEmpty()) {
+            return ToolResult(true, "I have nothing stored that matches \"$query\".")
         }
+        val combined = buildString {
+            if (results.isNotEmpty()) {
+                append("Stored memories:\n")
+                append(results.joinToString("\n") { "- $it" })
+            }
+            if (historyHits.isNotEmpty()) {
+                if (isNotEmpty()) append("\n\n")
+                append("Conversation history matches:\n")
+                append(historyHits.joinToString("\n") { "- $it" })
+            }
+        }
+        return ToolResult(true, combined)
     }
 }
 

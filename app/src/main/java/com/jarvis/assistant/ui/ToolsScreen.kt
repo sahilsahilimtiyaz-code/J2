@@ -77,10 +77,12 @@ fun ToolsScreen(
     onSelectTab: (JarvisTab) -> Unit,
     onToggleMic: () -> Unit,
     onRunToolPrompt: (String) -> Unit = {},
+    onLaunchTaskPlan: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var query by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf("All") }
+    var plannerObjective by remember { mutableStateOf("") }
 
     val categories = listOf("All", "Productivity", "Media", "Analysis")
 
@@ -259,6 +261,108 @@ fun ToolsScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                item(key = "automation_hub_strip") {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            FilterChip(
+                                label = "Skills (${state.skills.size})",
+                                selected = false,
+                                onClick = { onSelectTab(JarvisTab.SKILLS) },
+                            )
+                            FilterChip(
+                                label = "Proposals (${state.proposals.size})",
+                                selected = false,
+                                onClick = { onSelectTab(JarvisTab.PROPOSALS) },
+                            )
+                            FilterChip(
+                                label = "Action Log (${state.actions.size})",
+                                selected = false,
+                                onClick = { onSelectTab(JarvisTab.LOG) },
+                            )
+                        }
+
+                        GlassPanel(
+                            modifier = Modifier.fillMaxWidth(),
+                            corner = 18.dp,
+                            accent = JarvisPalette.CyanBright,
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    StatusDot(color = JarvisPalette.CyanBright, pulsing = true, size = 6.dp)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        text = "AI TASK PLANNER · MULTI-STEP EXECUTION",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = JarvisPalette.CyanBright,
+                                        letterSpacing = 1.3.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(14.dp))
+                                            .background(JarvisPalette.Deep.copy(alpha = 0.85f))
+                                            .border(1.dp, JarvisPalette.Cyan.copy(alpha = 0.30f), RoundedCornerShape(14.dp))
+                                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    ) {
+                                        BasicTextField(
+                                            value = plannerObjective,
+                                            onValueChange = { plannerObjective = it },
+                                            singleLine = true,
+                                            textStyle = MaterialTheme.typography.bodySmall.copy(color = JarvisPalette.Ice),
+                                            cursorBrush = SolidColor(JarvisPalette.Cyan),
+                                            modifier = Modifier.fillMaxWidth(),
+                                            decorationBox = { inner ->
+                                                if (plannerObjective.isEmpty()) {
+                                                    Text(
+                                                        text = "e.g. Prepare everything for my trip tomorrow...",
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = JarvisPalette.TextDim.copy(alpha = 0.75f),
+                                                    )
+                                                }
+                                                inner()
+                                            },
+                                        )
+                                    }
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(14.dp))
+                                            .background(JarvisPalette.CyanBright.copy(alpha = 0.22f))
+                                            .border(1.dp, JarvisPalette.CyanBright, RoundedCornerShape(14.dp))
+                                            .clickable {
+                                                val goal = plannerObjective.trim().ifBlank {
+                                                    "Prepare everything for my trip tomorrow: check calendar, weather, and reminders"
+                                                }
+                                                plannerObjective = ""
+                                                onLaunchTaskPlan(goal)
+                                            }
+                                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                                    ) {
+                                        Text(
+                                            text = "Plan & Run",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = JarvisPalette.Ice,
+                                            fontWeight = FontWeight.SemiBold,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 item(key = "categories") {
                     Row(
                         modifier = Modifier
@@ -505,24 +609,25 @@ private fun glyphForTool(name: String, category: String): HudGlyph = when {
 }
 
 private fun promptForTool(name: String, label: String): String = when (name) {
-    "current_time" -> "What is the current time and date?"
-    "device_status" -> "Report my phone battery, memory, storage, and connectivity status"
+    "get_current_time", "current_time" -> "What is the current time and date?"
+    "get_device_status", "device_status" -> "Report my phone battery, memory, storage, and connectivity status"
+    "run_diagnostics" -> "Run full system diagnostics"
     "open_app" -> "List my installed apps and open YouTube"
     "list_installed_apps" -> "List my installed apps on this phone"
-    "youtube_search" -> "Open YouTube and search lo-fi study beats"
+    "search_youtube", "youtube_search" -> "Open YouTube and search lo-fi study beats"
     "web_search" -> "Search the web for today's top technology headlines"
     "open_url" -> "Open https://news.ycombinator.com in my browser"
     "navigate_to" -> "Navigate to the nearest coffee shop"
-    "create_calendar_event" -> "Create a calendar event for Project Review tomorrow at 10 AM"
+    "create_calendar_event", "schedule_calendar_event" -> "Create a calendar event for Project Review tomorrow at 10 AM"
     "share_text" -> "Open the system share sheet with a quick status note"
     "open_settings" -> "Open my phone Wi-Fi settings screen"
     "set_alarm" -> "Set an alarm for 7:30 AM tomorrow"
     "set_timer" -> "Set a timer for 5 minutes"
-    "flashlight" -> "Toggle the phone flashlight"
+    "control_flashlight", "flashlight" -> "Toggle the phone flashlight"
     "take_screenshot" -> "Take a screenshot of my screen right now"
     "open_camera" -> "Open the camera in photo mode"
-    "clipboard_control" -> "Read what is currently copied on my clipboard"
-    "media_control" -> "Play or pause my current media playback"
+    "clipboard", "clipboard_control" -> "Read what is currently copied on my clipboard"
+    "control_media", "media_control" -> "Play or pause my current media playback"
     "set_volume" -> "Set my media volume to 60 percent"
     "set_ringer_mode" -> "Set my phone ringer mode to vibrate"
     "find_contact" -> "Search my contacts"

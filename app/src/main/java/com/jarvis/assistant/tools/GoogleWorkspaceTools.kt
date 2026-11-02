@@ -106,8 +106,8 @@ class ReadCalendarTool : Tool {
 
 class CreateCalendarEventTool : Tool {
     override val definition: ToolDefinition = ToolDefinition(
-        name = "create_calendar_event",
-        description = "Creates a new event or appointment on the owner's Google Calendar.",
+        name = "schedule_calendar_event",
+        description = "Schedules a new event or appointment on the owner's Google Calendar starting N minutes from now.",
         parameters = objectSchema(
             required = listOf("title"),
             properties = mapOf(
@@ -119,7 +119,7 @@ class CreateCalendarEventTool : Tool {
         ),
     )
 
-    override val label = "Add calendar event"
+    override val label = "Schedule calendar event"
     override val category = ToolCategory.TIME
 
     override suspend fun execute(arguments: JsonObject, context: ToolContext): ToolResult {

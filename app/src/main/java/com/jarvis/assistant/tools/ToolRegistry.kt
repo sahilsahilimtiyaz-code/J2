@@ -107,6 +107,13 @@ class ToolRegistry(
 
     override fun definitions(): List<ToolDefinition> = tools.map { it.definition }
 
+    /** Returns any duplicate tool names in [tools], or empty list when all names are unique. */
+    fun duplicateToolNames(): List<String> =
+        tools.groupBy { it.definition.name }
+            .filter { it.value.size > 1 }
+            .keys
+            .toList()
+
     /** Everything the Tools screen shows, with availability read from this device. */
     fun catalogue(): List<ToolSummary> = tools.map { tool ->
         val availability = runCatching { tool.availability(toolContext.appContext) }
@@ -133,12 +140,15 @@ class ToolRegistry(
                     detail = blocked.take(220),
                     success = false,
                     timestamp = System.currentTimeMillis(),
+                    argumentsJson = argumentsJson.take(500),
                 ),
             )
             return ToolResult(false, blocked)
         }
         val arguments = parseArguments(argumentsJson)
             ?: return ToolResult(false, "The tool arguments were not valid JSON.")
+
+        val undoJson = runCatching { captureUndoArguments(name, arguments) }.getOrDefault("")
 
         val result = try {
             // Package queries, contact lookups and the camera all touch the
@@ -160,10 +170,75 @@ class ToolRegistry(
                 detail = result.content.take(220),
                 success = result.success,
                 timestamp = System.currentTimeMillis(),
+                argumentsJson = argumentsJson.take(500),
+                undoArgumentsJson = if (result.success) undoJson else "",
             ),
         )
 
         return result
+    }
+
+    private fun captureUndoArguments(name: String, arguments: JsonObject): String {
+        val ctx = toolContext.appContext
+        return when (name) {
+            "set_volume" -> {
+                val audio = ctx.getSystemService(android.media.AudioManager::class.java) ?: return ""
+                val streamName = arguments.argString("stream")?.lowercase() ?: "media"
+                val stream = when (streamName) {
+                    "ring", "ringer" -> android.media.AudioManager.STREAM_RING
+                    "alarm" -> android.media.AudioManager.STREAM_ALARM
+                    "notification" -> android.media.AudioManager.STREAM_NOTIFICATION
+                    else -> android.media.AudioManager.STREAM_MUSIC
+                }
+                val max = audio.getStreamMaxVolume(stream).coerceAtLeast(1)
+                val currentPct = (audio.getStreamVolume(stream) * 100) / max
+                buildJsonObject {
+                    put("level", currentPct)
+                    put("stream", streamName)
+                }.toString()
+            }
+            "set_ringer_mode" -> {
+                val audio = ctx.getSystemService(android.media.AudioManager::class.java) ?: return ""
+                val prevMode = when (audio.ringerMode) {
+                    android.media.AudioManager.RINGER_MODE_SILENT -> "silent"
+                    android.media.AudioManager.RINGER_MODE_VIBRATE -> "vibrate"
+                    else -> "sound"
+                }
+                buildJsonObject { put("mode", prevMode) }.toString()
+            }
+            "control_flashlight" -> {
+                buildJsonObject { put("on", TorchState.isOn) }.toString()
+            }
+            "set_do_not_disturb" -> {
+                val modeArg = arguments.argString("mode")?.lowercase() ?: "status"
+                if (modeArg == "status") return ""
+                val nm = ctx.getSystemService(android.app.NotificationManager::class.java) ?: return ""
+                val prevMode = when (nm.currentInterruptionFilter) {
+                    android.app.NotificationManager.INTERRUPTION_FILTER_PRIORITY -> "priority"
+                    android.app.NotificationManager.INTERRUPTION_FILTER_ALARMS -> "alarms"
+                    android.app.NotificationManager.INTERRUPTION_FILTER_NONE -> "silence"
+                    else -> "off"
+                }
+                buildJsonObject { put("mode", prevMode) }.toString()
+            }
+            "set_screen_brightness" -> {
+                if (arguments.argInt("level") == null && arguments.argBoolean("auto") == null) return ""
+                val cr = ctx.contentResolver
+                val currentRaw = runCatching {
+                    android.provider.Settings.System.getInt(cr, android.provider.Settings.System.SCREEN_BRIGHTNESS)
+                }.getOrDefault(128)
+                val currentMode = runCatching {
+                    android.provider.Settings.System.getInt(cr, android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE)
+                }.getOrDefault(android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE_AUTOMATIC)
+                val isAuto = currentMode == android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE_AUTOMATIC
+                val currentPct = (currentRaw * 100 / 255).coerceIn(0, 100)
+                buildJsonObject {
+                    put("level", currentPct)
+                    put("auto", isAuto)
+                }.toString()
+            }
+            else -> ""
+        }
     }
 
     private fun parseArguments(raw: String): JsonObject? {

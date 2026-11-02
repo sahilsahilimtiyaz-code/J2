@@ -13,6 +13,8 @@ import com.jarvis.assistant.voice.VoiceNotePlayer
 import java.io.File
 import kotlin.math.abs
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
@@ -328,6 +330,7 @@ class WhatsAppVoiceNoteSender(
         recipient: String,
         isNumber: Boolean,
         note: RenderedVoiceNote,
+        displayName: String = recipient,
     ): ScreenResult {
         lastError = null
         if (note.durationMs <= 0L) {
@@ -336,18 +339,24 @@ class WhatsAppVoiceNoteSender(
         if (note.durationMs > MAX_NOTE_DURATION_MS) {
             return failure("That note is longer than WhatsApp's comfortable recording limit, sir.")
         }
-        if (!openChat(recipient, isNumber)) {
-            return failure(lastError ?: "I could not open the WhatsApp chat for $recipient.")
+        val chatOpened = if (isNumber) {
+            openChat(recipient, isNumber = true) ||
+                (displayName != recipient && openChat(displayName, isNumber = false))
+        } else {
+            openChat(recipient, isNumber = false)
+        }
+        if (!chatOpened) {
+            return failure(lastError ?: "I could not open the WhatsApp chat for $displayName.")
         }
         val before = countVoiceBubbles()
         val mic = findMicSpot()
             ?: return failure("WhatsApp is open, but I could not find its microphone button.")
-        onPhase("Recording the voice message...")
+        onPhase("Recording the voice message for $displayName...")
         fallbackSafe = true
         if (!startRecording(mic)) {
-            return failure(
-                "I could not start WhatsApp's recorder. The mic button may have moved in this version.",
-            )
+            // Fallback for WhatsApp builds where slide-to-lock does not latch:
+            // hold the mic button down continuously while playing the rendered voice note.
+            return holdMicAndPlay(mic = mic, note = note, beforeBubbles = before, recipient = displayName)
         }
         fallbackSafe = false
         onPhase("Playing my voice into the recording...")
@@ -362,7 +371,7 @@ class WhatsAppVoiceNoteSender(
         // Let the tail of the sentence land inside the recording before Send.
         delay(RECORDING_TAIL_MS)
         onPhase("Sending the voice message...")
-        return sendRecording(before, recipient)
+        return sendRecording(before, displayName)
     }
 
     /**
@@ -662,6 +671,66 @@ class WhatsAppVoiceNoteSender(
         // gesture failed, so a successful recording is never tapped again.
         AppAutomation.tapSpot(mic) || AppAutomation.tapNodeAction(mic)
         return waitForRecording(RECORDING_START_TIMEOUT_MS)
+    }
+
+    /**
+     * Hold-to-record fallback: dispatches a single continuous press-and-hold gesture
+     * on the WhatsApp microphone button while playing the synthesized voice note over
+     * the loudspeaker. Releasing the gesture at the end of playback either auto-sends
+     * the PTT note or leaves the Send button ready to tap.
+     */
+    private suspend fun holdMicAndPlay(
+        mic: android.graphics.Rect,
+        note: RenderedVoiceNote,
+        beforeBubbles: Int,
+        recipient: String,
+    ): ScreenResult = coroutineScope {
+        val service = JarvisAccessibilityService.serviceInstance()
+            ?: return@coroutineScope failure("Screen control is disconnected, so I cannot hold WhatsApp's mic.")
+        val holdDurationMs = (note.durationMs + 950L).coerceIn(1_800L, 58_000L)
+        val micX = mic.centerX().toFloat()
+        val micY = mic.centerY().toFloat()
+
+        fallbackSafe = false
+        onPhase("Holding WhatsApp's microphone and playing my voice...")
+        val holdDeferred = async {
+            service.dispatchTapGesture(
+                x = micX,
+                y = micY,
+                durationMs = holdDurationMs,
+            )
+        }
+        // Give WhatsApp 320ms after touch-down to open its audio recorder before playback starts
+        delay(320L)
+        val played = player.play(note.file, note.durationMs)
+        val gestureDone = holdDeferred.await()
+
+        if (!played) {
+            cancelRecording()
+            return@coroutineScope failure(
+                player.lastError
+                    ?: "I held WhatsApp's microphone, but could not play the rendered voice note.",
+            )
+        }
+        delay(SEND_CONFIRM_WAIT_MS)
+        if (recordingActive()) {
+            return@coroutineScope sendRecording(beforeBubbles, recipient)
+        }
+        val after = countVoiceBubbles()
+        val verified = after > beforeBubbles
+        if (verified || gestureDone) {
+            ScreenResult(
+                success = true,
+                message = if (verified) {
+                    "Sent a WhatsApp voice message to $recipient in my own voice."
+                } else {
+                    "Recorded and released the WhatsApp voice message for $recipient in my own voice."
+                },
+                verified = verified,
+            )
+        } else {
+            failure("I could not start WhatsApp's recorder. The mic button may have moved in this version.")
+        }
     }
 
     private suspend fun waitForRecording(timeoutMs: Long): Boolean {

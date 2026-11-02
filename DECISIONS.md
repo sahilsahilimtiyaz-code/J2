@@ -303,3 +303,34 @@
   build-tools 36; `assembleDebug testDebugUnitTest` passed with 48 tests (0 failures,
   0 errors) and a 46 MB debug APK. Phone-only verification remains outstanding for real
   WhatsApp UI, real TTS playback and the home-screen icon.
+
+## 2026-11-02 — Phase 0 Stabilization & Phase 1 Core Intelligence (Phase 1A & Phase 1B)
+
+- **Fixed `:app:processDebugResources FAILED` (`AarResourcesCompilerTransform`)**:
+  - Removed the hardcoded `android.aapt2FromMavenOverride=/root/aapt2bin/aapt2` line from `gradle.properties`. In Linux x86_64 CI and container environments, `/root/aapt2bin/aapt2` does not exist, causing every AAR resource transform to fail. Standard AGP Maven AAPT2 now resolves automatically.
+- **Phase 0 Stabilization (Audit Fixes)**:
+  - **Duplicate tool name resolution**: Renamed `CreateCalendarEventTool` in `GoogleWorkspaceTools.kt` to `schedule_calendar_event` while upgrading `CalendarEventTool` (`create_calendar_event`) in `IntentTools.kt` to accept both ISO `start` strings and `minutes_from_now`, eliminating the duplicate `create_calendar_event` schema collision across all 55 tools.
+  - **Seeded skills repair & validation**: Fixed `SkillRepository.seedDefaultsIfEmpty()` so "Morning Routine" and "Device Diagnostics" call real registered tools (`get_device_status`, `get_current_time`, `run_diagnostics`, `read_notifications`, `search_youtube`), added `SkillRepository.validateSteps(...)`, persisted `SkillEntity.description` via Room v2 `MIGRATION_1_2`, and repaired `SaveSkillTool`/`RunSkillTool`/`DeleteSkillTool` to return honest `ToolResult(false, ...)` on failure.
+  - **Reachable `SkillsScreen` & `ProposalsScreen`**: Added navigation chips and quick-access rows in `ToolsScreen` and `QuickPanel`.
+  - **Security & Alarm hardening**: Routed `WebSearchTool` snippets through `SecurityShield.sanitizeUntrustedText`, added a risky-node confirmation gate to `TapCoordinatesTool` (`ScreenController.describePoint`), dynamically inspected Android Keystore `KeyInfo.isInsideSecureHardware` in `SecurityShield.audit`, added `canScheduleExactAlarms()` fallback in `scheduleAlarmSafely`, and rescheduled daily morning briefings in `JarvisAlarmReceiver`.
+- **Phase 1A (Default Assistant, Share Sheet, App Shortcuts, Interactive Widget & Quick Settings Tile)**:
+  - Implemented real main-thread `SpeechRecognizer` delegation inside `JarvisRecognitionService`.
+  - Added static App Shortcuts (`res/xml/shortcuts.xml`) and `ACTION_SEND`, `ACTION_SEND_MULTIPLE`, `ACTION_PROCESS_TEXT`, and `ACTION_VOICE_COMMAND` intent filters in `AndroidManifest.xml` + `MainActivity.kt`, displaying a glassmorphic `SharedContentBanner` on `HomeScreen` with one-tap `Summarize`, `Action Items`, `Save to Memory`, and `Fact Check` actions.
+  - Upgraded `JarvisWidgetProvider` (`widget_jarvis_reactor.xml`) and `JarvisTileService` with live battery %, assistant status, and next scheduled reminder telemetry.
+- **Phase 1B (Advanced AI Task Planner, Tool Context Budgeter, Advanced Memory & Action Log Retry/Undo)**:
+  - Built `TaskPlanner` and `ToolContextBudgeter` (`brain/TaskPlanner.kt`): complex objectives are decomposed into multi-step `TaskPlan` workflows with risk levels (`SAFE`, `CONFIRM`, `PRIVILEGED`), per-step execution and verification, automatic retry on failure, cancellation, and a real-time `TaskExecutionTimelineCard` on `HomeScreen` plus a Task Planner launcher in `ToolsScreen`.
+  - Extended Room (`MIGRATION_1_2`) and `MemoryRepository`/`MemoryScreen` with `important_date`, `recurring_task`, `tags`, temporary expiry (`expiresAt` with automatic pruning), and `searchConversationMessages` (past conversation history search).
+  - Extended `ActionLogStore`, `ToolRegistry`, and `ActionLogScreen` with search, status filters (`All`, `Succeeded`, `Failed`, `Undoable`), one-tap **Retry**, and one-tap **Undo Setting** for reversible device controls (`set_volume`, `set_ringer_mode`, `control_flashlight`, `set_do_not_disturb`, `set_screen_brightness`).
+
+## 2026-11-02 — WhatsApp Voice-Reply Polish, Official Triangular Arc-Reactor Logo & Post-Boot Google / Guest Login
+
+- **Polishing rather than rebuilding the WhatsApp voice-note pipeline:**
+  - The existing `WhatsAppVoiceNoteAgent` + `VoiceNoteStudio` + `VoiceNotePlayer` architecture already implemented the only honest non-root PTT path on Android 14+. Rather than rebuilding it, we hardened its three real-world friction points:
+    1. **Knowing who to reply to and what they said:** `JarvisNotificationListenerService` now maintains a thread-safe history (`whatsappHistory`) of recent incoming WhatsApp messages and falls back to scanning active status-bar notifications. `send_whatsapp_voice_note` accepts `recipient = "last" / "latest" / "reply"` and `message = "auto" / "reply"` (calling `JarvisCore.draftWhatsAppVoiceReplyNow`), so saying *"Jarvis, reply to my last WhatsApp with a voice message"* works in one turn.
+    2. **Contact number resolution for instant chat opening:** `SendWhatsAppVoiceNoteTool` resolves spoken contact names against Android Contacts (`resolveTarget`) whenever permission is granted, opening the chat directly via `https://wa.me/<digits>` while retaining `displayName` so `WhatsAppVoiceNoteSender` can fall back to in-app search if needed.
+    3. **Continuous hold-to-record fallback (`holdMicAndPlay`):** If a WhatsApp variant or screen geometry does not latch on the upward slide-to-lock gesture (`startRecording`), `WhatsAppVoiceNoteSender` automatically dispatches a continuous press-and-hold gesture (`dispatchTapGesture` for `note.durationMs + 950L`) on the WhatsApp mic button while playing the synthesized WAV over the loudspeaker, releasing at completion to send the PTT voice note.
+- **Official Triangular Arc-Reactor Logo (`/public/assets/aistudio/ic_app_logo_e1371f83.png`):**
+  - Generated high-precision bicubic-scaled PNG assets directly from the user's uploaded circular triangular Arc-Reactor emblem across `drawable-nodpi/ic_app_logo.png` (1024×1024), `drawable-nodpi/ic_app_logo_foreground.png` (1024×1024 with 700×700 centered safe zone for adaptive icon masks), and all 5 `mipmap-{mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}` launcher icons (`ic_launcher.png` & `ic_launcher_round.png`), plus `ReactorGlyph` in `Hud.kt` and `BootScreen.kt`.
+- **Post-Loading Google Login / Guest Gateway (`AuthScreen.kt`):**
+  - Added `AuthMode` (`NONE`, `GOOGLE`, `GUEST`) and `AuthSession` to `AppSettings` and `SettingsRepository`. Immediately after `BootScreen` finishes, if `!state.settings.auth.isAuthenticated`, `JarvisApp` renders `AuthScreen` with the `G Login >` / `Or` / `Guest >` interface.
+  - `G Login >` invokes Android's native `AccountManager.newChooseAccountIntent` for `"com.google"` accounts (which works on any sideloaded APK regardless of signing key SHA-1) and falls back to an in-app Google Sign-In sheet when no device Google account picker is available.

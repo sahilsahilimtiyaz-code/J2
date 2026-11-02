@@ -37,7 +37,10 @@ class SaveSkillTool : Tool {
 
         return withContext(Dispatchers.IO) {
             val response = bridge.saveSkill(name, description, triggers, stepsJson)
-            ToolResult(true, response)
+            val ok = !response.startsWith("Invalid", ignoreCase = true) &&
+                !response.startsWith("Unknown tool", ignoreCase = true) &&
+                !response.startsWith("A skill must", ignoreCase = true)
+            ToolResult(ok, response)
         }
     }
 }
@@ -66,7 +69,9 @@ class RunSkillTool : Tool {
 
         return withContext(Dispatchers.IO) {
             val response = bridge.runSkill(skillName)
-            ToolResult(true, response)
+            val ok = !response.startsWith("No skill found", ignoreCase = true) &&
+                !response.contains("stopped at step", ignoreCase = true)
+            ToolResult(ok, response)
         }
     }
 }
@@ -122,7 +127,8 @@ class DeleteSkillTool : Tool {
 
         return withContext(Dispatchers.IO) {
             val response = bridge.deleteSkill(name)
-            ToolResult(true, response)
+            val ok = !response.startsWith("No skill found", ignoreCase = true)
+            ToolResult(ok, response)
         }
     }
 }

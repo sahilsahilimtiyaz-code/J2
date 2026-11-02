@@ -28,6 +28,8 @@ data class MemoryEntity(
     val createdAt: Long = System.currentTimeMillis(),
     val lastUsedAt: Long = 0L,
     val useCount: Int = 0,
+    val tags: String = "",
+    val expiresAt: Long = 0L,
 )
 
 /**
@@ -96,6 +98,7 @@ data class SummaryEntity(
 data class SkillEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0L,
     val name: String,
+    val description: String = "",
     val triggers: String,
     val stepsJson: String,
     val enabled: Boolean = true,
@@ -111,6 +114,8 @@ data class ActionLogEntity(
     val detail: String,
     val success: Boolean,
     val timestamp: Long,
+    val argumentsJson: String = "",
+    val undoArgumentsJson: String = "",
 )
 
 object MemoryType {
@@ -119,5 +124,18 @@ object MemoryType {
     const val PERSON = "person"
     const val PROJECT = "project"
     const val ROUTINE = "routine"
+    const val IMPORTANT_DATE = "important_date"
+    const val RECURRING_TASK = "recurring_task"
     const val LESSON = "lesson"
+
+    val ALL = listOf(
+        FACT,
+        PREFERENCE,
+        PERSON,
+        PROJECT,
+        ROUTINE,
+        IMPORTANT_DATE,
+        RECURRING_TASK,
+        LESSON,
+    )
 }

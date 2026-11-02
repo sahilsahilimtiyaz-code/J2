@@ -60,6 +60,40 @@ class JarvisAlarmReceiver : BroadcastReceiver() {
 
         notificationManager.notify(NOTIFICATION_ID, notification)
 
+        // Reschedule tomorrow's daily briefing if this was a recurring morning briefing alarm
+        val dailyHour = intent.getIntExtra(EXTRA_DAILY_HOUR, -1)
+        val dailyMinute = intent.getIntExtra(EXTRA_DAILY_MINUTE, -1)
+        if (dailyHour in 0..23 && dailyMinute in 0..59) {
+            runCatching {
+                val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? android.app.AlarmManager
+                if (alarmManager != null) {
+                    val nextCal = java.util.Calendar.getInstance().apply {
+                        add(java.util.Calendar.DAY_OF_YEAR, 1)
+                        set(java.util.Calendar.HOUR_OF_DAY, dailyHour)
+                        set(java.util.Calendar.MINUTE, dailyMinute)
+                        set(java.util.Calendar.SECOND, 0)
+                    }
+                    val nextIntent = Intent(context, JarvisAlarmReceiver::class.java).apply {
+                        putExtra(JarvisIncomingCallActivity.EXTRA_TITLE, title)
+                        putExtra(JarvisIncomingCallActivity.EXTRA_MESSAGE, message)
+                        putExtra(EXTRA_DAILY_HOUR, dailyHour)
+                        putExtra(EXTRA_DAILY_MINUTE, dailyMinute)
+                    }
+                    val nextPending = PendingIntent.getBroadcast(
+                        context,
+                        9001,
+                        nextIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                    )
+                    com.jarvis.assistant.tools.scheduleAlarmSafely(
+                        alarmManager,
+                        nextCal.timeInMillis,
+                        nextPending,
+                    )
+                }
+            }
+        }
+
         // Try direct launch
         runCatching { context.startActivity(callIntent) }
     }
@@ -67,5 +101,7 @@ class JarvisAlarmReceiver : BroadcastReceiver() {
     companion object {
         const val CHANNEL_ID = "jarvis_priority_calls"
         const val NOTIFICATION_ID = 9002
+        const val EXTRA_DAILY_HOUR = "extra_daily_hour"
+        const val EXTRA_DAILY_MINUTE = "extra_daily_minute"
     }
 }

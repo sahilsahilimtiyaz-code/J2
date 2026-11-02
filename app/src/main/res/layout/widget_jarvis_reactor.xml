@@ -31,15 +31,26 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="2dp"
-        android:letterSpacing="0.1"
-        android:text="ONLINE • READY"
+        android:letterSpacing="0.08"
+        android:text="ONLINE • ARC POWER 100%"
         android:textColor="#80D8FF"
         android:textSize="10sp" />
+
+    <TextView
+        android:id="@+id/widget_reminder"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:text="No pending reminders • Tap MIC to speak"
+        android:textColor="#9EC2DF"
+        android:textSize="9sp" />
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="10dp"
+        android:layout_marginTop="8dp"
         android:gravity="center"
         android:orientation="horizontal">
 

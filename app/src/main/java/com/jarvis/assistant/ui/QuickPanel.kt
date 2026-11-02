@@ -208,6 +208,24 @@ fun QuickPanelOverlay(
                             accent = JarvisPalette.Cyan,
                             onClick = { onRunQuickCommand("Translate any foreign text visible on my screen into English") },
                         )
+                        QuickAccessRow(
+                            glyph = HudGlyph.SPARKLES,
+                            label = "Macro Skills (${state.skills.size})",
+                            accent = JarvisPalette.CyanBright,
+                            onClick = { onSelectTab(JarvisTab.SKILLS) },
+                        )
+                        QuickAccessRow(
+                            glyph = HudGlyph.BRAIN,
+                            label = "AI Proposals",
+                            accent = JarvisPalette.Amber,
+                            onClick = { onSelectTab(JarvisTab.PROPOSALS) },
+                        )
+                        QuickAccessRow(
+                            glyph = HudGlyph.SLIDERS,
+                            label = "Action Log",
+                            accent = JarvisPalette.Cyan,
+                            onClick = { onSelectTab(JarvisTab.LOG) },
+                        )
                     }
                 }
 

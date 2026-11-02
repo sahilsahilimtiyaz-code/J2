@@ -63,4 +63,8 @@ data class CoreState(
     val spokenCaption: String? = null,
     /** True when the microphone stays continuously active while the app is open. */
     val micLocked: Boolean = true,
+    /** Active or most recently executed multi-step task plan shown in the timeline. */
+    val activePlan: com.jarvis.assistant.brain.TaskPlan? = null,
+    /** Content shared into Jarvis via Android Share Sheet or text selection. */
+    val sharedPayload: com.jarvis.assistant.brain.SharedContentPayload? = null,
 )

@@ -102,6 +102,8 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
                         screenAutomationStatus = runtime.screenAutomationStatus,
                         audioLevel = runtime.audioLevel,
                         micLocked = runtime.micLocked,
+                        activePlan = runtime.activePlan,
+                        sharedPayload = runtime.sharedPayload,
                     )
                 }
             }
@@ -330,7 +332,15 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun openActionLog() {
-        _ui.update { it.copy(tab = JarvisTab.LOG) }
+        _ui.update { it.copy(tab = JarvisTab.LOG, quickPanelOpen = false) }
+    }
+
+    fun openSkills() {
+        _ui.update { it.copy(tab = JarvisTab.SKILLS, quickPanelOpen = false) }
+    }
+
+    fun openProposals() {
+        _ui.update { it.copy(tab = JarvisTab.PROPOSALS, quickPanelOpen = false) }
     }
 
     fun dismissError() = core.dismissError()
@@ -953,8 +963,25 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
 
     // Memory ------------------------------------------------------------------
 
-    fun addMemory(text: String, type: String, importance: Int) {
-        core.addMemory(text, type, importance)
+    fun addMemory(
+        text: String,
+        type: String,
+        importance: Int,
+        tags: String = "",
+        temporaryHours: Int = 0,
+    ) {
+        core.addMemory(text, type, importance, tags, temporaryHours)
+    }
+
+    fun searchConversations(query: String) {
+        if (query.isBlank()) {
+            _ui.update { it.copy(conversationSearchHits = emptyList()) }
+            return
+        }
+        viewModelScope.launch {
+            val hits = core.searchConversations(query)
+            _ui.update { it.copy(conversationSearchHits = hits) }
+        }
     }
 
     fun updateMemory(memory: MemoryEntity) = core.updateMemory(memory)
@@ -1010,6 +1037,84 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
         if (!_ui.value.listening) {
             core.toggleListening()
         }
+    }
+
+    // Phase 1A & 1B: Task Planner, Share Sheet, Action Log Retry/Undo ----------
+
+    fun executeTaskPlan(objective: String) {
+        _ui.update { it.copy(tab = JarvisTab.HOME, quickPanelOpen = false, voiceOverlayOpen = false) }
+        core.executeTaskPlan(objective)
+    }
+
+    fun cancelActivePlan() = core.cancelActivePlan()
+
+    fun dismissActivePlan() = core.dismissActivePlan()
+
+    fun retryFailedPlanSteps() = core.retryFailedPlanSteps()
+
+    fun ingestSharedContent(payload: com.jarvis.assistant.brain.SharedContentPayload) {
+        _ui.update { it.copy(tab = JarvisTab.HOME, quickPanelOpen = false, voiceOverlayOpen = false) }
+        core.ingestSharedContent(payload)
+    }
+
+    fun clearSharedContent() = core.clearSharedContent()
+
+    fun actOnSharedContent(instruction: String) = core.actOnSharedContent(instruction)
+
+    fun retryActionLogEntry(entry: com.jarvis.assistant.tools.ActionLogEntry) {
+        core.retryActionLogEntry(entry)
+    }
+
+    fun undoActionLogEntry(entry: com.jarvis.assistant.tools.ActionLogEntry) {
+        core.undoActionLogEntry(entry)
+    }
+
+    // Authentication (Google Login / Guest) & WhatsApp Voice Reply ------------
+
+    fun signInWithGoogle(email: String, displayName: String) {
+        val cleanEmail = email.trim()
+        val cleanName = displayName.trim().ifBlank { deriveDisplayNameFromEmail(cleanEmail) }
+        viewModelScope.launch {
+            core.settingsRepository.saveAuthSession(
+                com.jarvis.assistant.settings.AuthSession(
+                    mode = com.jarvis.assistant.settings.AuthMode.GOOGLE,
+                    email = cleanEmail,
+                    displayName = cleanName,
+                    signedInAt = System.currentTimeMillis(),
+                ),
+            )
+            core.setNotice("Signed in with Google as $cleanEmail.")
+        }
+    }
+
+    fun continueAsGuest() {
+        viewModelScope.launch {
+            core.settingsRepository.saveAuthSession(
+                com.jarvis.assistant.settings.AuthSession(
+                    mode = com.jarvis.assistant.settings.AuthMode.GUEST,
+                    email = "",
+                    displayName = "Guest",
+                    signedInAt = System.currentTimeMillis(),
+                ),
+            )
+        }
+    }
+
+    fun signOut() {
+        viewModelScope.launch {
+            core.settingsRepository.signOut()
+            _ui.update { it.copy(tab = JarvisTab.HOME, quickPanelOpen = false) }
+        }
+    }
+
+    fun replyLatestWhatsAppWithVoice() {
+        val latest = com.jarvis.assistant.service.JarvisNotificationListenerService.latestWhatsAppMessage()
+        val prompt = if (latest != null) {
+            "Reply to ${latest.sender} on WhatsApp with a voice message in your voice responding to: \"${latest.body.take(180)}\""
+        } else {
+            "Reply to the last WhatsApp message with a voice message in your voice."
+        }
+        runQuickCommand(prompt)
     }
 
     // Helpers -----------------------------------------------------------------

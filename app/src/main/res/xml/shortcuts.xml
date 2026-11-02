@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="summon_voice"
+        android:enabled="true"
+        android:icon="@drawable/ic_jarvis"
+        android:shortcutShortLabel="@string/shortcut_voice_short"
+        android:shortcutLongLabel="@string/shortcut_voice_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.jarvis.assistant"
+            android:targetClass="com.jarvis.assistant.MainActivity">
+            <extra android:name="extra_summon_assistant" android:value="true" />
+        </intent>
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="run_diagnostics"
+        android:enabled="true"
+        android:icon="@drawable/ic_jarvis"
+        android:shortcutShortLabel="@string/shortcut_diagnostics_short"
+        android:shortcutLongLabel="@string/shortcut_diagnostics_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.jarvis.assistant"
+            android:targetClass="com.jarvis.assistant.MainActivity">
+            <extra android:name="extra_quick_prompt" android:value="Run full system diagnostics and report telemetry" />
+        </intent>
+    </shortcut>
+
+    <shortcut
+        android:shortcutId="task_planner"
+        android:enabled="true"
+        android:icon="@drawable/ic_jarvis"
+        android:shortcutShortLabel="@string/shortcut_planner_short"
+        android:shortcutLongLabel="@string/shortcut_planner_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.jarvis.assistant"
+            android:targetClass="com.jarvis.assistant.MainActivity">
+            <extra android:name="extra_quick_prompt" android:value="Plan and execute my morning briefing: check device status, read calendar events, and summarize notifications" />
+        </intent>
+    </shortcut>
+</shortcuts>

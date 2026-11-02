@@ -59,12 +59,13 @@ class CalendarEventTool : Tool {
     override val definition: ToolDefinition = ToolDefinition(
         name = "create_calendar_event",
         description = "Open the calendar's new-event screen with the details filled in. " +
-            "Uses ISO-8601 local time, for example 2026-11-02T09:30.",
+            "Supports ISO-8601 local time (e.g. 2026-11-02T09:30 or 09:30) or minutes_from_now.",
         parameters = objectSchema(
-            required = listOf("title", "start"),
+            required = listOf("title"),
             properties = mapOf(
                 "title" to stringProperty("Event title."),
                 "start" to stringProperty("Start time as 2026-11-02T09:30, or just 09:30 for today."),
+                "minutes_from_now" to intProperty("Optional minutes from now when event starts if start is omitted."),
                 "duration_minutes" to intProperty("Length in minutes. Defaults to 60."),
                 "location" to stringProperty("Optional location."),
                 "notes" to stringProperty("Optional notes."),
@@ -79,14 +80,18 @@ class CalendarEventTool : Tool {
         val title = arguments.argString("title")
             ?: return ToolResult(false, "Give the event a title.")
         val startText = arguments.argString("start")
-            ?: return ToolResult(false, "Tell me when the event starts.")
+        val minutesFromNow = arguments.argInt("minutes_from_now")
         val duration = (arguments.argInt("duration_minutes") ?: 60).coerceIn(5, 24 * 60)
 
-        val start = parseStart(startText)
-            ?: return ToolResult(
-                false,
-                "I could not read the start time \"$startText\". Use 2026-11-02T09:30 or 09:30.",
-            )
+        val start = when {
+            !startText.isNullOrBlank() -> parseStart(startText)
+                ?: return ToolResult(
+                    false,
+                    "I could not read the start time \"$startText\". Use 2026-11-02T09:30 or 09:30.",
+                )
+            minutesFromNow != null -> LocalDateTime.now().plusMinutes(minutesFromNow.toLong().coerceIn(1, 365 * 24 * 60))
+            else -> LocalDateTime.now().plusMinutes(60)
+        }
         val zone = ZoneId.systemDefault()
         val startMillis = start.atZone(zone).toInstant().toEpochMilli()
         val endMillis = start.plusMinutes(duration.toLong()).atZone(zone).toInstant().toEpochMilli()

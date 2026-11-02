@@ -141,6 +141,11 @@ fun HomeScreen(
     onFetchModels: () -> Unit,
     onSetFreeModelsOnly: (Boolean) -> Unit,
     onSelectQuickModel: (String, String) -> Unit,
+    onCancelPlan: () -> Unit = {},
+    onDismissPlan: () -> Unit = {},
+    onRetryFailedPlanSteps: () -> Unit = {},
+    onActOnSharedContent: (String) -> Unit = {},
+    onClearSharedContent: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -267,6 +272,27 @@ fun HomeScreen(
                             onSelectTab = onSelectTab,
                             onQuickPrompt = { prompt -> onSend(prompt) },
                         )
+                    }
+
+                    state.sharedPayload?.let { payload ->
+                        item(key = "shared_payload_banner") {
+                            SharedContentBanner(
+                                payload = payload,
+                                onAction = onActOnSharedContent,
+                                onDismiss = onClearSharedContent,
+                            )
+                        }
+                    }
+
+                    state.activePlan?.let { plan ->
+                        item(key = "active_task_plan") {
+                            TaskExecutionTimelineCard(
+                                plan = plan,
+                                onCancel = onCancelPlan,
+                                onRetryFailed = onRetryFailedPlanSteps,
+                                onDismiss = onDismissPlan,
+                            )
+                        }
                     }
 
                     items(state.messages, key = { it.id }) { message ->
@@ -403,6 +429,231 @@ private fun ScreenAutomationStopBanner(
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 1.2.sp,
                     )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SharedContentBanner(
+    payload: com.jarvis.assistant.brain.SharedContentPayload,
+    onAction: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    GlassPanel(
+        modifier = Modifier.fillMaxWidth(),
+        accent = JarvisPalette.CyanBright,
+        corner = 18.dp,
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                StatusDot(color = JarvisPalette.CyanBright, pulsing = true, size = 7.dp)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "SHARED WITH J.A.R.V.I.S. · ${payload.mimeType.uppercase()}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = JarvisPalette.CyanBright,
+                    letterSpacing = 1.3.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    text = "Dismiss",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = JarvisPalette.TextDim,
+                    modifier = Modifier.clickable(onClick = onDismiss),
+                )
+            }
+            if (payload.title.isNotBlank()) {
+                Text(
+                    text = payload.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = JarvisPalette.Ice,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            val bodyPreview = payload.textOrUrl.ifBlank { payload.extractedPreview }
+            if (bodyPreview.isNotBlank()) {
+                Text(
+                    text = bodyPreview,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = JarvisPalette.TextDim,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                VoiceSuggestionChip("Summarize") {
+                    onAction("Summarize this shared content concisely and highlight the key points.")
+                }
+                VoiceSuggestionChip("Action Items") {
+                    onAction("Extract actionable tasks, dates, or reminders from this shared content.")
+                }
+                VoiceSuggestionChip("Save to Memory") {
+                    onAction("Save the key facts from this shared content into my long-term memory.")
+                }
+                VoiceSuggestionChip("Fact Check") {
+                    onAction("Search the web to verify and expand on this shared content.")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TaskExecutionTimelineCard(
+    plan: com.jarvis.assistant.brain.TaskPlan,
+    onCancel: () -> Unit,
+    onRetryFailed: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val hasRunning = plan.steps.any { it.status == com.jarvis.assistant.brain.PlanStepStatus.RUNNING }
+    val hasFailed = plan.steps.any { it.status == com.jarvis.assistant.brain.PlanStepStatus.FAILED }
+    val completedCount = plan.steps.count { it.status == com.jarvis.assistant.brain.PlanStepStatus.COMPLETED }
+    val progress = if (plan.steps.isNotEmpty()) {
+        completedCount.toFloat() / plan.steps.size.toFloat()
+    } else {
+        0f
+    }
+
+    GlassPanel(
+        modifier = Modifier.fillMaxWidth(),
+        accent = when {
+            hasFailed -> JarvisPalette.Amber
+            hasRunning -> JarvisPalette.CyanBright
+            else -> JarvisPalette.Success
+        },
+        corner = 20.dp,
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                StatusDot(
+                    color = when {
+                        hasFailed -> JarvisPalette.Amber
+                        hasRunning -> JarvisPalette.CyanBright
+                        else -> JarvisPalette.Success
+                    },
+                    pulsing = hasRunning,
+                    size = 8.dp,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "MISSION PLANNER · $completedCount/${plan.steps.size} COMPLETE",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = JarvisPalette.CyanBright,
+                    letterSpacing = 1.4.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                if (hasRunning) {
+                    Text(
+                        text = "CANCEL",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = JarvisPalette.Danger,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.clickable(onClick = onCancel),
+                    )
+                } else {
+                    Text(
+                        text = "DISMISS",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = JarvisPalette.TextDim,
+                        modifier = Modifier.clickable(onClick = onDismiss),
+                    )
+                }
+            }
+
+            Text(
+                text = plan.objective,
+                style = MaterialTheme.typography.titleSmall,
+                color = JarvisPalette.Ice,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+
+            EnergyBar(
+                progress = progress.coerceIn(0.05f, 1f),
+                modifier = Modifier.fillMaxWidth(),
+                color = if (hasFailed) JarvisPalette.Amber else JarvisPalette.CyanBright,
+                height = 5.dp,
+            )
+
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                plan.steps.forEachIndexed { idx, step ->
+                    val statusColor = when (step.status) {
+                        com.jarvis.assistant.brain.PlanStepStatus.COMPLETED -> JarvisPalette.Success
+                        com.jarvis.assistant.brain.PlanStepStatus.RUNNING -> JarvisPalette.CyanBright
+                        com.jarvis.assistant.brain.PlanStepStatus.AWAITING_CONFIRMATION -> JarvisPalette.Amber
+                        com.jarvis.assistant.brain.PlanStepStatus.FAILED -> JarvisPalette.Danger
+                        com.jarvis.assistant.brain.PlanStepStatus.SKIPPED -> JarvisPalette.TextDim
+                        com.jarvis.assistant.brain.PlanStepStatus.PENDING -> JarvisPalette.TextDim
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(JarvisPalette.Deep.copy(alpha = 0.65f))
+                            .border(1.dp, statusColor.copy(alpha = 0.30f), RoundedCornerShape(12.dp))
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        StatusDot(
+                            color = statusColor,
+                            pulsing = step.status == com.jarvis.assistant.brain.PlanStepStatus.RUNNING,
+                            size = 6.dp,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "${idx + 1}. ${step.title}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = JarvisPalette.Ice,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            if (step.output.isNotBlank()) {
+                                Text(
+                                    text = step.output,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = JarvisPalette.TextDim,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(6.dp))
+                        HudPill(
+                            text = if (step.verified && step.status == com.jarvis.assistant.brain.PlanStepStatus.COMPLETED) {
+                                "verified"
+                            } else {
+                                step.status.name.lowercase()
+                            },
+                            color = statusColor,
+                            filled = step.status == com.jarvis.assistant.brain.PlanStepStatus.FAILED,
+                        )
+                    }
+                }
+            }
+
+            if (plan.summary.isNotBlank()) {
+                Text(
+                    text = plan.summary,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = JarvisPalette.CyanBright,
+                )
+            }
+
+            if (hasFailed && !hasRunning) {
+                Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                    VoiceSuggestionChip("Retry Failed Steps", onClick = onRetryFailed)
                 }
             }
         }

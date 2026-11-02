@@ -88,13 +88,14 @@ fun MemoryScreen(
     state: JarvisUiState,
     onSelectTab: (JarvisTab) -> Unit,
     onToggleMic: () -> Unit,
-    onAdd: (String, String, Int) -> Unit,
+    onAdd: (String, String, Int, String, Int) -> Unit,
     onUpdate: (MemoryEntity) -> Unit,
     onDelete: (Long) -> Unit,
     onForgetAll: () -> Unit,
     onExport: (Uri) -> Unit,
     onImport: (Uri) -> Unit,
     onExtract: () -> Unit,
+    onSearchConversations: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var query by remember { mutableStateOf("") }
@@ -111,20 +112,23 @@ fun MemoryScreen(
         contract = ActivityResultContracts.OpenDocument(),
     ) { uri -> uri?.let(onImport) }
 
-    val filterTabs = listOf("All", "Conversations", "Files", "Images")
+    val filterTabs = listOf("All", "Conversations", "Projects", "Important Dates", "Recurring Tasks")
 
     val filtered = remember(state.memories, query, selectedFilter) {
         state.memories.filter { mem ->
             val matchesFilter = when (selectedFilter) {
                 "Conversations" -> mem.type.equals(MemoryType.FACT, ignoreCase = true) ||
                     mem.type.equals(MemoryType.PREFERENCE, ignoreCase = true)
-                "Files" -> mem.type.equals(MemoryType.PROJECT, ignoreCase = true)
-                "Images" -> mem.type.equals(MemoryType.PERSON, ignoreCase = true)
+                "Projects" -> mem.type.equals(MemoryType.PROJECT, ignoreCase = true)
+                "Important Dates" -> mem.type.equals(MemoryType.IMPORTANT_DATE, ignoreCase = true)
+                "Recurring Tasks" -> mem.type.equals(MemoryType.RECURRING_TASK, ignoreCase = true) ||
+                    mem.type.equals(MemoryType.ROUTINE, ignoreCase = true)
                 else -> true
             }
             val matchesQuery = query.isBlank() ||
                 mem.text.contains(query, ignoreCase = true) ||
-                mem.type.contains(query, ignoreCase = true)
+                mem.type.contains(query, ignoreCase = true) ||
+                mem.tags.contains(query, ignoreCase = true)
             matchesFilter && matchesQuery
         }
     }
@@ -179,9 +183,9 @@ fun MemoryScreen(
             title = "Add a memory",
             initial = null,
             onDismiss = { adding = false },
-            onSave = { text, type, importance ->
+            onSave = { text, type, importance, tags, tempHours ->
                 adding = false
-                onAdd(text, type, importance)
+                onAdd(text, type, importance, tags, tempHours)
             },
         )
     }
@@ -191,9 +195,14 @@ fun MemoryScreen(
             title = "Edit memory",
             initial = memory,
             onDismiss = { editing = null },
-            onSave = { text, type, importance ->
+            onSave = { text, type, importance, tags, tempHours ->
                 editing = null
-                onUpdate(memory.copy(text = text, type = type, importance = importance))
+                val expiresAt = if (tempHours > 0) {
+                    System.currentTimeMillis() + tempHours * 3_600_000L
+                } else {
+                    memory.expiresAt
+                }
+                onUpdate(memory.copy(text = text, type = type, importance = importance, tags = tags, expiresAt = expiresAt))
             },
         )
     }
@@ -259,8 +268,11 @@ fun MemoryScreen(
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         SearchField(
                             value = query,
-                            onValueChange = { query = it },
-                            placeholder = "Search your memory...",
+                            onValueChange = {
+                                query = it
+                                onSearchConversations(it)
+                            },
+                            placeholder = "Search memory, tags, or past conversations...",
                         )
                         Row(
                             modifier = Modifier
@@ -396,6 +408,40 @@ fun MemoryScreen(
                             onEdit = { editing = memory },
                             onDelete = { onDelete(memory.id) },
                         )
+                    }
+                }
+
+                if (query.isNotBlank() && state.conversationSearchHits.isNotEmpty()) {
+                    item(key = "conv-hits-title") {
+                        SectionLabel("Conversation History Matches (${state.conversationSearchHits.size})")
+                    }
+                    items(state.conversationSearchHits, key = { "conv_hit_${it.id}" }) { hit ->
+                        GlassPanel(modifier = Modifier.fillMaxWidth(), corner = 16.dp) {
+                            Column {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = hit.author.uppercase(),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = JarvisPalette.CyanBright,
+                                        letterSpacing = 1.2.sp,
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        text = SimpleDateFormat("d MMM HH:mm", Locale.UK).format(Date(hit.createdAt)),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = JarvisPalette.TextDim,
+                                    )
+                                }
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = hit.text,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = JarvisPalette.Ice,
+                                    maxLines = 4,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -631,6 +677,20 @@ private fun MemoryCard(
                         style = MaterialTheme.typography.labelSmall,
                         color = JarvisPalette.TextDim,
                     )
+                    if (memory.tags.isNotBlank()) {
+                        Text(
+                            text = "#${memory.tags.replace(",", " #")}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = JarvisPalette.CyanBright,
+                        )
+                    }
+                    if (memory.expiresAt > 0L) {
+                        Text(
+                            text = "temp",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = JarvisPalette.Amber,
+                        )
+                    }
                     Text(
                         text = SimpleDateFormat("d MMM", Locale.UK).format(Date(memory.createdAt)),
                         style = MaterialTheme.typography.labelSmall,
@@ -650,11 +710,13 @@ private fun MemoryEditorDialog(
     title: String,
     initial: MemoryEntity?,
     onDismiss: () -> Unit,
-    onSave: (String, String, Int) -> Unit,
+    onSave: (String, String, Int, String, Int) -> Unit,
 ) {
     var text by remember { mutableStateOf(initial?.text.orEmpty()) }
     var type by remember { mutableStateOf(initial?.type ?: MemoryType.FACT) }
     var importance by remember { mutableStateOf((initial?.importance ?: 3).toFloat()) }
+    var tags by remember { mutableStateOf(initial?.tags.orEmpty()) }
+    var tempHours by remember { mutableStateOf(0) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -672,12 +734,26 @@ private fun MemoryEditorDialog(
                     minLines = 2,
                     maxLines = 5,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = tags,
+                    onValueChange = { tags = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Tags (comma-separated, optional)") },
+                    singleLine = true,
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
                     listOf(
                         MemoryType.FACT,
                         MemoryType.PREFERENCE,
                         MemoryType.PERSON,
                         MemoryType.PROJECT,
+                        MemoryType.IMPORTANT_DATE,
+                        MemoryType.RECURRING_TASK,
                     ).forEach { option ->
                         val selected = type == option
                         Box(
@@ -703,6 +779,37 @@ private fun MemoryEditorDialog(
                         }
                     }
                 }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Retention:", style = MaterialTheme.typography.labelSmall, color = JarvisPalette.TextDim)
+                    listOf(0 to "Permanent", 24 to "24h", 168 to "7d").forEach { (hrs, label) ->
+                        val selected = tempHours == hrs
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(
+                                    if (selected) JarvisPalette.Amber.copy(alpha = 0.2f)
+                                    else JarvisPalette.PanelLight,
+                                )
+                                .border(
+                                    1.dp,
+                                    JarvisPalette.Amber.copy(alpha = if (selected) 0.7f else 0.2f),
+                                    RoundedCornerShape(50),
+                                )
+                                .clickable { tempHours = hrs }
+                                .padding(horizontal = 9.dp, vertical = 4.dp),
+                        ) {
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (selected) JarvisPalette.Amber else JarvisPalette.TextDim,
+                            )
+                        }
+                    }
+                }
                 Text(
                     text = "Importance ${importance.toInt()}/5",
                     style = MaterialTheme.typography.labelSmall,
@@ -718,7 +825,7 @@ private fun MemoryEditorDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { onSave(text.trim(), type, importance.toInt()) },
+                onClick = { onSave(text.trim(), type, importance.toInt(), tags.trim(), tempHours) },
                 enabled = text.trim().length >= 3,
             ) {
                 Text("Save", color = JarvisPalette.Cyan)

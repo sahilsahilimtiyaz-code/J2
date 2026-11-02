@@ -1,5 +1,6 @@
 package com.jarvis.assistant.service
 
+import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 
@@ -21,6 +22,7 @@ class JarvisTileService : TileService() {
             ListeningServiceController.start(this)
         }
         updateTile()
+        JarvisWidgetProvider.updateAll(this)
     }
 
     private fun updateTile() {
@@ -28,6 +30,9 @@ class JarvisTileService : TileService() {
         val running = JarvisListeningService.isRunning
         tile.state = if (running) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
         tile.label = getString(com.jarvis.assistant.R.string.tile_label)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            tile.subtitle = if (running) "Active · Listening" else "Tap to listen"
+        }
         tile.updateTile()
     }
 }
