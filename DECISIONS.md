@@ -451,3 +451,20 @@
   - Upon signing in via Google (`signInWithGoogle`), Jarvis automatically reads and restores the user's prior chat conversations and messages, seamlessly updating the active transcript.
   - Upgraded `MemoryExport` (format v3) and `MasterJarvisBackup` to include `conversations` and `messages`.
 
+## 2026-11-02 — Phase 2: Advanced Visual Intelligence & Autonomous Phone Operation
+
+- **Hybrid Visual + Accessibility Intelligence (`VisualIntelligence.kt`):**
+  - Combines structural `AccessibilityNodeInfo` hierarchy with downsampled visual screen bitmap evidence (`VisualEvidence`).
+  - Strict privacy enforcement: Android `FLAG_SECURE` screens (banking, PIN, password fields) render as pure black in screenshots. `VisualAccessibilityReconciler` detects blackouts (>98% pure black pixels) and immediately halts automation with `SECURE_SCREEN_BLOCKED` rather than guessing coordinates.
+  - Detects modal dialog scrims (luminance dimming) and keyboard occlusions, prioritizing dismissal before interaction.
+- **Autonomous Phone Operator & Multi-Step Planner (`AutonomousPhoneOperator.kt`):**
+  - Discarded blind coordinate execution scripts in favor of typed multi-step execution plans (`AutonomousExecutionPlan`).
+  - Each step specifies `StepPrecondition`, `targetQuery`, `actionType`, `payloadText`, `StepPostcondition`, `timeoutMs`, `maxRetries`, and `isConsequential`.
+  - Implemented typed 10-step execution for YouTube: Launch -> Verify Foreground -> Locate Search -> Activate Input -> Type Query -> Submit -> Wait for Results -> Identify First Video -> Tap Video -> Verify Playback via Level 4 AudioManager / UI pause transition.
+  - **Dynamic Screen Reasoner & Stale Coordinate Rejection**: Screen versions increment on node/tree delta. Coordinates tagged with older screen versions (`ValidatedCoordinate.isStale`) are rejected, guaranteeing coordinates are never reused after screen transitions.
+  - **Human Takeover System (`HumanTakeoverManager`)**: Intercepts physical screen touches (`AccessibilityEvent.TYPE_TOUCH_INTERACTION_START`), pauses active plans, cancels running gestures, and dispatches user notifications.
+  - **Task State Persistence & Safe Resumption (`TaskResumptionEngine`)**: In-flight plans persist to `active_task_state.json`. When resumed, current screen state is reconciled against pending steps, ensuring completed and consequential steps are never repeated.
+- **Modular Smart App Adapters (`SmartAppAdapters.kt`):**
+  - Created modular adapters for WhatsApp, YouTube, Instagram, Chrome, Gmail, Google Maps, Spotify, Settings, Phone, Contacts, and Messages.
+  - Encapsulates package identifiers, workflows, known selectors, dynamic fallbacks, screen state recognition (e.g. `CHAT_CONVERSATION`, `VIDEO_PLAYER_ACTIVE`, `INBOX`), and platform restrictions.
+

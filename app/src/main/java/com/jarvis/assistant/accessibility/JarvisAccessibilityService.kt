@@ -98,6 +98,10 @@ class JarvisAccessibilityService : AccessibilityService() {
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
                 lastScrollSeq = seq
             }
+
+            AccessibilityEvent.TYPE_TOUCH_INTERACTION_START -> {
+                HumanTakeoverManager.onUserManualTouch()
+            }
         }
     }
 

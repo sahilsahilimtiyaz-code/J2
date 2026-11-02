@@ -328,3 +328,21 @@
   - Upgraded `MemoryExport` (format v3) and `MasterJarvisBackup` with `conversations` and `messages`.
 - [x] **Verification:** `gradle testDebugUnitTest assembleDebug` green (68 unit tests passing, 0 failures/errors), `compile_applet` passed.
 
+## 2026-11-02 — Phase 2: Advanced Visual Intelligence & Autonomous Phone Operation
+
+- [x] **Hybrid Visual + Accessibility Intelligence Engine (`VisualIntelligence.kt`):**
+  - Synthesizes structural `AccessibilityNodeInfo` hierarchy with downsampled visual screen bitmap evidence (`VisualEvidence`).
+  - Detects `FLAG_SECURE` blacked-out screens and strictly halts automation to protect user security.
+  - Detects modal dialog scrims and loading states.
+  - Implemented `VisualAccessibilityReconciler`: reconciles structural and visual evidence; enriches missing accessibility labels from visual text regions, and prevents blind tapping when evidence diverges.
+- [x] **Autonomous Phone Operator & Intelligent Task Planner (`AutonomousPhoneOperator.kt`):**
+  - Generates verified, multi-step execution plans (`AutonomousExecutionPlan`) with typed preconditions (`StepPrecondition`), postconditions (`StepPostcondition`), timeouts, retry policies, and consequential action flags.
+  - Dedicated multi-step plan synthesis for YouTube (10-step sequence: launch -> foreground check -> search -> activate -> type -> submit -> wait -> identify -> play -> verify playback), WhatsApp, and Settings.
+  - **Dynamic Screen Reasoner & Stale Coordinate Rejection**: Tracks screen state versions (`screenVersion: Long`) and rejects stale coordinates tagged under older screen versions (`ValidatedCoordinate.isStale`).
+  - **Human Takeover System**: Intercepts user manual touches (`TYPE_TOUCH_INTERACTION_START` in `JarvisAccessibilityService`), cancels synthetic gestures, pauses active plans, and provides `pause()`, `resume()`, and `stop()` controls.
+  - **Task State Persistence & Resumption (`TaskResumptionEngine`)**: Persists in-flight tasks (`active_task_state.json`) and reconciles screen state before resuming without repeating completed or consequential operations.
+- [x] **Smart App Adapters (`SmartAppAdapters.kt`):**
+  - Built modular adapters for all 11 core applications: WhatsApp, YouTube, Instagram, Chrome, Gmail, Google Maps, Spotify, Settings, Phone, Contacts, and Messages.
+  - Outlines supported workflows, launch intents, known view selectors, dynamic selector fallbacks, screen-state recognition, and known restrictions.
+- [x] **Verification:** `gradle testDebugUnitTest` green across all 79 unit tests (including all 11 `VisualIntelligenceAndAutonomousPlanTest` tests), `assembleDebug` green (46 MB APK), and `compile_applet` passed.
+
