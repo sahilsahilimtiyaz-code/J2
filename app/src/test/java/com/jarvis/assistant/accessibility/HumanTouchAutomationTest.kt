@@ -185,4 +185,166 @@ class HumanTouchAutomationTest {
         assertNotNull(wa)
         assertEquals("WhatsApp", wa!!.canonicalName)
     }
+
+    private fun sampleFingerprint(
+        packageName: String = "com.google.android.youtube",
+        nodeCount: Int = 20,
+        treeSignatureHash: Int = 12345,
+        checkedStatesHash: Int = 0,
+        editableTexts: List<String> = emptyList(),
+        isAudioPlaying: Boolean = false,
+        telemetry: AccessibilityEventTelemetry = AccessibilityEventTelemetry(
+            sequence = 1,
+            lastClickSeq = 0,
+            lastWindowChangeSeq = 0,
+            lastContentChangeSeq = 0,
+            lastScrollSeq = 0,
+            lastPackageName = packageName,
+        ),
+    ): UiStateFingerprint = UiStateFingerprint(
+        packageName = packageName,
+        nodeCount = nodeCount,
+        treeSignatureHash = treeSignatureHash,
+        checkedStatesHash = checkedStatesHash,
+        editableTexts = editableTexts,
+        isAudioPlaying = isAudioPlaying,
+        telemetry = telemetry,
+    )
+
+    @Test
+    fun testSuccessfulGestureWithoutUiOrAppChangeIsUnknownNotSuccess() {
+        val fp1 = sampleFingerprint()
+        val fp2 = sampleFingerprint() // identical: no UI delta
+        val report = JarvisActionVerifier.verifyTouchOrAction(
+            interactionType = HumanInteractionType.SINGLE_TAP,
+            dispatched = true,
+            before = fp1,
+            after = fp2,
+            expectedPackage = "com.google.android.youtube",
+        )
+        // Zero fake success: gesture passed L1 dispatch, but L2 and L3 saw zero change
+        assertEquals(VerificationStatus.UNVERIFIED_UNKNOWN, report.status)
+        assertTrue(report.level1InteractionPassed)
+        assertFalse(report.level2UiDeltaPassed)
+    }
+
+    @Test
+    fun testFailedGestureDispatchProducesFailedStatus() {
+        val fp1 = sampleFingerprint()
+        val fp2 = sampleFingerprint()
+        val report = JarvisActionVerifier.verifyTouchOrAction(
+            interactionType = HumanInteractionType.SINGLE_TAP,
+            dispatched = false,
+            before = fp1,
+            after = fp2,
+        )
+        assertEquals(VerificationStatus.FAILED, report.status)
+        assertFalse(report.level1InteractionPassed)
+    }
+
+    @Test
+    fun testLevel4SystemApiVerificationOverridesUiDelta() {
+        val fp1 = sampleFingerprint()
+        val fp2 = sampleFingerprint() // no UI change
+        val report = JarvisActionVerifier.verifyTouchOrAction(
+            interactionType = HumanInteractionType.SINGLE_TAP,
+            dispatched = true,
+            before = fp1,
+            after = fp2,
+            systemApiCheck = { true }, // e.g. AudioManager.isMusicActive or BluetoothManager.isEnabled
+        )
+        assertEquals(VerificationStatus.VERIFIED_SUCCESS, report.status)
+        assertEquals(VerificationLevel.LEVEL_4_SYSTEM_API, report.highestLevelPassed)
+        assertTrue(report.level4SystemApiPassed == true)
+    }
+
+    @Test
+    fun testRecoveryDiagnosesKeyboardOcclusion() {
+        val screen = sampleScreen(
+            elements = emptyList(),
+            keyboardVisible = true,
+            keyboardTopY = 1200,
+        )
+        val report = ActionVerificationReport(
+            status = VerificationStatus.UNVERIFIED_UNKNOWN,
+            highestLevelPassed = VerificationLevel.LEVEL_1_INTERACTION,
+            level1InteractionPassed = true,
+            level2UiDeltaPassed = false,
+            level3AppStatePassed = false,
+            evidenceSummary = "No delta",
+        )
+        val decision = JarvisRecoveryManager.diagnoseAndPlanRecovery(
+            targetLabel = "Submit",
+            attemptNumber = 1,
+            maxAttempts = 3,
+            screenBefore = screen,
+            screenAfter = screen,
+            lastReport = report,
+        )
+        assertEquals(RecoveryActionType.HIDE_KEYBOARD, decision.action)
+    }
+
+    @Test
+    fun testRecoveryDiagnosesBlockingDialog() {
+        val dismissBtn = sampleElement(index = 99, text = "Not Now", clickable = true)
+        val screen = sampleScreen(
+            elements = listOf(dismissBtn),
+            dialogTitle = "Google Play Services Update",
+            dismissCandidate = dismissBtn,
+        )
+        val report = ActionVerificationReport(
+            status = VerificationStatus.UNVERIFIED_UNKNOWN,
+            highestLevelPassed = VerificationLevel.LEVEL_1_INTERACTION,
+            level1InteractionPassed = true,
+            level2UiDeltaPassed = false,
+            level3AppStatePassed = false,
+            evidenceSummary = "Blocked by modal",
+        )
+        val decision = JarvisRecoveryManager.diagnoseAndPlanRecovery(
+            targetLabel = "Search YouTube",
+            attemptNumber = 1,
+            maxAttempts = 3,
+            screenBefore = screen,
+            screenAfter = screen,
+            lastReport = report,
+        )
+        assertEquals(RecoveryActionType.DISMISS_BLOCKING_DIALOG, decision.action)
+    }
+
+    @Test
+    fun testMissingUiElementReturnsNullMatch() {
+        val screen = sampleScreen(elements = emptyList())
+        val res = JarvisUiElementMatcher.resolve(
+            screen = screen,
+            query = ElementMatchQuery(rawTarget = "Transfer Funds"),
+        )
+        assertEquals(null, res.best)
+    }
+
+    @Test
+    fun testHighConsequenceAmbiguityTriggersUserPrompt() {
+        val btn1 = sampleElement(
+            index = 1,
+            text = "Delete Chat",
+            boundsLeft = 100,
+            boundsTop = 200,
+            boundsRight = 400,
+            boundsBottom = 260,
+        )
+        val btn2 = sampleElement(
+            index = 2,
+            text = "Delete Account",
+            boundsLeft = 100,
+            boundsTop = 400,
+            boundsRight = 400,
+            boundsBottom = 460,
+        )
+        val screen = sampleScreen(elements = listOf(btn1, btn2))
+        val res = JarvisUiElementMatcher.resolve(
+            screen = screen,
+            query = ElementMatchQuery(rawTarget = "delete"),
+        )
+        assertTrue(res.ambiguityDetected)
+        assertNotNull(res.ambiguityMessage)
+    }
 }

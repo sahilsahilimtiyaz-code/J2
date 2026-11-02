@@ -684,15 +684,15 @@ object JarvisActionVerifier {
         val uiChanged = uiOutcome.verified
 
         // Level 3: Application Post-Condition check
-        val pkgMatched = !expectedPackage.isNullOrBlank() &&
+        val pkgTransitioned = !expectedPackage.isNullOrBlank() &&
+            !before.packageName.equals(expectedPackage, ignoreCase = true) &&
             after.packageName.equals(expectedPackage, ignoreCase = true)
         val textMatched = !expectedTextInEditable.isNullOrBlank() &&
             after.editableTexts.any { it.lowercase(Locale.ROOT).contains(expectedTextInEditable.trim().lowercase(Locale.ROOT)) }
         val toggleMatched = expectedToggleState != null && actualToggleStateAfter == expectedToggleState
         val dialogDismissed = dialogWasPresentBefore && !dialogPresentAfter
 
-        val level3Passed = pkgMatched || textMatched || toggleMatched || dialogDismissed ||
-            (expectedPackage == null && expectedTextInEditable == null && expectedToggleState == null && !dialogWasPresentBefore && uiChanged)
+        val level3Passed = pkgTransitioned || textMatched || toggleMatched || dialogDismissed
 
         // Level 4: External / System API check
         val level4Passed = systemApiCheck?.let { runCatching { it() }.getOrNull() }

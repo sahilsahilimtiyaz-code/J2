@@ -259,7 +259,7 @@ class JarvisAccessibilityService : AccessibilityService() {
 
     /**
      * Dispatches a continuous drag and drop gesture from ([startX], [startY]) to ([endX], [endY])
-     * maintaining contact over [durationMs] ms (default 480ms).
+     * holding at the origin to pick up before moving to the destination.
      */
     suspend fun dispatchDragGesture(
         startX: Float,
@@ -268,7 +268,41 @@ class JarvisAccessibilityService : AccessibilityService() {
         endY: Float,
         durationMs: Long = 480L,
     ): Boolean {
-        return dispatchSwipeGesture(startX, startY, endX, endY, durationMs = durationMs)
+        if (startX <= 0f || startY <= 0f || endX <= 0f || endY <= 0f) return false
+        return suspendCancellableCoroutine { cont ->
+            val completed = runCatching {
+                val holdPath = Path().apply {
+                    moveTo(startX, startY)
+                    lineTo(startX + 1f, startY)
+                }
+                val stroke1 = GestureDescription.StrokeDescription(holdPath, 0L, 350L, true)
+                val movePath = Path().apply {
+                    moveTo(startX + 1f, startY)
+                    lineTo(endX, endY)
+                }
+                val stroke2 = stroke1.continueStroke(movePath, 0L, durationMs.coerceAtLeast(200L), false)
+                val gesture = GestureDescription.Builder()
+                    .addStroke(stroke1)
+                    .addStroke(stroke2)
+                    .build()
+                dispatchGesture(
+                    gesture,
+                    object : GestureResultCallback() {
+                        override fun onCompleted(gestureDescription: GestureDescription?) {
+                            if (cont.isActive) cont.resume(true)
+                        }
+
+                        override fun onCancelled(gestureDescription: GestureDescription?) {
+                            if (cont.isActive) cont.resume(false)
+                        }
+                    },
+                    null,
+                )
+            }.getOrDefault(false)
+            if (!completed && cont.isActive) {
+                cont.resume(false)
+            }
+        }
     }
 
     /**
