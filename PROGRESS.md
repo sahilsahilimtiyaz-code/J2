@@ -282,4 +282,19 @@
   - Set `versionCode = 100 + GITHUB_RUN_NUMBER` in `app/build.gradle.kts` and `android:allowBackup="true"` in `AndroidManifest.xml` so every new GitHub Actions build installs cleanly over existing installations without deleting the app or losing data.
 - [x] **Dark-Navy Framed Arc Reactor Launcher & System Icons (`mipmap-*`, `drawable-nodpi/*`, `drawable/ic_jarvis.xml`, `values/ic_launcher_background.xml`):**
   - Framed the uploaded circular triangular Arc Reactor emblem inside a dark navy (`#061116`) icon frame across all 5 `mipmap-{mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}` launcher and round icon densities, adaptive icon foreground (`ic_app_logo_foreground.png`), in-app emblem (`ic_app_logo.png`), and vector icon (`ic_jarvis.xml`).
-- [x] **Verification:** `gradle testDebugUnitTest assembleDebug` green (57 unit tests passing, 0 failures/errors).
+- [x] **Offline Local AI Model Downloader & On-Device Execution Engine (`LocalAiModels.kt`, `LlmModels.kt`, `ProviderRegistry.kt`, `JarvisCore.kt`, `SettingsScreen.kt`, `HomeScreen.kt`):**
+  - Added full offline support (`ProviderKind.LOCAL_ON_DEVICE`) requiring **zero API keys**, with resumable HTTP `Range` downloads from Hugging Face, binary `GGUF` header verification (`0x46554747`), live progress bar (`MB / MB`), download speed (`MB/s`), Pause/Resume, Delete, and one-tap **Use Offline** activation across all 6 requested lightweight models:
+    1. **LFM2.5 350M** (`250–350 MB` — *Extremely lightweight chat*)
+    2. **Qwen2.5 0.5B Instruct** (`400 MB` — *Basic assistant*)
+    3. **Gemma 3 1B** (`700 MB` — *General conversation*)
+    4. **LFM2.5 1.2B Instruct** (`731 MB` — *General-purpose local AI*)
+    5. **SmolLM2 1.7B** (`990 MB` — *Lightweight chat and writing*)
+    6. **Qwen3 1.7B** (`1.28 GB` — *Stronger*)
+  - Implemented `OfflineTaskRouter` + `LocalLlmProvider` so downloaded local models execute all phone tasks offline (WhatsApp text & voice notes, YouTube search/playback, opening apps, calls, SMS, alarms, timers, reminders, flashlight, volume, ringer, brightness, DND, media control, camera, screenshots, notifications, device status, diagnostics, storage analysis, navigation, memory, and screen control) and automatically act as a fallback when offline or when no API key is configured.
+- [x] **WhatsApp Voice-Note Continuous Mic-Hold, Audio Focus Preservation & Send Button Fix (`WhatsAppVoiceNoteAgent.kt`, `VoiceNoteAudio.kt`, `JarvisAccessibilityService.kt`, `AppAutomation.kt`):**
+  - Made continuous push-to-talk mic hold (`holdMicAndPlay` via `JarvisAccessibilityService.dispatchHoldGesture`) the primary recording strategy: presses and holds the WhatsApp microphone button starting `600 ms` before audio playback, keeps holding continuously with steady `ACTION_MOVE` touch events for the entire duration of the voice recording, and holds for `1,300 ms` after playback finishes before lifting.
+  - Prevented `VoiceNotePlayer.play` from requesting `AUDIOFOCUS_GAIN_TRANSIENT` during WhatsApp voice recording (`requestFocus = false`), eliminating the Android 14 `AUDIOFOCUS_LOSS_TRANSIENT` interruption that previously caused WhatsApp to pause/stop recording mid-sentence.
+  - Prioritized direct `https://wa.me/<digits>` chat opening whenever a contact's phone number is resolved from Android Contacts (`isNumber == true`), and reordered `AppAutomation.openWhatsAppChatByName` to try the top Search bar before scrolling so Jarvis never scrolls the main screen unnecessarily.
+  - Upgraded `pressVoiceNoteSendButton` and `findRecordingSendSpot` to match all WhatsApp voice-note Send button view IDs (`send`, `voice_note_draft_send`, `voice_recorder_send_btn`, `send_voice_note_btn`, `voice_note_send_btn`, `send_btn`, `send_container`), click ancestor containers (`tapSpotOrAncestor`), and fall back to a physical coordinate tap directly at the bottom-right `(mic.centerX(), mic.centerY())` position where WhatsApp's green Send button sits.
+- [x] **Verification:** `gradle testDebugUnitTest assembleDebug` green (62 unit tests passing, 0 failures/errors).
+

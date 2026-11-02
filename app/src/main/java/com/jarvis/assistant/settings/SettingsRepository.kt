@@ -271,8 +271,8 @@ class SettingsRepository(
             }
         }
 
-        val baseProviders = if (vault.getMetadata(SLOT_GLOBAL_FREE_PROVIDERS_SEEDED) != "v2") {
-            vault.putMetadata(SLOT_GLOBAL_FREE_PROVIDERS_SEEDED, "v2")
+        val baseProviders = if (vault.getMetadata(SLOT_GLOBAL_FREE_PROVIDERS_SEEDED) != "v3") {
+            vault.putMetadata(SLOT_GLOBAL_FREE_PROVIDERS_SEEDED, "v3")
             val existingIds = base.providers.map { it.id.lowercase() }.toSet()
             val existingHosts = base.providers.map { it.baseUrl.lowercase() }.toSet()
             val additions = defaultProviderSettings().filter { def ->

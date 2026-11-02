@@ -29,7 +29,8 @@ data class ProviderSettings(
     val enabled: Boolean = true,
 ) {
     val requiresApiKey: Boolean
-        get() = !baseUrl.contains("127.0.0.1") &&
+        get() = kind != ProviderKind.LOCAL_ON_DEVICE &&
+            !baseUrl.contains("127.0.0.1") &&
             !baseUrl.contains("localhost", ignoreCase = true) &&
             !baseUrl.contains("pollinations.ai", ignoreCase = true)
 
@@ -168,6 +169,12 @@ data class AuthSession(
 }
 
 @Serializable
+data class LocalAiSettings(
+    val activeModelId: String = "lfm2_5_350m",
+    val autoFallbackWhenOffline: Boolean = true,
+)
+
+@Serializable
 data class AppSettings(
     val profile: OwnerProfile = OwnerProfile(),
     val providers: List<ProviderSettings> = defaultProviderSettings(),
@@ -177,6 +184,7 @@ data class AppSettings(
     val safety: SafetySettings = SafetySettings(),
     val health: HealthSettings = HealthSettings(),
     val auth: AuthSession = AuthSession(),
+    val localAi: LocalAiSettings = LocalAiSettings(),
 ) {
     val defaultProvider: ProviderSettings?
         get() = providers.firstOrNull { it.id == defaultProviderId }
@@ -212,6 +220,13 @@ val DEFAULT_BLOCKLIST: List<String> = listOf(
 )
 
 fun defaultProviderSettings(): List<ProviderSettings> = listOf(
+    ProviderSettings(
+        id = "local_ai",
+        name = "Offline Local AI",
+        kind = ProviderKind.LOCAL_ON_DEVICE,
+        baseUrl = ProviderKind.LOCAL_ON_DEVICE.defaultBaseUrl,
+        model = "lfm2_5_350m",
+    ),
     ProviderSettings(
         id = "openrouter",
         name = "OpenRouter",

@@ -152,6 +152,48 @@ class JarvisAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * Dispatches a continuous press-and-hold touch gesture at ([x], [y]) for [durationMs].
+     * Uses a 1px micro-path (`moveTo(x, y); lineTo(x + 1f, y)`) so Android's GestureManifold
+     * emits `ACTION_DOWN` followed by steady `ACTION_MOVE` touch events for the entire duration
+     * and only emits `ACTION_UP` once [durationMs] has elapsed. Essential for holding WhatsApp's
+     * push-to-talk microphone button until the full voice recording finishes.
+     */
+    suspend fun dispatchHoldGesture(
+        x: Float,
+        y: Float,
+        durationMs: Long,
+    ): Boolean {
+        if (x <= 0f || y <= 0f) return false
+        val safeDuration = durationMs.coerceIn(500L, 59_000L)
+        return suspendCancellableCoroutine { cont ->
+            val completed = runCatching {
+                val path = Path().apply {
+                    moveTo(x, y)
+                    lineTo(x + 1f, y)
+                }
+                val stroke = GestureDescription.StrokeDescription(path, 0L, safeDuration)
+                val gesture = GestureDescription.Builder().addStroke(stroke).build()
+                dispatchGesture(
+                    gesture,
+                    object : GestureResultCallback() {
+                        override fun onCompleted(gestureDescription: GestureDescription?) {
+                            if (cont.isActive) cont.resume(true)
+                        }
+
+                        override fun onCancelled(gestureDescription: GestureDescription?) {
+                            if (cont.isActive) cont.resume(false)
+                        }
+                    },
+                    null,
+                )
+            }.getOrDefault(false)
+            if (!completed && cont.isActive) {
+                cont.resume(false)
+            }
+        }
+    }
+
+    /**
      * Dispatches a physical touch swipe gesture across screen coordinates from ([startX], [startY])
      * to ([endX], [endY]). Injected directly into the window manager, this works reliably across
      * all applications (Compose LazyColumn, YouTube feeds, Flutter, WebViews, games, settings)

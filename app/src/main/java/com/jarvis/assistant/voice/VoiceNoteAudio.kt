@@ -247,7 +247,11 @@ class VoiceNotePlayer(context: Context) {
     }
 
     /** Plays [file] and suspends until it finishes. Returns false on any failure. */
-    suspend fun play(file: File, expectedDurationMs: Long): Boolean = withContext(Dispatchers.IO) {
+    suspend fun play(
+        file: File,
+        expectedDurationMs: Long,
+        requestFocus: Boolean = false,
+    ): Boolean = withContext(Dispatchers.IO) {
         stop()
         lastError = null
         if (!file.exists() || file.length() <= PcmWav.HEADER_BYTES) {
@@ -273,7 +277,12 @@ class VoiceNotePlayer(context: Context) {
                 true
             }
             player = media
-            requestAudioFocus()
+            // IMPORTANT: Do not request audio focus by default while WhatsApp is recording!
+            // On Android 14+, requesting AUDIOFOCUS_GAIN_TRANSIENT sends AUDIOFOCUS_LOSS_TRANSIENT
+            // to WhatsApp, which causes WhatsApp to immediately stop/pause its voice note recording.
+            if (requestFocus) {
+                requestAudioFocus()
+            }
             media.start()
             true
         }.getOrElse { error ->

@@ -51,8 +51,11 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -82,6 +85,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.jarvis.assistant.brain.LocalDownloadState
+import com.jarvis.assistant.brain.LocalModelCatalog
+import com.jarvis.assistant.brain.LocalModelDownloadStatus
+import com.jarvis.assistant.brain.ProviderKind
 import com.jarvis.assistant.tools.DeviceStatus
 import com.jarvis.assistant.tools.readDeviceStatus
 import com.jarvis.assistant.ui.components.ActionTile
@@ -141,6 +148,10 @@ fun HomeScreen(
     onFetchModels: () -> Unit,
     onSetFreeModelsOnly: (Boolean) -> Unit,
     onSelectQuickModel: (String, String) -> Unit,
+    onDownloadLocalModel: (String) -> Unit = {},
+    onPauseLocalModel: (String) -> Unit = {},
+    onDeleteLocalModel: (String) -> Unit = {},
+    onSelectLocalModel: (String) -> Unit = {},
     onCancelPlan: () -> Unit = {},
     onDismissPlan: () -> Unit = {},
     onRetryFailedPlanSteps: () -> Unit = {},
@@ -180,6 +191,13 @@ fun HomeScreen(
             onSetFreeModelsOnly = onSetFreeModelsOnly,
             onSelectModel = { providerId, modelId ->
                 onSelectQuickModel(providerId, modelId)
+                showModelModal = false
+            },
+            onDownloadLocalModel = onDownloadLocalModel,
+            onPauseLocalModel = onPauseLocalModel,
+            onDeleteLocalModel = onDeleteLocalModel,
+            onSelectLocalModel = { modelId ->
+                onSelectLocalModel(modelId)
                 showModelModal = false
             },
             onOpenProviderSettings = {
@@ -1759,18 +1777,27 @@ private fun ModelPickerModal(
     onFetchModels: () -> Unit,
     onSetFreeModelsOnly: (Boolean) -> Unit,
     onSelectModel: (String, String) -> Unit,
+    onDownloadLocalModel: (String) -> Unit,
+    onPauseLocalModel: (String) -> Unit,
+    onDeleteLocalModel: (String) -> Unit,
+    onSelectLocalModel: (String) -> Unit,
     onOpenProviderSettings: () -> Unit,
 ) {
     var selectedProviderFilter by remember { mutableStateOf("All") }
     val providerFilters = remember(state.discoveredModels) {
-        listOf("All") + state.discoveredModels.map { it.providerLabel }.distinct()
+        (listOf("All", "Offline Local AI") + state.discoveredModels.map { it.providerLabel }).distinct()
     }
     val filteredModels = remember(state.discoveredModels, state.freeModelsOnly, selectedProviderFilter) {
         state.discoveredModels.filter { model ->
-            (!state.freeModelsOnly || model.isFree) &&
+            model.providerLabel != "Offline Local AI" &&
+                (!state.freeModelsOnly || model.isFree) &&
                 (selectedProviderFilter == "All" || model.providerLabel.equals(selectedProviderFilter, ignoreCase = true))
         }
     }
+    val showOfflineModels = selectedProviderFilter == "All" ||
+        selectedProviderFilter.equals("Offline Local AI", ignoreCase = true)
+    val activeLocalId = state.settings.localAi.activeModelId
+    val isLocalProviderDefault = state.settings.defaultProvider?.kind == ProviderKind.LOCAL_ON_DEVICE
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1781,14 +1808,14 @@ private fun ModelPickerModal(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 HudIcon(glyph = HudGlyph.ROCKET, color = JarvisPalette.CyanBright, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Select Global AI Model", style = MaterialTheme.typography.titleMedium)
+                Text("Select AI Model (Offline & Cloud)", style = MaterialTheme.typography.titleMedium)
             }
         },
         text = {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 460.dp),
+                    .heightIn(max = 480.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Row(
@@ -1797,12 +1824,12 @@ private fun ModelPickerModal(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Free models only (${filteredModels.size})",
+                            text = "Free & Offline models (${LocalModelCatalog.models.size + filteredModels.size})",
                             style = MaterialTheme.typography.bodyMedium,
                             color = JarvisPalette.Ice,
                         )
                         Text(
-                            text = "Z.ai, NVIDIA NIM, OpenCode Zen, Agnes AI, Gemini, OpenRouter, Groq, Cerebras & more",
+                            text = "Download Offline Local AI (no API key) or use Cloud providers",
                             style = MaterialTheme.typography.labelSmall,
                             color = JarvisPalette.TextDim,
                         )
@@ -1872,6 +1899,145 @@ private fun ModelPickerModal(
                         .fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
+                    if (showOfflineModels) {
+                        item(key = "offline_header") {
+                            Text(
+                                text = "OFFLINE LOCAL AI MODELS (NO API KEY NEEDED)",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = JarvisPalette.CyanBright,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                        items(LocalModelCatalog.models, key = { "local_${it.id}" }) { spec ->
+                            val status = state.localModels[spec.id]
+                                ?: LocalModelDownloadStatus(
+                                    modelId = spec.id,
+                                    state = LocalDownloadState.NOT_DOWNLOADED,
+                                    downloadedBytes = 0L,
+                                    totalBytes = spec.approxBytes,
+                                )
+                            val isSelected = isLocalProviderDefault && activeLocalId == spec.id
+                            GlassPanel(
+                                modifier = Modifier.fillMaxWidth(),
+                                corner = 14.dp,
+                                accent = when {
+                                    isSelected && status.state == LocalDownloadState.READY -> JarvisPalette.Success
+                                    status.state == LocalDownloadState.READY -> JarvisPalette.CyanBright
+                                    status.state == LocalDownloadState.DOWNLOADING -> JarvisPalette.Amber
+                                    else -> JarvisPalette.Cyan
+                                },
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                            ) {
+                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "${spec.displayName} (${spec.approxDownloadSizeLabel})",
+                                                style = MaterialTheme.typography.titleSmall,
+                                                color = JarvisPalette.Ice,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            Text(
+                                                text = "Best use: ${spec.bestUse}",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = JarvisPalette.TextDim,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
+                                        HudPill(
+                                            text = when (status.state) {
+                                                LocalDownloadState.READY -> if (isSelected) "ACTIVE" else "READY"
+                                                LocalDownloadState.DOWNLOADING -> "${(status.progress * 100f).toInt()}%"
+                                                LocalDownloadState.PAUSED -> "PAUSED"
+                                                LocalDownloadState.FAILED -> "RETRY"
+                                                LocalDownloadState.NOT_DOWNLOADED -> "OFFLINE"
+                                            },
+                                            color = if (status.state == LocalDownloadState.READY) JarvisPalette.Success else JarvisPalette.CyanBright,
+                                            filled = status.state == LocalDownloadState.READY && isSelected,
+                                        )
+                                    }
+
+                                    if (status.state == LocalDownloadState.DOWNLOADING || status.state == LocalDownloadState.PAUSED) {
+                                        LinearProgressIndicator(
+                                            progress = { status.progress.coerceIn(0f, 1f) },
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(5.dp)
+                                                .clip(RoundedCornerShape(4.dp)),
+                                            color = JarvisPalette.CyanBright,
+                                            trackColor = JarvisPalette.Deep,
+                                        )
+                                    }
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    ) {
+                                        when (status.state) {
+                                            LocalDownloadState.NOT_DOWNLOADED, LocalDownloadState.FAILED -> {
+                                                Button(
+                                                    onClick = { onDownloadLocalModel(spec.id) },
+                                                    modifier = Modifier.weight(1f),
+                                                    shape = RoundedCornerShape(10.dp),
+                                                ) {
+                                                    Text("Download (${spec.approxDownloadSizeLabel})")
+                                                }
+                                            }
+                                            LocalDownloadState.DOWNLOADING -> {
+                                                OutlinedButton(
+                                                    onClick = { onPauseLocalModel(spec.id) },
+                                                    modifier = Modifier.weight(1f),
+                                                    shape = RoundedCornerShape(10.dp),
+                                                ) {
+                                                    Text("Pause")
+                                                }
+                                                OutlinedButton(
+                                                    onClick = { onDeleteLocalModel(spec.id) },
+                                                    shape = RoundedCornerShape(10.dp),
+                                                ) {
+                                                    Text("Cancel")
+                                                }
+                                            }
+                                            LocalDownloadState.PAUSED -> {
+                                                Button(
+                                                    onClick = { onDownloadLocalModel(spec.id) },
+                                                    modifier = Modifier.weight(1f),
+                                                    shape = RoundedCornerShape(10.dp),
+                                                ) {
+                                                    Text("Resume")
+                                                }
+                                                OutlinedButton(
+                                                    onClick = { onDeleteLocalModel(spec.id) },
+                                                    shape = RoundedCornerShape(10.dp),
+                                                ) {
+                                                    Text("Delete")
+                                                }
+                                            }
+                                            LocalDownloadState.READY -> {
+                                                Button(
+                                                    onClick = { onSelectLocalModel(spec.id) },
+                                                    enabled = !isSelected,
+                                                    modifier = Modifier.weight(1f),
+                                                    shape = RoundedCornerShape(10.dp),
+                                                ) {
+                                                    Text(if (isSelected) "Active Offline" else "Use Offline")
+                                                }
+                                                OutlinedButton(
+                                                    onClick = { onDeleteLocalModel(spec.id) },
+                                                    shape = RoundedCornerShape(10.dp),
+                                                ) {
+                                                    Text("Delete")
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     items(filteredModels, key = { "${it.providerLabel}_${it.id}" }) { model ->
                         GlassPanel(
                             modifier = Modifier
@@ -1915,7 +2081,7 @@ private fun ModelPickerModal(
         },
         confirmButton = {
             TextButton(onClick = onOpenProviderSettings) {
-                Text("Manage API Keys", color = JarvisPalette.CyanBright)
+                Text("Offline & API Settings", color = JarvisPalette.CyanBright)
             }
         },
         dismissButton = {

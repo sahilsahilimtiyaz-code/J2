@@ -37,6 +37,17 @@ data class ProviderPreset(
 
 val providerPresets: List<ProviderPreset> = listOf(
     ProviderPreset(
+        id = "local_ai",
+        label = "Offline Local AI (No Key)",
+        kind = ProviderKind.LOCAL_ON_DEVICE,
+        name = "Offline Local AI",
+        baseUrl = "http://127.0.0.1:8080/v1",
+        model = "lfm2_5_350m",
+        note = "100% offline on-device execution without API keys: LFM2.5 350M, Qwen2.5 0.5B, Gemma 3 1B, LFM2.5 1.2B, SmolLM2 1.7B & Qwen3 1.7B.",
+        isCompletelyFree = true,
+        apiKeyPortal = "No API key needed (Download in Settings → AI Model)",
+    ),
+    ProviderPreset(
         id = "zai",
         label = "Z.ai (100% Free GLM)",
         kind = ProviderKind.OPENAI_COMPATIBLE,

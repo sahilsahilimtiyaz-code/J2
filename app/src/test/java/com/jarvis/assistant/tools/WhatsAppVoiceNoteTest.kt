@@ -244,4 +244,21 @@ class WhatsAppVoiceNoteTest {
         assertTrue(WhatsAppVoiceNotes.isSearchBarNode("", "com.whatsapp:id/menuitem_search"))
         assertFalse(WhatsAppVoiceNotes.isSearchBarNode("Azhar", "com.whatsapp:id/conversations_row_contact_name"))
     }
+
+    @Test
+    fun `send node detector matches WhatsApp voice note send buttons and draft bar`() {
+        assertTrue(WhatsAppVoiceNotes.isSendNode("Send", ""))
+        assertTrue(WhatsAppVoiceNotes.isSendNode("Send voice message", ""))
+        assertTrue(WhatsAppVoiceNotes.isSendNode("Send voice note", ""))
+        assertTrue(WhatsAppVoiceNotes.isSendNode("", "com.whatsapp:id/voice_note_draft_send"))
+        assertTrue(WhatsAppVoiceNotes.isSendNode("", "com.whatsapp:id/voice_recorder_send_btn"))
+        assertTrue(WhatsAppVoiceNotes.isSendNode("", "com.whatsapp:id/send"))
+        assertFalse(WhatsAppVoiceNotes.isSendNode("Record voice message", "com.whatsapp:id/voice_note_btn"))
+        assertTrue(
+            WhatsAppVoiceNotes.looksLikeRecordingUi(
+                labels = listOf("voice_note_draft_send", "Delete", "0:06"),
+                composerPresent = false,
+            ),
+        )
+    }
 }

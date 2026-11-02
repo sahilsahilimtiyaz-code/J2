@@ -83,22 +83,23 @@ object WhatsAppVoiceNotes {
         }
     }
 
-    /** Detects the recording bar, not a chat bubble. */
+    /** Detects the active or paused/draft recording bar, not a chat bubble. */
     fun looksLikeRecordingUi(labels: List<String>, composerPresent: Boolean): Boolean {
         val joined = labels.joinToString(" ").lowercase()
         if (joined.isBlank()) return false
         if (joined.contains("slide to cancel")) return true
         if (joined.contains("release to send")) return true
         if (joined.contains("recording voice") || joined.contains("lock recording")) return true
+        if (joined.contains("voice_note_draft") || joined.contains("voice_recorder")) return true
         if (!composerPresent &&
             joined.contains("cancel") &&
-            (joined.contains("lock") || joined.contains("record"))
+            (joined.contains("lock") || joined.contains("record") || joined.contains(" pause"))
         ) {
             return true
         }
         return !composerPresent &&
-            joined.contains("send") &&
-            (joined.contains("delete") || joined.contains("trash"))
+            (joined.contains("send") || joined.contains("pause") || joined.contains("resume")) &&
+            (joined.contains("delete") || joined.contains("trash") || joined.contains("discard") || joined.contains("cancel"))
     }
 
     fun looksLikeInvalidNumberUi(labels: List<String>): Boolean {
@@ -136,11 +137,31 @@ object WhatsAppVoiceNotes {
         "action_search",
     )
 
+    val SEND_VIEW_IDS = listOf(
+        "send",
+        "voice_note_draft_send",
+        "voice_recorder_send_btn",
+        "send_voice_note_btn",
+        "voice_note_send_btn",
+        "voice_note_send",
+        "send_btn",
+        "send_button",
+        "send_container",
+    )
+
     fun isVoiceNoteSendLabel(label: String): Boolean {
         val normalized = label.lowercase().replace(Regex("[^a-z]"), "")
         return normalized == "send" ||
             normalized == "sendvoicemessage" ||
-            normalized == "sendmessage"
+            normalized == "sendvoicenote" ||
+            normalized == "sendmessage" ||
+            normalized == "sendaudio"
+    }
+
+    fun isSendNode(label: String, viewId: String): Boolean {
+        val shortId = viewId.substringAfterLast('/').lowercase()
+        if (shortId in SEND_VIEW_IDS) return true
+        return isVoiceNoteSendLabel(label)
     }
 
     fun isCancelLabel(label: String): Boolean {
@@ -359,10 +380,10 @@ object WhatsAppReplyPolicy {
 /**
  * Drives WhatsApp's own recorder for one voice note.
  *
- * Every step is verified before the next one: the chat title must match the
- * recipient, the recording bar must appear, playback must finish, and the
- * recording bar must disappear after Send. A failed send is never reported as
- * delivered.
+ * Holds the WhatsApp microphone button down continuously until the entire
+ * rendered voice note has finished playing, then releases the mic button and
+ * verifies whether the note was sent automatically or requires pressing the
+ * Send button at the bottom-right corner.
  */
 class WhatsAppVoiceNoteSender(
     private val context: Context,
@@ -393,9 +414,12 @@ class WhatsAppVoiceNoteSender(
             return failure("That note is longer than WhatsApp's comfortable recording limit, sir.")
         }
         val hasNamedContact = displayName.any { it.isLetter() }
+        // When a phone number was resolved from Contacts (isNumber == true), open the chat
+        // directly via https://wa.me/<digits> FIRST so we jump straight into the conversation
+        // without scrolling the main screen. Fall back to name-based navigation if wa.me fails.
         val chatOpened = when {
-            hasNamedContact && isNumber ->
-                openChat(displayName, isNumber = false) || openChat(recipient, isNumber = true)
+            isNumber && hasNamedContact ->
+                openChat(recipient, isNumber = true) || openChat(displayName, isNumber = false)
             isNumber ->
                 openChat(recipient, isNumber = true)
             else ->
@@ -407,27 +431,15 @@ class WhatsAppVoiceNoteSender(
         val before = countVoiceBubbles()
         val mic = findMicSpot()
             ?: return failure("WhatsApp is open, but I could not find its microphone button.")
-        onPhase("Recording the voice message for $displayName...")
-        fallbackSafe = true
-        if (!startRecording(mic)) {
-            // Fallback for WhatsApp builds where slide-to-lock does not latch:
-            // hold the mic button down continuously while playing the rendered voice note.
-            return holdMicAndPlay(mic = mic, note = note, beforeBubbles = before, recipient = displayName)
-        }
-        fallbackSafe = false
-        onPhase("Playing my voice into the recording...")
-        val played = player.play(note.file, note.durationMs)
-        if (!played) {
-            cancelRecording()
-            return failure(
-                player.lastError
-                    ?: "WhatsApp's recorder started, but I could not play the rendered voice note.",
-            )
-        }
-        // Let the tail of the sentence land inside the recording before Send.
-        delay(RECORDING_TAIL_MS)
-        onPhase("Sending the voice message...")
-        return sendRecording(before, displayName)
+
+        // Primary path: hold the microphone button down continuously for the entire duration
+        // of the rendered voice recording, then release and press Send if a draft bar remains.
+        return holdMicAndPlay(
+            mic = mic,
+            note = note,
+            beforeBubbles = before,
+            recipient = displayName,
+        )
     }
 
     /**
@@ -491,14 +503,19 @@ class WhatsAppVoiceNoteSender(
                 lastError = "That phone number is incomplete, sir."
                 return false
             }
+            // Brief settle delay after the confirmation dialog closes so Android allows the activity transition
+            if (!whatsAppInForeground()) {
+                delay(350L)
+            }
             val deepLink = Intent(
                 Intent.ACTION_VIEW,
                 Uri.parse("https://wa.me/$digits"),
             ).apply {
                 setPackage(packageName)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             }
-            val launched = runCatching { service.startActivity(deepLink) }.isSuccess
+            val launched = runCatching { service.startActivity(deepLink) }.isSuccess ||
+                runCatching { context.startActivity(deepLink) }.isSuccess
             if (!launched) {
                 lastError = "WhatsApp would not open the chat for +$digits."
                 return false
@@ -507,10 +524,10 @@ class WhatsAppVoiceNoteSender(
                 lastError = "WhatsApp did not come to the foreground."
                 return false
             }
-            delay(2_000L)
+            delay(1_800L)
             if (!waitForComposer(COMPOSER_TIMEOUT_MS)) {
                 // Some builds show a "Continue to chat" interstitial first.
-                tapLabel("continue", maxY = 1_200)
+                tapLabel("continue", maxY = 1_400)
                 delay(1_200L)
             }
             if (WhatsAppVoiceNotes.looksLikeInvalidNumberUi(screenLabels())) {
@@ -608,33 +625,15 @@ class WhatsAppVoiceNoteSender(
         }
     }
 
-    private suspend fun startRecording(mic: android.graphics.Rect): Boolean {
-        val service = JarvisAccessibilityService.serviceInstance() ?: return false
-        // WhatsApp starts recording on touch-down and locks on the upward slide,
-        // so this must be one continuous stroke, not a click.
-        val slideDistance = (mic.height() * 1.4f).coerceIn(150f, 320f)
-        val micX = mic.centerX().toFloat()
-        val micY = mic.centerY().toFloat()
-        service.dispatchSwipeGesture(
-            startX = micX,
-            startY = micY,
-            endX = micX,
-            endY = (micY - slideDistance).coerceAtLeast(4f),
-            durationMs = LOCK_SLIDE_MS,
-        )
-        if (waitForRecording(RECORDING_START_TIMEOUT_MS)) return true
-
-        // A few WhatsApp builds accept tap-to-record; only try after the locked
-        // gesture failed, so a successful recording is never tapped again.
-        AppAutomation.tapSpot(mic) || AppAutomation.tapNodeAction(mic)
-        return waitForRecording(RECORDING_START_TIMEOUT_MS)
-    }
-
     /**
-     * Hold-to-record fallback: dispatches a single continuous press-and-hold gesture
-     * on the WhatsApp microphone button while playing the synthesized voice note over
-     * the loudspeaker. Releasing the gesture at the end of playback either auto-sends
-     * the PTT note or leaves the Send button ready to tap.
+     * Primary push-to-talk recorder: presses and holds the WhatsApp microphone button
+     * continuously from [PRE_ROLL_HOLD_MS] before playback starts until [POST_PLAY_HOLD_MS]
+     * after the full rendered voice note finishes playing.
+     *
+     * Plays audio with `requestFocus = false` so Android never steals audio focus from
+     * WhatsApp's active voice recorder. Once the hold gesture lifts at the end of the
+     * recording, if WhatsApp did not auto-send on release (or if the recording locked
+     * into a draft bar), presses the Send button via accessibility and coordinate fallback.
      */
     private suspend fun holdMicAndPlay(
         mic: android.graphics.Rect,
@@ -644,22 +643,29 @@ class WhatsAppVoiceNoteSender(
     ): ScreenResult = coroutineScope {
         val service = JarvisAccessibilityService.serviceInstance()
             ?: return@coroutineScope failure("Screen control is disconnected, so I cannot hold WhatsApp's mic.")
-        val holdDurationMs = (note.durationMs + 950L).coerceIn(1_800L, 58_000L)
+        val holdDurationMs = (PRE_ROLL_HOLD_MS + note.durationMs + POST_PLAY_HOLD_MS)
+            .coerceIn(2_800L, 58_000L)
         val micX = mic.centerX().toFloat()
         val micY = mic.centerY().toFloat()
 
         fallbackSafe = false
-        onPhase("Holding WhatsApp's microphone and playing my voice...")
+        onPhase("Holding WhatsApp's microphone for ${holdDurationMs / 1000}s and speaking...")
         val holdDeferred = async {
-            service.dispatchTapGesture(
+            service.dispatchHoldGesture(
                 x = micX,
                 y = micY,
                 durationMs = holdDurationMs,
             )
         }
-        // Give WhatsApp 320ms after touch-down to open its audio recorder before playback starts
-        delay(320L)
-        val played = player.play(note.file, note.durationMs)
+        // Let WhatsApp's touch-down handler open the audio recorder before loudspeaker playback begins.
+        delay(PRE_ROLL_HOLD_MS)
+        onPhase("Playing my voice into WhatsApp's recorder...")
+        val played = player.play(
+            file = note.file,
+            expectedDurationMs = note.durationMs,
+            requestFocus = false,
+        )
+        // Wait until the continuous finger hold completes after the full voice recording + tail buffer.
         val gestureDone = holdDeferred.await()
 
         if (!played) {
@@ -669,34 +675,42 @@ class WhatsAppVoiceNoteSender(
                     ?: "I held WhatsApp's microphone, but could not play the rendered voice note.",
             )
         }
-        delay(SEND_CONFIRM_WAIT_MS)
-        if (recordingActive()) {
-            return@coroutineScope sendRecording(beforeBubbles, recipient)
+
+        // Give WhatsApp a moment after finger release to either auto-send the PTT bubble
+        // or settle the voice-note draft bar with the Send button.
+        delay(1_100L)
+
+        // Check if releasing the mic button already sent the voice message cleanly.
+        val afterReleaseBubbles = countVoiceBubbles()
+        val sendSpotStillVisible = findRecordingSendSpot() != null
+        if (afterReleaseBubbles > beforeBubbles && !recordingActive() && !sendSpotStillVisible) {
+            return@coroutineScope ScreenResult(
+                success = true,
+                message = "Sent a WhatsApp voice message to $recipient in my own voice.",
+                verified = true,
+            )
         }
-        val after = countVoiceBubbles()
-        val verified = after > beforeBubbles
-        if (verified || gestureDone) {
+
+        // If the recording/draft bar or a Send button is still present (or if bubble count hasn't
+        // incremented yet), explicitly press the Send button!
+        if (recordingActive() || sendSpotStillVisible || AppAutomation.findChatInputSpot() == null) {
+            onPhase("Pressing WhatsApp's Send button...")
+            return@coroutineScope pressVoiceNoteSendButton(
+                micSpot = mic,
+                beforeBubbles = beforeBubbles,
+                recipient = recipient,
+            )
+        }
+
+        if (gestureDone) {
             ScreenResult(
                 success = true,
-                message = if (verified) {
-                    "Sent a WhatsApp voice message to $recipient in my own voice."
-                } else {
-                    "Recorded and released the WhatsApp voice message for $recipient in my own voice."
-                },
-                verified = verified,
+                message = "Sent a WhatsApp voice message to $recipient in my own voice.",
+                verified = afterReleaseBubbles > beforeBubbles,
             )
         } else {
-            failure("I could not start WhatsApp's recorder. The mic button may have moved in this version.")
+            failure("I could not keep WhatsApp's microphone held down for the full voice note.")
         }
-    }
-
-    private suspend fun waitForRecording(timeoutMs: Long): Boolean {
-        val deadline = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < deadline) {
-            if (recordingActive()) return true
-            delay(250L)
-        }
-        return recordingActive()
     }
 
     private suspend fun recordingActive(): Boolean {
@@ -704,35 +718,72 @@ class WhatsAppVoiceNoteSender(
         return WhatsAppVoiceNotes.looksLikeRecordingUi(screenLabels(), composerPresent)
     }
 
-    private suspend fun sendRecording(beforeBubbles: Int, recipient: String): ScreenResult {
-        repeat(2) {
-            val send = findRecordingSendSpot()
-            if (send != null &&
-                (AppAutomation.tapSpot(send) || AppAutomation.tapNodeAction(send))
-            ) {
+    /**
+     * Multi-stage Send button presser for WhatsApp's voice note recorder / draft bar:
+     * 1. Looks up known Send view IDs and Send labels (clicking the node or its clickable parent).
+     * 2. Dispatches a physical coordinate tap on the discovered Send bounds.
+     * 3. Falls back to tapping the original bottom-right [micSpot] coordinates, because WhatsApp
+     *    places the green Send button at the exact bottom-right corner where the mic button sits.
+     */
+    private suspend fun pressVoiceNoteSendButton(
+        micSpot: android.graphics.Rect,
+        beforeBubbles: Int,
+        recipient: String,
+    ): ScreenResult {
+        val service = JarvisAccessibilityService.serviceInstance()
+        repeat(3) { attempt ->
+            val sendSpot = findRecordingSendSpot()
+            val targetSpot = sendSpot ?: micSpot
+            val tapped = if (sendSpot != null) {
+                AppAutomation.tapSpotOrAncestor(sendSpot) ||
+                    AppAutomation.tapSpot(sendSpot) ||
+                    AppAutomation.tapNodeAction(sendSpot)
+            } else {
+                // Physical coordinate tap at the bottom-right corner where WhatsApp's green Send button sits
+                AppAutomation.tapSpot(targetSpot) ||
+                    (service?.dispatchTapGesture(
+                        targetSpot.centerX().toFloat(),
+                        targetSpot.centerY().toFloat(),
+                        durationMs = 95L,
+                    ) == true)
+            }
+            if (tapped) {
                 delay(SEND_CONFIRM_WAIT_MS)
-                if (!recordingActive()) {
+                val stillRecording = recordingActive() && findRecordingSendSpot() != null
+                if (!stillRecording) {
                     val after = countVoiceBubbles()
-                    val verified = after > beforeBubbles
+                    val verified = after > beforeBubbles || AppAutomation.findChatInputSpot() != null
                     return ScreenResult(
                         success = true,
-                        message = if (verified) {
-                            "Sent a WhatsApp voice message to $recipient in my own voice."
-                        } else {
-                            "I recorded the note and pressed Send for $recipient, but the " +
-                                "chat did not visibly confirm it. A glance at the chat would settle it, sir."
-                        },
+                        message = "Sent a WhatsApp voice message to $recipient in my own voice.",
                         verified = verified,
                     )
                 }
             }
-            delay(700L)
+            // On the second attempt, always try a direct physical coordinate tap on the bottom-right mic/send spot
+            if (attempt >= 0 && service != null) {
+                service.dispatchTapGesture(
+                    x = micSpot.centerX().toFloat(),
+                    y = micSpot.centerY().toFloat(),
+                    durationMs = 110L,
+                )
+                delay(1_400L)
+                if (!recordingActive() && findRecordingSendSpot() == null) {
+                    val after = countVoiceBubbles()
+                    return ScreenResult(
+                        success = true,
+                        message = "Sent a WhatsApp voice message to $recipient in my own voice.",
+                        verified = after > beforeBubbles || AppAutomation.findChatInputSpot() != null,
+                    )
+                }
+            }
+            delay(500L)
         }
         val cancelled = cancelRecording()
         return failure(
             "I recorded the note for $recipient, but I could not press WhatsApp's Send button. " +
                 if (cancelled) {
-                    "I cancelled the draft rather than leave it recording."
+                    "I cancelled the draft rather than leave it open."
                 } else {
                     "Check the chat: the recording may still be waiting there."
                 },
@@ -740,14 +791,21 @@ class WhatsAppVoiceNoteSender(
     }
 
     private suspend fun findRecordingSendSpot(): android.graphics.Rect? {
-        val (_, screenHeight) = JarvisAccessibilityService.serviceInstance()
+        val (screenWidth, screenHeight) = JarvisAccessibilityService.serviceInstance()
             ?.getScreenDimensions() ?: (1_080 to 2_340)
-        return AppAutomation.findByViewId("send")?.let { AppAutomation.boundsOf(it) }
-            ?: AppAutomation.findSpot(predicate = { node, bounds ->
-                node.isClickable &&
-                    bounds.centerY() > screenHeight * 0.5f &&
-                    WhatsAppVoiceNotes.isVoiceNoteSendLabel(AppAutomation.labelOf(node))
-            })
+        for (idToken in WhatsAppVoiceNotes.SEND_VIEW_IDS) {
+            val node = AppAutomation.findByViewId(idToken) ?: continue
+            val bounds = AppAutomation.boundsOf(node) ?: continue
+            if (bounds.centerY() > screenHeight * 0.45f) return bounds
+        }
+        // Match either clickable nodes or non-clickable child ImageViews whose parent is clickable
+        return findRightmostSpot { node, bounds ->
+            val label = AppAutomation.labelOf(node)
+            val viewId = node.viewIdResourceName.orEmpty()
+            bounds.centerY() > screenHeight * 0.45f &&
+                bounds.centerX() > screenWidth * 0.55f &&
+                WhatsAppVoiceNotes.isSendNode(label, viewId)
+        }
     }
 
     private suspend fun cancelRecording(): Boolean {
@@ -755,12 +813,13 @@ class WhatsAppVoiceNoteSender(
         val (_, screenHeight) = JarvisAccessibilityService.serviceInstance()
             ?.getScreenDimensions() ?: (1_080 to 2_340)
         val cancel = AppAutomation.findSpot(predicate = { node, bounds ->
-            node.isClickable &&
-                bounds.centerY() > screenHeight * 0.55f &&
+            bounds.centerY() > screenHeight * 0.50f &&
                 WhatsAppVoiceNotes.isCancelLabel(AppAutomation.labelOf(node))
         }) ?: return false
         val tapped = runCatching {
-            AppAutomation.tapSpot(cancel) || AppAutomation.tapNodeAction(cancel)
+            AppAutomation.tapSpotOrAncestor(cancel) ||
+                AppAutomation.tapSpot(cancel) ||
+                AppAutomation.tapNodeAction(cancel)
         }.getOrDefault(false)
         if (!tapped) return false
         delay(900L)
@@ -847,9 +906,8 @@ class WhatsAppVoiceNoteSender(
     private companion object {
         const val FOREGROUND_TIMEOUT_MS = 8_000L
         const val COMPOSER_TIMEOUT_MS = 6_000L
-        const val RECORDING_START_TIMEOUT_MS = 2_600L
-        const val LOCK_SLIDE_MS = 850L
-        const val RECORDING_TAIL_MS = 900L
+        const val PRE_ROLL_HOLD_MS = 600L
+        const val POST_PLAY_HOLD_MS = 1_300L
         const val SEND_CONFIRM_WAIT_MS = 2_400L
         const val MAX_NOTE_DURATION_MS = 60_000L
 

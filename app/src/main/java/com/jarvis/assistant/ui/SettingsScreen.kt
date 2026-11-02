@@ -43,6 +43,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -68,7 +69,12 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.jarvis.assistant.brain.LocalDownloadState
+import com.jarvis.assistant.brain.LocalModelCatalog
+import com.jarvis.assistant.brain.LocalModelDownloadStatus
+import com.jarvis.assistant.brain.LocalModelSpec
 import com.jarvis.assistant.brain.ProviderKind
+import java.util.Locale
 import com.jarvis.assistant.settings.OwnerProfile
 import com.jarvis.assistant.settings.ProviderPreset
 import com.jarvis.assistant.settings.ProviderSettings
@@ -278,7 +284,10 @@ fun SettingsScreen(
                 }
                 item(key = "detail_ai_model") {
                     AnimatedVisibility(visible = expandedSection == SettingsSection.AI_MODEL) {
-                        AiModelDiscoveryCard(state = state, viewModel = viewModel)
+                        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            OfflineLocalModelsCard(state = state, viewModel = viewModel)
+                            AiModelDiscoveryCard(state = state, viewModel = viewModel)
+                        }
                     }
                 }
 
@@ -535,6 +544,286 @@ private fun SettingsHubRow(
                 modifier = Modifier.size(15.dp),
                 weight = 1.9.dp,
             )
+        }
+    }
+}
+
+@Composable
+private fun OfflineLocalModelsCard(
+    state: JarvisUiState,
+    viewModel: JarvisViewModel,
+) {
+    val freeGb = remember(state.freeStorageBytes) {
+        if (state.freeStorageBytes > 0L) {
+            String.format(Locale.US, "%.1f GB free", state.freeStorageBytes.toDouble() / (1024.0 * 1024.0 * 1024.0))
+        } else {
+            "On-Device Storage"
+        }
+    }
+    val activeLocalId = state.settings.localAi.activeModelId
+    val isLocalProviderDefault = state.settings.defaultProvider?.kind == ProviderKind.LOCAL_ON_DEVICE
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.36f),
+        ),
+        shape = RoundedCornerShape(18.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Offline Local AI Models (No API Key Needed)",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = JarvisPalette.CyanBright,
+                    )
+                    Text(
+                        text = "Download lightweight GGUF models to your phone so J.A.R.V.I.S. chats and executes all phone tasks 100% offline without any API keys.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = JarvisPalette.TextDim,
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                HudPill(
+                    text = freeGb,
+                    color = JarvisPalette.CyanBright,
+                )
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(
+                    checked = state.settings.localAi.autoFallbackWhenOffline,
+                    onCheckedChange = viewModel::setLocalAutoFallback,
+                )
+                Spacer(Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Auto-use Offline AI when no internet or API key",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = JarvisPalette.Ice,
+                    )
+                    Text(
+                        text = "Automatically switches to your downloaded local model if offline or no cloud API key is set.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = JarvisPalette.TextDim,
+                    )
+                }
+            }
+
+            LocalModelCatalog.models.forEach { spec ->
+                val status = state.localModels[spec.id]
+                    ?: LocalModelDownloadStatus(
+                        modelId = spec.id,
+                        state = LocalDownloadState.NOT_DOWNLOADED,
+                        downloadedBytes = 0L,
+                        totalBytes = spec.approxBytes,
+                    )
+                val isSelected = isLocalProviderDefault && activeLocalId == spec.id
+                OfflineLocalModelRow(
+                    spec = spec,
+                    status = status,
+                    isSelected = isSelected,
+                    onDownload = { viewModel.downloadLocalModel(spec.id) },
+                    onPause = { viewModel.pauseLocalModelDownload(spec.id) },
+                    onDelete = { viewModel.deleteLocalModel(spec.id) },
+                    onSelect = { viewModel.selectActiveLocalModel(spec.id) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun OfflineLocalModelRow(
+    spec: LocalModelSpec,
+    status: LocalModelDownloadStatus,
+    isSelected: Boolean,
+    onDownload: () -> Unit,
+    onPause: () -> Unit,
+    onDelete: () -> Unit,
+    onSelect: () -> Unit,
+) {
+    val accent = when {
+        isSelected && status.state == LocalDownloadState.READY -> JarvisPalette.Success
+        status.state == LocalDownloadState.READY -> JarvisPalette.CyanBright
+        status.state == LocalDownloadState.DOWNLOADING -> JarvisPalette.Amber
+        status.state == LocalDownloadState.FAILED -> JarvisPalette.Danger
+        else -> JarvisPalette.Cyan
+    }
+
+    GlassPanel(
+        modifier = Modifier.fillMaxWidth(),
+        corner = 14.dp,
+        accent = accent,
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = spec.displayName,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = JarvisPalette.Ice,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        HudPill(text = spec.parameterCount, color = JarvisPalette.CyanBright)
+                        Spacer(Modifier.width(4.dp))
+                        HudPill(text = spec.quantization, color = JarvisPalette.Cyan)
+                    }
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = "${spec.approxDownloadSizeLabel} · Best use: ${spec.bestUse}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = JarvisPalette.TextDim,
+                    )
+                }
+
+                when (status.state) {
+                    LocalDownloadState.READY -> {
+                        if (isSelected) {
+                            HudPill(text = "ACTIVE OFFLINE", color = JarvisPalette.Success, filled = true)
+                        } else {
+                            HudPill(text = "READY", color = JarvisPalette.Success)
+                        }
+                    }
+                    LocalDownloadState.DOWNLOADING -> {
+                        val pct = (status.progress * 100f).toInt().coerceIn(0, 100)
+                        HudPill(text = "$pct%", color = JarvisPalette.Amber, filled = true)
+                    }
+                    LocalDownloadState.PAUSED -> {
+                        HudPill(text = "PAUSED", color = JarvisPalette.Amber)
+                    }
+                    LocalDownloadState.FAILED -> {
+                        HudPill(text = "RETRY", color = JarvisPalette.Danger)
+                    }
+                    LocalDownloadState.NOT_DOWNLOADED -> {
+                        HudPill(text = "OFFLINE", color = JarvisPalette.Cyan)
+                    }
+                }
+            }
+
+            if (status.state == LocalDownloadState.DOWNLOADING || status.state == LocalDownloadState.PAUSED) {
+                LinearProgressIndicator(
+                    progress = { status.progress.coerceIn(0f, 1f) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(4.dp)),
+                    color = JarvisPalette.CyanBright,
+                    trackColor = JarvisPalette.Deep,
+                )
+                val dlMb = status.downloadedBytes.toDouble() / (1024.0 * 1024.0)
+                val totMb = status.totalBytes.coerceAtLeast(1L).toDouble() / (1024.0 * 1024.0)
+                val speedMb = status.speedBytesPerSec.toDouble() / (1024.0 * 1024.0)
+                Text(
+                    text = buildString {
+                        append(String.format(Locale.US, "%.1f MB / %.1f MB", dlMb, totMb))
+                        if (status.state == LocalDownloadState.DOWNLOADING && speedMb > 0.05) {
+                            append(String.format(Locale.US, " · %.2f MB/s", speedMb))
+                        } else if (status.state == LocalDownloadState.PAUSED) {
+                            append(" · Paused (resumable)")
+                        }
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = JarvisPalette.CyanBright,
+                )
+            }
+
+            if (status.errorMessage != null) {
+                Text(
+                    text = status.errorMessage,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = JarvisPalette.Danger,
+                )
+            }
+
+            if (status.state == LocalDownloadState.READY && status.ggufInfo != null) {
+                Text(
+                    text = "Verified GGUF v${status.ggufInfo.version} (${status.ggufInfo.tensorCount} tensors) · Works offline without API keys",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = JarvisPalette.Success,
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                when (status.state) {
+                    LocalDownloadState.NOT_DOWNLOADED, LocalDownloadState.FAILED -> {
+                        Button(
+                            onClick = onDownload,
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Text(
+                                text = if (status.state == LocalDownloadState.FAILED) {
+                                    "Retry Download (${spec.approxDownloadSizeLabel})"
+                                } else {
+                                    "Download (${spec.approxDownloadSizeLabel})"
+                                },
+                            )
+                        }
+                    }
+
+                    LocalDownloadState.DOWNLOADING -> {
+                        OutlinedButton(
+                            onClick = onPause,
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Text("Pause")
+                        }
+                        OutlinedButton(
+                            onClick = onDelete,
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Text("Cancel")
+                        }
+                    }
+
+                    LocalDownloadState.PAUSED -> {
+                        Button(
+                            onClick = onDownload,
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Text("Resume Download")
+                        }
+                        OutlinedButton(
+                            onClick = onDelete,
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Text("Delete")
+                        }
+                    }
+
+                    LocalDownloadState.READY -> {
+                        Button(
+                            onClick = onSelect,
+                            enabled = !isSelected,
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Text(if (isSelected) "Active Offline Model" else "Use Offline (No API Key)")
+                        }
+                        OutlinedButton(
+                            onClick = onDelete,
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Text("Delete")
+                        }
+                    }
+                }
+            }
         }
     }
 }

@@ -25,9 +25,12 @@ import com.jarvis.assistant.brain.ChatRequest
 import com.jarvis.assistant.brain.HttpClientFactory
 import com.jarvis.assistant.brain.LlmEvent
 import com.jarvis.assistant.brain.LlmMessage
+import com.jarvis.assistant.brain.LocalModelCatalog
+import com.jarvis.assistant.brain.LocalModelDownloadManager
 import com.jarvis.assistant.brain.ModelCatalogueService
 import com.jarvis.assistant.brain.ProviderConfig
 import com.jarvis.assistant.brain.ProviderException
+import com.jarvis.assistant.brain.ProviderKind
 import com.jarvis.assistant.brain.ProviderRegistry
 import com.jarvis.assistant.brain.ProviderTester
 import com.jarvis.assistant.memory.MemoryEntity
@@ -201,7 +204,8 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
     private val greetingEngine = GreetingEngine()
 
     internal val httpClient = HttpClientFactory.create()
-    private val providerRegistry = ProviderRegistry(httpClient)
+    val localModelManager = LocalModelDownloadManager(appContext, httpClient)
+    private val providerRegistry = ProviderRegistry(httpClient, localModelManager)
     val providerTester = ProviderTester(providerRegistry)
     val modelCatalogueService = ModelCatalogueService(httpClient)
 
@@ -680,7 +684,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             if (providers.isEmpty()) {
                 failTurn(
                     assistantId,
-                    "No AI provider is configured. Open Settings, add an API key, then try again.",
+                    "No AI provider is configured. Download an Offline Local AI model in Settings → AI Model, or add a cloud API key.",
                     conversationId,
                 )
                 return
@@ -3272,6 +3276,130 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             !uri.host.isNullOrBlank()
     }.getOrDefault(false)
 
+    fun downloadLocalModel(modelId: String) {
+        localModelManager.startOrResumeDownload(
+            scope = scope,
+            modelId = modelId,
+            onReady = { spec ->
+                scope.launch {
+                    runCatching {
+                        settingsRepository.update { current ->
+                            val hasLocal = current.providers.any { it.kind == ProviderKind.LOCAL_ON_DEVICE }
+                            val updatedProviders = if (hasLocal) {
+                                current.providers.map { p ->
+                                    if (p.kind == ProviderKind.LOCAL_ON_DEVICE) {
+                                        p.copy(model = spec.id, enabled = true)
+                                    } else {
+                                        p
+                                    }
+                                }
+                            } else {
+                                current.providers + ProviderSettings(
+                                    id = "local_ai",
+                                    name = "Offline Local AI (On-Device GGUF)",
+                                    kind = ProviderKind.LOCAL_ON_DEVICE,
+                                    baseUrl = ProviderKind.LOCAL_ON_DEVICE.defaultBaseUrl,
+                                    model = spec.id,
+                                    enabled = true,
+                                )
+                            }
+                            val hasCloudKey = updatedProviders.any {
+                                it.kind != ProviderKind.LOCAL_ON_DEVICE && it.enabled && it.hasSavedKey
+                            }
+                            val newDefaultId = if (!hasCloudKey || current.defaultProvider?.kind == ProviderKind.LOCAL_ON_DEVICE) {
+                                updatedProviders.firstOrNull { it.kind == ProviderKind.LOCAL_ON_DEVICE }?.id
+                                    ?: current.defaultProviderId
+                            } else {
+                                current.defaultProviderId
+                            }
+                            current.copy(
+                                providers = updatedProviders,
+                                defaultProviderId = newDefaultId,
+                                localAi = current.localAi.copy(activeModelId = spec.id),
+                            )
+                        }
+                    }
+                    _state.update {
+                        it.copy(
+                            notice = "${spec.displayName} (${spec.approxDownloadSizeLabel}) downloaded & verified. Offline Local AI is ready with no API key required.",
+                        )
+                    }
+                }
+            },
+        )
+    }
+
+    fun pauseLocalModelDownload(modelId: String) {
+        localModelManager.pauseDownload(modelId)
+    }
+
+    fun deleteLocalModel(modelId: String) {
+        val spec = LocalModelCatalog.findByIdOrName(modelId)
+        localModelManager.deleteModel(modelId)
+        if (spec != null) {
+            _state.update {
+                it.copy(notice = "Deleted offline model ${spec.displayName} from device storage.")
+            }
+        }
+    }
+
+    fun selectActiveLocalModel(modelId: String) {
+        val spec = LocalModelCatalog.findByIdOrName(modelId) ?: return
+        scope.launch {
+            runCatching {
+                settingsRepository.update { current ->
+                    val hasLocal = current.providers.any { it.kind == ProviderKind.LOCAL_ON_DEVICE }
+                    val updatedProviders = if (hasLocal) {
+                        current.providers.map { p ->
+                            if (p.kind == ProviderKind.LOCAL_ON_DEVICE) {
+                                p.copy(model = spec.id, enabled = true)
+                            } else {
+                                p
+                            }
+                        }
+                    } else {
+                        current.providers + ProviderSettings(
+                            id = "local_ai",
+                            name = "Offline Local AI (On-Device GGUF)",
+                            kind = ProviderKind.LOCAL_ON_DEVICE,
+                            baseUrl = ProviderKind.LOCAL_ON_DEVICE.defaultBaseUrl,
+                            model = spec.id,
+                            enabled = true,
+                        )
+                    }
+                    val localProviderId = updatedProviders.firstOrNull { it.kind == ProviderKind.LOCAL_ON_DEVICE }?.id
+                        ?: "local_ai"
+                    current.copy(
+                        providers = updatedProviders,
+                        defaultProviderId = localProviderId,
+                        localAi = current.localAi.copy(activeModelId = spec.id),
+                    )
+                }
+                if (localModelManager.isModelReady(spec.id)) {
+                    _state.update {
+                        it.copy(
+                            notice = "Active AI model set to ${spec.displayName} (Offline Local AI — works without API keys).",
+                        )
+                    }
+                } else {
+                    downloadLocalModel(spec.id)
+                }
+            }
+        }
+    }
+
+    fun setLocalAutoFallback(enabled: Boolean) {
+        scope.launch {
+            runCatching {
+                settingsRepository.update { current ->
+                    current.copy(
+                        localAi = current.localAi.copy(autoFallbackWhenOffline = enabled),
+                    )
+                }
+            }
+        }
+    }
+
     suspend fun resolveProviders(current: AppSettings): List<ProviderConfig> =
         withContext(Dispatchers.IO) {
             val default = current.defaultProvider
@@ -3282,6 +3410,23 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             var keyError: String? = null
             val configs = mutableListOf<ProviderConfig>()
             for (provider in ordered) {
+                if (provider.kind == ProviderKind.LOCAL_ON_DEVICE) {
+                    if (!provider.enabled) continue
+                    val preferredId = provider.model.ifBlank { current.localAi.activeModelId }
+                    val readySpec = localModelManager.firstReadyModel(preferredId)
+                    val isExplicitDefault = provider.id == default?.id
+                    if (readySpec != null || isExplicitDefault) {
+                        configs += ProviderConfig(
+                            id = provider.id,
+                            name = readySpec?.let { "Offline Local AI (${it.displayName})" } ?: provider.name,
+                            kind = ProviderKind.LOCAL_ON_DEVICE,
+                            baseUrl = provider.baseUrl.trim().trimEnd('/'),
+                            model = readySpec?.id ?: preferredId,
+                            apiKey = "",
+                        )
+                    }
+                    continue
+                }
                 if (!provider.isReadyToUse) continue
                 try {
                     val key = if (provider.hasSavedKey) {
@@ -3303,6 +3448,19 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                     }
                 } catch (e: Exception) {
                     keyError = e.message?.take(400) ?: "A saved API key could not be decrypted."
+                }
+            }
+            if (current.localAi.autoFallbackWhenOffline && configs.none { it.kind == ProviderKind.LOCAL_ON_DEVICE }) {
+                val readySpec = localModelManager.firstReadyModel(current.localAi.activeModelId)
+                if (readySpec != null) {
+                    configs += ProviderConfig(
+                        id = "local_ai",
+                        name = "Offline Local AI (${readySpec.displayName})",
+                        kind = ProviderKind.LOCAL_ON_DEVICE,
+                        baseUrl = ProviderKind.LOCAL_ON_DEVICE.defaultBaseUrl,
+                        model = readySpec.id,
+                        apiKey = "",
+                    )
                 }
             }
             if (configs.isEmpty() && keyError != null) throw ProviderException(keyError)

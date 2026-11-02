@@ -483,9 +483,10 @@ internal object AppAutomation {
 
         // Stage 2: Bring WhatsApp to foreground
         if (!whatsappInForeground()) {
+            delay(350L)
             val launch = runCatching {
                 service.packageManager.getLaunchIntentForPackage(packageName)
-                    ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             }.getOrNull()
             if (launch == null || runCatching { service.startActivity(launch) }.isFailure) {
                 return ScreenResult(false, "WhatsApp would not open, sir.", verified = false)
@@ -528,6 +529,7 @@ internal object AppAutomation {
         }
 
         suspend fun tryOpenVisibleRow(): Boolean {
+            if (!whatsappInForeground()) return false
             val row = findWhatsAppContactRowSpot(contactName) ?: return false
             if (!tapSpotOrAncestor(row)) return false
             val composerReady = withTimeoutOrNull(5_500L) {
@@ -537,24 +539,14 @@ internal object AppAutomation {
             return composerReady
         }
 
-        // Stage 3: Direct Recent Chats List Scan (fast path when contact is already in recent chats)
+        // Stage 3: Direct Recent Chats List Scan (fast path when contact is already visible at top of recent chats)
         if (tryOpenVisibleRow()) {
             return ScreenResult(true, "Opened WhatsApp chat with $contactName.", verified = true)
         }
 
-        // Scroll down once in the recent chats list in case the contact is just below the fold
-        runCatching { controller.scroll(true) }
-        delay(950L)
-        if (tryOpenVisibleRow()) {
-            return ScreenResult(true, "Opened WhatsApp chat with $contactName.", verified = true)
-        }
-        // Scroll back to top so the search bar is exposed
-        runCatching { controller.scroll(false) }
-        delay(750L)
-
-        // Stage 4: Modern Search Bar ("Ask Meta AI or Search" pill or magnifying glass icon)
+        // Stage 4: Modern Search Bar ("Ask Meta AI or Search" pill or magnifying glass icon) BEFORE scrolling
         val searchSpot = findWhatsAppSearchSpot()
-        if (searchSpot != null && tapSpotOrAncestor(searchSpot)) {
+        if (whatsappInForeground() && searchSpot != null && tapSpotOrAncestor(searchSpot)) {
             delay(1_100L)
             val searchField = findWhatsAppSearchInputSpot() ?: searchSpot
             if (typeIntoEditable(searchField, contactName)) {
@@ -563,9 +555,18 @@ internal object AppAutomation {
                     return ScreenResult(true, "Opened WhatsApp chat with $contactName.", verified = true)
                 }
             }
-            // Back out of search if it didn't open the chat so Stage 5 can try New Chat
+            // Back out of search if it didn't open the chat so we can check scrolled rows or New Chat
             runCatching { controller.press("back") }
             delay(700L)
+        }
+
+        // Stage 4b: Only scroll down once if WhatsApp is confirmed in foreground and search bar was unavailable
+        if (whatsappInForeground()) {
+            runCatching { controller.scroll(true) }
+            delay(950L)
+            if (tryOpenVisibleRow()) {
+                return ScreenResult(true, "Opened WhatsApp chat with $contactName.", verified = true)
+            }
         }
 
         // Stage 5: "New chat" FAB fallback

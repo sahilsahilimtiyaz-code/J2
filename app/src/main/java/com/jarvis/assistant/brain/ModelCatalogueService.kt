@@ -49,6 +49,7 @@ class ModelCatalogueService(private val client: OkHttpClient) {
      * free-by-API-key providers so users can browse and switch to any free model immediately.
      */
     fun allGlobalFreeModelsCatalog(): List<DiscoveredModel> = buildList {
+        addAll(LocalModelCatalog.asDiscoveredModels())
         addAll(curatedCatalogFor(ProviderKind.OPENAI_COMPATIBLE, "https://api.z.ai/api/paas/v4"))
         addAll(curatedCatalogFor(ProviderKind.OPENAI_COMPATIBLE, "https://integrate.api.nvidia.com/v1"))
         addAll(curatedCatalogFor(ProviderKind.OPENAI_COMPATIBLE, "https://opencode.ai/zen/v1"))
@@ -262,6 +263,7 @@ class ModelCatalogueService(private val client: OkHttpClient) {
         lowerUrl.contains("pollinations.ai") -> "Pollinations AI"
         lowerUrl.contains("together.xyz") || lowerUrl.contains("together.ai") -> "Together"
         lowerUrl.contains("x.ai") -> "xAI Grok"
+        lowerUrl.contains("127.0.0.1:8080") || lowerUrl.contains("local") -> "Offline Local AI"
         lowerUrl.contains("127.0.0.1") || lowerUrl.contains("localhost") -> "Ollama"
         lowerUrl.contains("anthropic.com") -> "Anthropic"
         lowerUrl.contains("openai.com") -> "OpenAI"
@@ -307,6 +309,9 @@ class ModelCatalogueService(private val client: OkHttpClient) {
     fun curatedCatalogFor(kind: ProviderKind, baseUrl: String): List<DiscoveredModel> {
         val lower = baseUrl.lowercase()
         return when {
+            kind == ProviderKind.LOCAL_ON_DEVICE || lower.contains("127.0.0.1:8080") ->
+                LocalModelCatalog.asDiscoveredModels()
+
             lower.contains("api.z.ai") || lower.contains("bigmodel.cn") -> listOf(
                 DiscoveredModel("glm-4.5-flash", "GLM-4.5 Flash (100% Free · 128K + Tools)", "Z.ai", isFree = true, supportsTools = true, contextWindow = 131072),
                 DiscoveredModel("glm-4.7-flash", "GLM-4.7 Flash (100% Free · Agentic + Tools)", "Z.ai", isFree = true, supportsTools = true, contextWindow = 131072),

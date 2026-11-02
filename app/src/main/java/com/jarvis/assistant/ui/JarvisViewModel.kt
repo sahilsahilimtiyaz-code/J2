@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.jarvis.assistant.brain.DiscoveredModel
+import com.jarvis.assistant.brain.LocalModelCatalog
 import com.jarvis.assistant.brain.ModelCatalogueService
 import com.jarvis.assistant.brain.ProviderKind
 import com.jarvis.assistant.core.JarvisCore
@@ -172,6 +173,20 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             core.conversationMode.collect { mode ->
                 _ui.update { it.copy(conversationMode = mode) }
+            }
+        }
+
+        viewModelScope.launch {
+            core.localModelManager.statuses.collect { statuses ->
+                val freeBytes = withContext(Dispatchers.IO) {
+                    core.localModelManager.availableStorageBytes()
+                }
+                _ui.update {
+                    it.copy(
+                        localModels = statuses,
+                        freeStorageBytes = freeBytes,
+                    )
+                }
             }
         }
     }
@@ -474,7 +489,38 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun downloadLocalModel(modelId: String) {
+        core.downloadLocalModel(modelId)
+    }
+
+    fun pauseLocalModelDownload(modelId: String) {
+        core.pauseLocalModelDownload(modelId)
+    }
+
+    fun deleteLocalModel(modelId: String) {
+        core.deleteLocalModel(modelId)
+    }
+
+    fun selectActiveLocalModel(modelId: String) {
+        core.selectActiveLocalModel(modelId)
+    }
+
+    fun setLocalAutoFallback(enabled: Boolean) {
+        core.setLocalAutoFallback(enabled)
+    }
+
+    fun refreshLocalModels() {
+        viewModelScope.launch(Dispatchers.IO) {
+            core.localModelManager.refreshStatuses()
+        }
+    }
+
     fun selectQuickModel(providerIdOrLabel: String, modelId: String) {
+        val localSpec = LocalModelCatalog.findByIdOrName(modelId)
+        if (localSpec != null || providerIdOrLabel.contains("Offline Local", ignoreCase = true)) {
+            core.selectActiveLocalModel(localSpec?.id ?: modelId)
+            return
+        }
         viewModelScope.launch {
             runCatching {
                 core.settingsRepository.update { current ->

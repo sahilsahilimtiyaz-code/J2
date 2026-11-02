@@ -346,3 +346,38 @@
   - Both `app/build.gradle.kts` and `.github/workflows/build.yml` now automatically decode the committed `debug.keystore.base64` into `debug.keystore` whenever custom repository secrets are absent, and `versionCode` is computed as `100 + GITHUB_RUN_NUMBER` so every new GitHub Actions build installs cleanly as an in-place update over the existing app.
 - **Dark-Navy Framed Arc Reactor Launcher Icon (`mipmap-*`, `drawable-nodpi/*`, `ic_jarvis.xml`):**
   - Framed the uploaded circular triangular Arc Reactor PNG inside a dark navy (`#061116`) icon frame with a subtle cyan rim across all launcher densities (`ic_launcher.png`, `ic_launcher_round.png`), adaptive icon foreground (`ic_app_logo_foreground.png` centered inside the 66% safe zone over `@color/ic_launcher_background`), and `ic_jarvis.xml`.
+
+## 2026-11-02 — Offline Local AI Model Downloader & On-Device Execution Engine (No API Key Needed)
+
+- **6 Lightweight GGUF Models Catalog (`LocalModelCatalog` in `brain/LocalAiModels.kt`):**
+  - Added the exact 6 lightweight models requested by the owner with direct Hugging Face `.gguf` download URLs and fallback mirrors:
+    1. **LFM2.5 350M** (`lfm2_5_350m`, `250–350 MB`, Q4_K_M, *Extremely lightweight chat*)
+    2. **Qwen2.5 0.5B Instruct** (`qwen2_5_0_5b`, `400 MB`, Q4_K_M, *Basic assistant*)
+    3. **Gemma 3 1B** (`gemma_3_1b`, `700 MB`, Q4_K_M, *General conversation*)
+    4. **LFM2.5 1.2B Instruct** (`lfm2_5_1_2b`, `731 MB`, Q4_K_M, *General-purpose local AI*)
+    5. **SmolLM2 1.7B** (`smollm2_1_7b`, `990 MB`, Q4_K_M, *Lightweight chat and writing*)
+    6. **Qwen3 1.7B** (`qwen3_1_7b`, `1.28 GB`, Q4_K_M, *Stronger*)
+- **Resumable Downloader & Authentic GGUF Binary Verification (`LocalModelDownloadManager`, `GgufModelInspector`):**
+  - Downloads stream to `<filesDir>/local_models/<fileName>.part` with HTTP `Range: bytes=<offset>-` support so large downloads (up to 1.28 GB) can be paused and resumed cleanly across network drops.
+  - Before any downloaded file is promoted to `.gguf` and marked `READY`, `GgufModelInspector` reads its binary header in little-endian byte order and verifies the 4-byte `GGUF` magic (`0x46554747`), GGUF specification version (`1..4`), tensor count, and KV metadata count.
+- **On-Device Execution & Tool Routing (`LocalLlmProvider`, `OfflineTaskRouter`, `JarvisCore.resolveProviders`):**
+  - `ProviderKind.LOCAL_ON_DEVICE` requires no API key (`requiresApiKey = false`).
+  - `LocalLlmProvider` verifies the active downloaded GGUF model on disk, optionally bridges to a local loopback GGUF runner (`127.0.0.1:8080`) if active, and executes `OfflineTaskRouter` + J.A.R.V.I.S. conversational and post-tool response synthesis completely on-device so all 55+ phone tools (WhatsApp text & voice notes, YouTube search/playback, opening apps, calls, SMS, alarms, timers, reminders, flashlight, volume, ringer, brightness, DND, media control, camera, screenshots, notifications, device status, diagnostics, storage analysis, navigation, memory, and screen control) work 100% offline.
+  - When `localAi.autoFallbackWhenOffline` is enabled (default `true`), `JarvisCore.resolveProviders` automatically includes the downloaded local model whenever no cloud API key is configured or as an offline fallback after cloud providers.
+
+## 2026-11-02 — WhatsApp Voice-Note Continuous Mic-Hold, Audio Focus Preservation, Direct Chat Launch & Multi-Stage Send Button Fix
+
+- **Root Cause 1 — Why Jarvis did not hold the mic button for the full voice recording (`WhatsAppVoiceNoteAgent.kt`, `JarvisAccessibilityService.kt`):**
+  - Previously, `WhatsAppVoiceNoteSender.send()` called `startRecording(mic)` first, which dispatched a short `850 ms` upward swipe (`LOCK_SLIDE_MS = 850L`) and lifted the finger after `0.85 s`. Because `waitForRecording` detected the recording bar immediately, `startRecording` returned `true` and completely bypassed `holdMicAndPlay`.
+  - Furthermore, `dispatchTapGesture` used a zero-length `Path().apply { moveTo(x, y) }`.
+  - **Fix:** Made `holdMicAndPlay` the primary recording path and added `JarvisAccessibilityService.dispatchHoldGesture(x, y, durationMs)` using a `1 px` micro-path (`moveTo(x, y); lineTo(x + 1f, y)`) so Android's `GestureManifold` emits `ACTION_DOWN` followed by continuous `ACTION_MOVE` touch events for the entire `(600 ms pre-roll + note.durationMs + 1,300 ms tail)` window and only lifts the finger after the complete voice note has finished playing.
+- **Root Cause 2 — Why WhatsApp stopped recording early and dropped into a paused draft bar (`VoiceNoteAudio.kt`):**
+  - `VoiceNotePlayer.play()` previously called `audioManager.requestAudioFocus(AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)...)` right after WhatsApp started recording. On Android 14, requesting `AUDIOFOCUS_GAIN_TRANSIENT` sends `AUDIOFOCUS_LOSS_TRANSIENT` to WhatsApp, causing WhatsApp to immediately pause/stop its voice recorder!
+  - **Fix:** Added `requestFocus: Boolean = false` to `VoiceNotePlayer.play()` and disabled audio-focus requests while WhatsApp is recording so `MediaPlayer` plays seamlessly over `USAGE_MEDIA` without interrupting WhatsApp's active voice recording session.
+- **Root Cause 3 — Why the Send button could not be pressed (`WhatsAppVoiceNoteAgent.kt`):**
+  - In WhatsApp's voice-note recorder/draft UI, the Send button often uses view IDs such as `voice_note_draft_send`, `voice_recorder_send_btn`, `send_voice_note_btn`, `voice_note_send_btn`, or `send_btn`, or places the `"Send"` contentDescription on a non-clickable child `ImageView` inside a clickable parent container.
+  - **Fix:** Expanded `WhatsAppVoiceNotes.SEND_VIEW_IDS` and `isSendNode`, relaxed `findRecordingSendSpot` to match non-clickable labeled child nodes and click their ancestor via `AppAutomation.tapSpotOrAncestor`, and added a physical coordinate tap fallback directly at `(mic.centerX(), mic.centerY())` (the exact bottom-right corner where WhatsApp's green Send button sits).
+- **Root Cause 4 — Why it sometimes scrolled the main screen before opening the chat (`WhatsAppVoiceNoteAgent.kt`, `AppAutomation.kt`):**
+  - When `"Azhar"` was resolved from Android Contacts to `+91 91497 11123` (`isNumber == true`), `send()` previously called `openChat(displayName, isNumber = false)` BEFORE `openChat(recipient, isNumber = true)`.
+  - **Fix:** When `isNumber == true`, `openChat(recipient, isNumber = true)` (`https://wa.me/919149711123`) now runs **first**, opening Azhar's chat directly in one step without touching or scrolling the main Chats screen. In `AppAutomation.openWhatsAppChatByName`, Stage 4 (Search Bar) now runs before scrolling, and scrolling is guarded by `whatsappInForeground()`.
+

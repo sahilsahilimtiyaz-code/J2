@@ -95,18 +95,33 @@ data class JarvisUiState(
     val activePlan: com.jarvis.assistant.brain.TaskPlan? = null,
     val sharedPayload: com.jarvis.assistant.brain.SharedContentPayload? = null,
     val conversationSearchHits: List<com.jarvis.assistant.memory.MessageEntity> = emptyList(),
+    val localModels: Map<String, com.jarvis.assistant.brain.LocalModelDownloadStatus> = emptyMap(),
+    val freeStorageBytes: Long = 0L,
 ) {
     val showSettings: Boolean
         get() = tab == JarvisTab.SETTINGS
 
     val hasConfiguredProvider: Boolean
-        get() = settings.providers.any { it.enabled && it.hasSavedKey }
+        get() = settings.providers.any { it.enabled && it.hasSavedKey } ||
+            localModels.values.any { it.state == com.jarvis.assistant.brain.LocalDownloadState.READY }
 
     val defaultProviderName: String
         get() = settings.defaultProvider?.name ?: "No provider"
 
     val defaultProviderModel: String
-        get() = settings.defaultProvider?.model ?: "Claude 3.5 Sonnet"
+        get() {
+            val defaultProvider = settings.defaultProvider
+            if (defaultProvider?.kind == com.jarvis.assistant.brain.ProviderKind.LOCAL_ON_DEVICE) {
+                val spec = com.jarvis.assistant.brain.LocalModelCatalog.findByIdOrName(
+                    defaultProvider.model.ifBlank { settings.localAi.activeModelId },
+                )
+                if (spec != null) {
+                    val isReady = localModels[spec.id]?.state == com.jarvis.assistant.brain.LocalDownloadState.READY
+                    return if (isReady) "${spec.displayName} (Offline)" else "${spec.displayName} (Download Needed)"
+                }
+            }
+            return defaultProvider?.model ?: "Claude 3.5 Sonnet"
+        }
 
     val reactorState: com.jarvis.assistant.ui.components.ReactorState
         get() = when {

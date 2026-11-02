@@ -9,6 +9,7 @@ enum class ProviderKind(val label: String, val defaultBaseUrl: String) {
     OPENAI_COMPATIBLE("OpenAI-compatible", "https://openrouter.ai/api/v1"),
     GEMINI("Google Gemini", "https://generativelanguage.googleapis.com/v1beta"),
     ANTHROPIC("Anthropic", "https://api.anthropic.com/v1"),
+    LOCAL_ON_DEVICE("Offline Local AI", "http://127.0.0.1:8080/v1"),
 }
 
 enum class LlmRole { SYSTEM, USER, ASSISTANT, TOOL }
