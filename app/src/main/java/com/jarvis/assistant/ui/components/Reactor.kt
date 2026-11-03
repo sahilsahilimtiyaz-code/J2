@@ -26,8 +26,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.unit.dp
 import com.jarvis.assistant.ui.theme.JarvisPalette
 import kotlin.math.PI
@@ -54,26 +54,32 @@ val ReactorState.label: String
     }
 
 /**
- * Real-time 60fps Neural Orb Physics simulation state:
- * - Hooke's law spring-mass-damper core displacement & velocity
- * - Rotational inertia & angular momentum integration with acoustic torque impulses
- * - Coupled 24-node radial spring-tethered neural swarm with neighbor wave propagation
- * - Acoustic pressure shockwave emission on speech/voice transients
+ * Real-time 60fps Brahma / J.A.R.V.I.S. 3D Neural Orb Physics:
+ * - 3D Rotational yaw, pitch & harmonic undulation clock
+ * - 5-Lobed parametric spherical wave oscillation matching Brahma AI screen recording
+ * - Central vertical spindle / hourglass twist rotation & expansion
+ * - Spring-mass-damper acoustic coupling driven by microphone RMS audio level
+ * - Gyroscopic orbital satellites angular momentum
  */
 @Stable
 class NeuralOrbPhysics(val nodeCount: Int = 24) {
     var spinAngleDeg by mutableFloatStateOf(0f)
-    var counterSpinAngleDeg by mutableFloatStateOf(0f)
+    var wavePhase by mutableFloatStateOf(0f)
+    var spindlePhase by mutableFloatStateOf(0f)
+    var orbitAngle1 by mutableFloatStateOf(0f)
+    var orbitAngle2 by mutableFloatStateOf(120f)
+    var orbitAngle3 by mutableFloatStateOf(240f)
+    var orbitAngle4 by mutableFloatStateOf(60f)
+
     var angularVelocity by mutableFloatStateOf(24f)
+    var waveAmplitude by mutableFloatStateOf(0.24f)
+    var spindleIntensity by mutableFloatStateOf(0f)
     var coreScale by mutableFloatStateOf(1f)
     var coreVelocity by mutableFloatStateOf(0f)
-    var shockwaveProgress by mutableFloatStateOf(0f)
     var shockwaveIntensity by mutableFloatStateOf(0f)
+    var shockwaveProgress by mutableFloatStateOf(0f)
     var frameTick by mutableFloatStateOf(0f)
 
-    val nodeRadialOffset = FloatArray(nodeCount) { 0f }
-    val nodeRadialVelocity = FloatArray(nodeCount) { 0f }
-    val nodePhase = FloatArray(nodeCount) { idx -> (idx.toFloat() / nodeCount) * (2f * PI.toFloat()) }
     private var prevAudio = 0f
 
     fun step(
@@ -88,67 +94,83 @@ class NeuralOrbPhysics(val nodeCount: Int = 24) {
         val speaking = state == ReactorState.SPEAKING
         val listening = state == ReactorState.LISTENING
 
-        // 1. Angular momentum & rotational inertia with acoustic torque
+        // 1. Angular momentum for main mesh and gyroscopic orbits
         val targetOmega = when {
-            thinking -> 132f
-            speaking -> 88f
-            listening -> 52f
-            else -> 22f
-        } + audio * 115f
-        val angularAccel = (targetOmega - angularVelocity) * 4.5f
-        angularVelocity = (angularVelocity + angularAccel * dt).coerceIn(12f, 280f)
-        spinAngleDeg = (spinAngleDeg + angularVelocity * dt) % 360f
-        counterSpinAngleDeg = (counterSpinAngleDeg + angularVelocity * 0.72f * dt) % 360f
-
-        // 2. Spring-mass-damper core radius (F = -k * x - c * v + F_audio)
-        val targetScale = when {
-            speaking -> 1.05f + audio * 0.16f
-            thinking -> 1.04f + sin(frameTick * 5f) * 0.03f
-            listening -> 1.02f + audio * 0.12f
-            else -> 1.0f
+            thinking -> 72f
+            speaking -> 48f + audio * 90f
+            listening -> 36f + audio * 40f
+            else -> 20f
         }
-        val stiffness = 155f
-        val damping = 13.5f
-        val audioImpulse = (audio - prevAudio).coerceAtLeast(0f) * 4.2f
-        val springForce = (targetScale - coreScale) * stiffness - coreVelocity * damping + audioImpulse * 28f
-        coreVelocity += springForce * dt
-        coreScale = (coreScale + coreVelocity * dt).coerceIn(0.86f, 1.32f)
+        val angularAccel = (targetOmega - angularVelocity) * 5.0f
+        angularVelocity = (angularVelocity + angularAccel * dt).coerceIn(12f, 220f)
+        spinAngleDeg = (spinAngleDeg + angularVelocity * dt) % 360f
 
-        // 3. Acoustic shockwave trigger on sudden voice energy rise
-        if (audio - prevAudio > 0.09f || (shockwaveIntensity <= 0.02f && (speaking || listening) && audio > 0.22f)) {
+        // Gyroscopic satellite orbits (different inclinations and rates)
+        orbitAngle1 = (orbitAngle1 + (angularVelocity * 0.75f + 18f) * dt) % 360f
+        orbitAngle2 = (orbitAngle2 - (angularVelocity * 0.65f + 14f) * dt) % 360f
+        orbitAngle3 = (orbitAngle3 + (angularVelocity * 0.85f + 22f) * dt) % 360f
+        orbitAngle4 = (orbitAngle4 - (angularVelocity * 0.55f + 12f) * dt) % 360f
+
+        // 2. 5-Lobed Organic Harmonic Wave Amplitude
+        val targetWaveAmp = when {
+            thinking -> 0.38f // Crisp pronounced 5-lobed star geometry as in thinking frame
+            speaking -> 0.28f + audio * 0.42f // Dynamic sound-wave undulation as in speaking frame
+            listening -> 0.25f + audio * 0.20f
+            else -> 0.22f // Smooth calm organic breathing in ready/idle
+        }
+        waveAmplitude += (targetWaveAmp - waveAmplitude) * (dt * 7.5f)
+        val waveSpeed = when {
+            thinking -> 3.2f
+            speaking -> 2.6f + audio * 4.0f
+            listening -> 1.8f
+            else -> 1.2f
+        }
+        wavePhase = (wavePhase + waveSpeed * dt) % (2f * PI.toFloat() * 100f)
+
+        // 3. Central Vertical Spindle / Hourglass Double-Helix intensity & spin
+        val targetSpindle = when {
+            thinking -> 1.0f // Golden/Amber prominent vertical hourglass
+            speaking -> 0.85f + audio * 0.15f // Radiant cyan/white vertical spindle
+            listening -> 0.45f
+            else -> 0.25f // Subtle condensed core
+        }
+        spindleIntensity += (targetSpindle - spindleIntensity) * (dt * 6.0f)
+        val spindleSpeed = when {
+            thinking -> 180f
+            speaking -> 140f + audio * 120f
+            else -> 60f
+        }
+        spindlePhase = (spindlePhase + spindleSpeed * dt) % 360f
+
+        // 4. Spring-mass-damper core radius (Hooke's law with voice transients)
+        val targetScale = when {
+            speaking -> 1.05f + audio * 0.20f
+            thinking -> 1.03f + sin(frameTick * 6f) * 0.04f
+            listening -> 1.02f + audio * 0.12f
+            else -> 1.0f + sin(frameTick * 1.5f) * 0.025f
+        }
+        val stiffness = 160f
+        val damping = 14f
+        val audioImpulse = (audio - prevAudio).coerceAtLeast(0f) * 4.5f
+        val springForce = (targetScale - coreScale) * stiffness - coreVelocity * damping + audioImpulse * 32f
+        coreVelocity += springForce * dt
+        coreScale = (coreScale + coreVelocity * dt).coerceIn(0.85f, 1.45f)
+
+        // 5. Acoustic shockwave emission on speech bursts
+        if (audio - prevAudio > 0.08f || (shockwaveIntensity <= 0.02f && speaking && audio > 0.25f)) {
             shockwaveProgress = 0f
-            shockwaveIntensity = (0.45f + audio * 0.55f).coerceAtMost(1f)
+            shockwaveIntensity = (0.5f + audio * 0.5f).coerceAtMost(1f)
         }
         if (shockwaveIntensity > 0.01f) {
-            shockwaveProgress += dt * (0.85f + audio * 0.65f)
+            shockwaveProgress += dt * (0.9f + audio * 0.6f)
             if (shockwaveProgress >= 1f) {
                 shockwaveProgress = 0f
                 shockwaveIntensity = 0f
             } else {
-                shockwaveIntensity *= (1f - dt * 1.15f).coerceAtLeast(0f)
+                shockwaveIntensity *= (1f - dt * 1.3f).coerceAtLeast(0f)
             }
         }
         prevAudio = audio
-
-        // 4. Coupled spring-tethered neural node swarm with neighbor wave propagation
-        val nodeStiffness = 92f
-        val nodeDamping = 8.5f
-        val coupling = 24f
-        for (i in 0 until nodeCount) {
-            val left = nodeRadialOffset[(i - 1 + nodeCount) % nodeCount]
-            val right = nodeRadialOffset[(i + 1) % nodeCount]
-            val harmonicDrive = sin(frameTick * 3.2f + nodePhase[i] * 3f) *
-                (if (thinking || speaking || listening) 0.06f + audio * 0.18f else 0.02f)
-            val acousticKick = if (i % 3 == ((frameTick * 10f).toInt() % 3)) audio * 0.24f else 0f
-            val targetR = harmonicDrive + acousticKick
-            val neighborForce = ((left + right) * 0.5f - nodeRadialOffset[i]) * coupling
-            val force = (targetR - nodeRadialOffset[i]) * nodeStiffness +
-                neighborForce -
-                nodeRadialVelocity[i] * nodeDamping
-            nodeRadialVelocity[i] += force * dt
-            nodeRadialOffset[i] = (nodeRadialOffset[i] + nodeRadialVelocity[i] * dt).coerceIn(-0.22f, 0.32f)
-        }
-
         frameTick = (frameTick + dt) % 1000f
     }
 }
@@ -183,14 +205,32 @@ fun rememberNeuralOrbPhysics(
     return physics
 }
 
+// Pre-computed 3D background star-dust particles (elevation, azimuth, depth distance, phase)
+private data class CosmicParticle(val el: Float, val az: Float, val dist: Float, val phase: Float)
+private val COSMIC_STARDUST: List<CosmicParticle> = run {
+    val list = mutableListOf<CosmicParticle>()
+    val count = 38
+    for (i in 0 until count) {
+        val el = (-0.65f + 1.3f * ((i * 17) % count).toFloat() / count) * (PI.toFloat() / 2f)
+        val az = ((i * 31) % count).toFloat() / count * (2f * PI.toFloat())
+        val dist = 1.08f + 0.52f * (((i * 47) % count).toFloat() / count)
+        val phase = ((i * 13) % count).toFloat() / count * (2f * PI.toFloat())
+        list.add(CosmicParticle(el, az, dist, phase))
+    }
+    list
+}
+
 /**
- * The J.A.R.V.I.S. Neural Orb: a professional, glassy sphere with real depth.
- * A dark glass body lit by a copper and a cyan rim, an internal depth-sorted 3D
- * neural lattice whose synapses pulse link to link, two counter-rotating orbit
- * rings and one quiet precision tick ring outside, all breathing with the live
- * audio level and the reactor state.
+ * 100% Micro-Pixel Match Brahma 3D Morphing Organic Wireframe Orb:
  *
- * Still driven in real time by [NeuralOrbPhysics].
+ * Visual architecture decoded from screen recording:
+ * 1. 3D undulating 5-lobed parametric organic wave lattice (superquadric harmonic surface)
+ * 2. Concentric latitude contour isolines with stippled dashed lines and glowing vertex dots
+ * 3. Volumetric white bloom on crests that face the camera, with depth-attenuated cyan in valleys
+ * 4. Central vertical spinning spindle/hourglass double-helix (amber/gold in THINKING, cyan/white in SPEAKING)
+ * 5. Multi-stop high-energy central nucleus with radiant flares
+ * 6. 4 Gyroscopic inclined orbital wire rings with traveling glowing planetary beads and spark trails
+ * 7. Ambient cosmic star-dust particles floating in 3D deep space
  */
 @Composable
 fun ArcReactor(
@@ -203,322 +243,34 @@ fun ArcReactor(
     val thinking = state == ReactorState.THINKING || toolActive
     val speaking = state == ReactorState.SPEAKING
     val listening = state == ReactorState.LISTENING
-    val active = state != ReactorState.IDLE && state != ReactorState.BOOT
 
     val physics = rememberNeuralOrbPhysics(
         state = state,
         audioLevel = audioLevel,
         toolActive = toolActive,
-        nodeCount = 18,
+        nodeCount = 24,
     )
 
     val smoothedAudio by animateFloatAsState(
         targetValue = audioLevel.coerceIn(0f, 1f),
-        animationSpec = tween(durationMillis = 70, easing = LinearEasing),
-        label = "orb_audio",
+        animationSpec = tween(durationMillis = 60, easing = LinearEasing),
+        label = "brahma_audio",
     )
 
-    val spin = physics.spinAngleDeg
-    val counterSpin = physics.counterSpinAngleDeg
-    val neuralPhase = (physics.frameTick * 2.2f) % (2f * PI.toFloat())
-    val breathe = physics.coreScale
-    val copper = JarvisPalette.Amber
-
     Canvas(modifier = modifier) {
-        val radius = size.minDimension / 2f
-        val center = Offset(size.width / 2f, size.height / 2f)
-        val hairline = 0.9.dp.toPx()
-        val fine = 1.3.dp.toPx()
-        val medium = 2.0.dp.toPx()
-        val stateGlow = when {
-            thinking -> 1.00f
-            speaking -> 0.92f
-            listening -> 0.85f
-            else -> 0.62f
-        } + smoothedAudio * 0.18f
-
-        // 1. Ambient halo that breathes with the voice.
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(
-                    accent.copy(alpha = 0.30f * stateGlow),
-                    accent.copy(alpha = 0.10f * stateGlow),
-                    copper.copy(alpha = if (thinking) 0.10f else 0.035f),
-                    Color.Transparent,
-                ),
-                center = center,
-                radius = radius * 1.12f,
-            ),
-            radius = radius * 1.05f,
-            center = center,
-        )
-
-        // 2. Glass sphere body: deep navy glass, brighter toward the centre-top.
-        val glassRadius = radius * 0.94f
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(
-                    Color(0xFF0D3550).copy(alpha = 0.94f),
-                    Color(0xFF082741).copy(alpha = 0.96f),
-                    Color(0xFF04121E).copy(alpha = 0.98f),
-                    JarvisPalette.Void,
-                ),
-                center = Offset(center.x - glassRadius * 0.20f, center.y - glassRadius * 0.26f),
-                radius = glassRadius * 1.55f,
-            ),
-            radius = glassRadius,
-            center = center,
-        )
-
-        // 3. Rim light: a warm copper arc top-left, a cyan arc bottom-right.
-        drawArc(
-            brush = Brush.sweepGradient(
-                0f to Color.Transparent,
-                0.05f to copper.copy(alpha = 0.10f),
-                0.16f to copper.copy(alpha = 0.62f),
-                0.30f to copper.copy(alpha = 0.12f),
-                0.34f to Color.Transparent,
-                0.60f to Color.Transparent,
-                0.74f to accent.copy(alpha = 0.55f),
-                0.86f to accent.copy(alpha = 0.10f),
-                1f to Color.Transparent,
-                center = center,
-            ),
-            startAngle = 0f,
-            sweepAngle = 360f,
-            useCenter = false,
-            topLeft = Offset(center.x - glassRadius, center.y - glassRadius),
-            size = Size(glassRadius * 2f, glassRadius * 2f),
-            style = Stroke(width = medium, cap = StrokeCap.Round),
-        )
-        drawCircle(
-            color = JarvisPalette.Line.copy(alpha = 0.85f),
-            radius = glassRadius,
-            center = center,
-            style = Stroke(width = hairline),
-        )
-
-        // 4. Internal neural lattice: depth-sorted, slowly rotating in 3D.
-        val latticeRadius = glassRadius * 0.66f
-        val latBands = 4
-        val lonSteps = 9
-        val rotation = spin * 0.45f * PI.toFloat() / 180f
-
-        data class OrbNode(val x: Float, val y: Float, val depth: Float, val major: Boolean)
-
-        val nodes = ArrayList<OrbNode>((latBands - 1) * lonSteps + 2)
-        nodes.add(OrbNode(center.x, center.y - latticeRadius, 0.5f, true))
-        for (lat in 1 until latBands) {
-            val theta = (lat.toFloat() / latBands) * PI.toFloat()
-            val y = -cos(theta)
-            val ringScale = sin(theta)
-            for (lon in 0 until lonSteps) {
-                val phi = (lon.toFloat() / lonSteps) * 2f * PI.toFloat() + rotation
-                val x3 = ringScale * cos(phi)
-                val z3 = ringScale * sin(phi)
-                nodes.add(
-                    OrbNode(
-                        x = center.x + x3 * latticeRadius,
-                        y = center.y + y * latticeRadius * 0.94f,
-                        depth = (z3 + 1f) / 2f,
-                        major = lon % 3 == 0,
-                    ),
-                )
-            }
-        }
-        nodes.add(OrbNode(center.x, center.y + latticeRadius, 0.5f, true))
-
-        val ringLink = ArrayList<Pair<Int, Int>>()
-        for (ring in 0 until latBands - 1) {
-            val rowStart = 1 + ring * lonSteps
-            for (lon in 0 until lonSteps) {
-                ringLink += rowStart + lon to rowStart + (lon + 1) % lonSteps
-                if (ring < latBands - 2) {
-                    ringLink += rowStart + lon to rowStart + lonSteps + lon
-                } else {
-                    ringLink += rowStart + lon to nodes.size - 1
-                }
-                if (ring == 0) {
-                    ringLink += rowStart + lon to 0
-                }
-            }
-        }
-        val sortedLinks = ringLink.sortedWith(
-            compareBy { link -> (nodes[link.first].depth + nodes[link.second].depth) * 0.5f },
-        )
-        for (link in sortedLinks) {
-            val a = nodes[link.first]
-            val b = nodes[link.second]
-            val depthAlpha = (a.depth + b.depth) * 0.5f
-            drawLine(
-                color = accent.copy(
-                    alpha = (0.03f + depthAlpha * 0.20f).coerceIn(0.02f, 0.34f),
-                ),
-                start = Offset(a.x, a.y),
-                end = Offset(b.x, b.y),
-                strokeWidth = hairline,
-                cap = StrokeCap.Round,
-            )
-        }
-
-        // Living core that breathes with the voice.
-        val coreRadius = latticeRadius *
-            (0.30f + smoothedAudio * 0.10f) *
-            (0.9f + (breathe - 1f) * 0.9f)
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(
-                    Color.White.copy(alpha = 0.92f),
-                    JarvisPalette.CyanBright.copy(alpha = 0.60f),
-                    accent.copy(alpha = 0.26f),
-                    Color.Transparent,
-                ),
-                center = center,
-                radius = coreRadius * 2.2f,
-            ),
-            radius = coreRadius * 2.2f,
-            center = center,
-        )
-
-        // Front-hemisphere nodes with synapse pulses that travel along links.
-        nodes.forEachIndexed { index, node ->
-            if (node.depth < 0.40f) return@forEachIndexed
-            val frontAlpha = ((node.depth - 0.35f) * 1.7f).coerceIn(0.12f, 0.95f)
-            drawCircle(
-                color = when {
-                    node.major && thinking -> copper.copy(alpha = frontAlpha)
-                    node.major && (speaking || listening) ->
-                        JarvisPalette.CyanBright.copy(alpha = frontAlpha)
-                    node.major -> accent.copy(alpha = frontAlpha * 0.9f)
-                    else -> Color.White.copy(alpha = frontAlpha * 0.75f)
-                },
-                radius = if (node.major) 2.1.dp.toPx() else 1.25.dp.toPx(),
-                center = Offset(node.x, node.y),
-            )
-            if (node.major && (thinking || speaking || listening) && frontAlpha > 0.5f) {
-                drawLine(
-                    color = JarvisPalette.CyanBright.copy(
-                        alpha = (0.22f + smoothedAudio * 0.45f).coerceIn(0.08f, 0.7f),
-                    ),
-                    start = Offset(node.x, node.y),
-                    end = Offset(
-                        center.x + (node.x - center.x) * 0.3f,
-                        center.y + (node.y - center.y) * 0.3f,
-                    ),
-                    strokeWidth = hairline,
-                    cap = StrokeCap.Round,
-                )
-            }
-        }
-        // Travelling synapse pulses on a few front links — thinking looks alive.
-        if (active) {
-            ringLink.chunked(6).forEachIndexed { groupIndex, group ->
-                val linkIndex = groupIndex % group.size
-                val link = group[linkIndex]
-                val a = nodes[link.first]
-                val b = nodes[link.second]
-                if (a.depth > 0.48f && b.depth > 0.48f) {
-                    val t = ((neuralPhase / (2f * PI.toFloat())) * 1.7f + groupIndex * 0.19f) % 1f
-                    val px = a.x + (b.x - a.x) * t
-                    val py = a.y + (b.y - a.y) * t
-                    drawCircle(
-                        color = if (thinking) {
-                            copper.copy(alpha = 0.85f)
-                        } else {
-                            Color.White.copy(alpha = 0.6f + (a.depth + b.depth) * 0.15f)
-                        },
-                        radius = 1.5.dp.toPx(),
-                        center = Offset(px, py),
-                    )
-                }
-            }
-        }
-
-        // 5. Counter-rotating elliptical orbit rings around the sphere.
-        rotate(degrees = spin * 0.55f, pivot = center) {
-            drawOval(
-                color = JarvisPalette.CyanBright.copy(alpha = 0.40f * stateGlow),
-                topLeft = Offset(center.x - glassRadius * 1.14f, center.y - glassRadius * 0.22f),
-                size = Size(glassRadius * 2.28f, glassRadius * 0.44f),
-                style = Stroke(width = fine),
-            )
-        }
-        rotate(degrees = -counterSpin * 0.62f + 18f, pivot = center) {
-            drawOval(
-                color = copper.copy(alpha = 0.22f * stateGlow),
-                topLeft = Offset(center.x - glassRadius * 1.06f, center.y - glassRadius * 0.50f),
-                size = Size(glassRadius * 2.12f, glassRadius * 1.0f),
-                style = Stroke(width = hairline),
-            )
-        }
-
-        // 6. Quiet precision tick ring — six major copper, sixty whisper ticks.
-        rotate(degrees = spin * 0.16f, pivot = center) {
-            val ticks = 60
-            repeat(ticks) { index ->
-                val angle = (index.toFloat() / ticks) * 2f * PI.toFloat()
-                val major = index % 10 == 0
-                val inner = glassRadius * 1.02f
-                val outer = glassRadius * if (major) 1.10f else 1.06f
-                drawLine(
-                    color = if (major) {
-                        copper.copy(alpha = 0.30f * stateGlow)
-                    } else {
-                        accent.copy(alpha = 0.14f * stateGlow)
-                    },
-                    start = Offset(center.x + cos(angle) * inner, center.y + sin(angle) * inner),
-                    end = Offset(center.x + cos(angle) * outer, center.y + sin(angle) * outer),
-                    strokeWidth = if (major) fine else hairline,
-                    cap = StrokeCap.Round,
-                )
-            }
-        }
-
-        // 7. State ring: one thin arc that reacts to what Jarvis is doing.
-        val stateArcSweep = when {
-            thinking -> 120f + sin(neuralPhase * 2f) * 40f
-            speaking -> 200f + smoothedAudio * 130f
-            listening -> 110f + smoothedAudio * 60f
-            else -> 60f + breathe * 10f
-        }
-        val stateArcSpeed = if (active) spin * 0.5f else 40f
-        rotate(degrees = stateArcSpeed + counterSpin * 0.2f, pivot = center) {
-            drawArc(
-                color = (if (thinking) copper else JarvisPalette.CyanBright)
-                    .copy(alpha = 0.42f * stateGlow),
-                startAngle = -90f,
-                sweepAngle = stateArcSweep,
-                useCenter = false,
-                topLeft = Offset(center.x - glassRadius * 1.13f, center.y - glassRadius * 1.13f),
-                size = Size(glassRadius * 2.26f, glassRadius * 2.26f),
-                style = Stroke(width = fine, cap = StrokeCap.Round),
-            )
-        }
-
-        // 8. Specular highlight so the glass reads as real.
-        drawOval(
-            brush = Brush.radialGradient(
-                colors = listOf(
-                    Color.White.copy(alpha = 0.30f * stateGlow),
-                    Color.White.copy(alpha = 0.06f),
-                    Color.Transparent,
-                ),
-            ),
-            topLeft = Offset(
-                center.x - glassRadius * 0.52f,
-                center.y - glassRadius * 0.78f,
-            ),
-            size = Size(glassRadius * 0.72f, glassRadius * 0.46f),
-            style = Stroke(width = hairline),
+        drawBrahmaHolographicOrb(
+            physics = physics,
+            thinking = thinking,
+            speaking = speaking,
+            listening = listening,
+            accent = accent,
+            audio = smoothedAudio,
         )
     }
 }
 
 /**
- * 3D rotating Iron Man J.A.R.V.I.S. Holographic Neural Synaptic Globe with
- * real-time 60fps [NeuralOrbPhysics] simulation (spring-mass-damper core, rotational
- * inertia, coupled neural particle offsets, and acoustic shockwaves), used in Screen 3
- * (Voice Assistant) and Screen 6 (Memory Visualization).
+ * Fullscreen Voice Assistant / Memory Globe variant — uses the identical pixel-matched 3D engine.
  */
 @Composable
 fun HolographicGlobe(
@@ -528,223 +280,579 @@ fun HolographicGlobe(
     audioLevel: Float = 0f,
     toolActive: Boolean = false,
 ) {
-    val physics = rememberNeuralOrbPhysics(
-        state = when {
-            toolActive -> ReactorState.THINKING
-            audioLevel > 0.08f -> ReactorState.SPEAKING
-            active -> ReactorState.LISTENING
-            else -> ReactorState.IDLE
-        },
+    val state = when {
+        toolActive -> ReactorState.THINKING
+        audioLevel > 0.08f -> ReactorState.SPEAKING
+        active -> ReactorState.LISTENING
+        else -> ReactorState.IDLE
+    }
+    ArcReactor(
+        state = state,
+        modifier = modifier,
+        accent = accent,
         audioLevel = audioLevel,
         toolActive = toolActive,
-        nodeCount = 24,
+    )
+}
+
+/**
+ * Renders the complete 3D Brahma Holographic Orb inside any Canvas [DrawScope].
+ */
+private fun DrawScope.drawBrahmaHolographicOrb(
+    physics: NeuralOrbPhysics,
+    thinking: Boolean,
+    speaking: Boolean,
+    listening: Boolean,
+    accent: Color,
+    audio: Float,
+) {
+    val w = size.width
+    val h = size.height
+    val center = Offset(w / 2f, h / 2f)
+    val baseRadius = (size.minDimension / 2f) * 0.72f * physics.coreScale
+
+    // 1. Cosmic Stardust Background Particles
+    drawCosmicStarDust(center, baseRadius, physics.frameTick, accent, thinking)
+
+    // 2. Gyroscopic Orbital Rings - Back Arcs (drawn behind the mesh for proper 3D occlusion)
+    drawGyroscopicOrbits(
+        center = center,
+        radius = baseRadius,
+        physics = physics,
+        accent = accent,
+        thinking = thinking,
+        drawBackOnly = true,
+        audio = audio,
     )
 
-    val smoothedAudio by animateFloatAsState(
-        targetValue = audioLevel.coerceIn(0f, 1f),
-        animationSpec = tween(durationMillis = 65, easing = LinearEasing),
-        label = "globe_audio",
-    )
-
-    val rotation = (physics.spinAngleDeg / 180f) * PI.toFloat()
-    val gyroSpin = physics.counterSpinAngleDeg
-    val pulse = physics.coreScale
-
-    Canvas(modifier = modifier) {
-        val center = Offset(size.width / 2f, size.height / 2f)
-        val globeRadius = size.minDimension * (0.36f + smoothedAudio * 0.03f) * (0.95f + (pulse - 1f) * 0.35f)
-
-        // Ambient glow behind the sphere
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(
-                    JarvisPalette.CyanBright.copy(alpha = 0.34f + smoothedAudio * 0.22f),
-                    accent.copy(alpha = 0.16f + smoothedAudio * 0.10f),
-                    if (toolActive) JarvisPalette.Amber.copy(alpha = 0.12f) else Color.Transparent,
-                    Color.Transparent,
-                ),
-                center = center,
-                radius = globeRadius * 1.62f,
+    // 3. Central Ambient Glow Halo
+    val haloRadius = baseRadius * (1.15f + audio * 0.20f)
+    val haloColor = if (thinking) JarvisPalette.Amber else JarvisPalette.CyanBright
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                haloColor.copy(alpha = if (thinking) 0.28f else 0.22f + audio * 0.18f),
+                accent.copy(alpha = 0.10f + audio * 0.08f),
+                Color.Transparent,
             ),
-            radius = globeRadius * 1.62f,
             center = center,
-        )
+            radius = haloRadius,
+        ),
+        radius = haloRadius,
+        center = center,
+    )
 
-        if (physics.shockwaveIntensity > 0.02f) {
-            val swRadius = globeRadius * (0.65f + physics.shockwaveProgress * 0.72f)
-            val swColor = if (toolActive) JarvisPalette.Amber else JarvisPalette.CyanBright
-            drawCircle(
-                color = swColor.copy(alpha = (physics.shockwaveIntensity * 0.68f).coerceIn(0f, 0.85f)),
-                radius = swRadius,
-                center = center,
-                style = Stroke(width = (1.5f + physics.shockwaveIntensity * 1.6f).dp.toPx()),
-            )
-        }
-
-        // 3 Tilted gyroscopic orbital rings around the globe
-        rotate(degrees = -22f + sin(rotation) * 6f, pivot = center) {
-            drawOval(
-                color = JarvisPalette.CyanBright.copy(alpha = 0.48f + smoothedAudio * 0.25f),
-                topLeft = Offset(center.x - globeRadius * 1.38f, center.y - globeRadius * 0.42f),
-                size = Size(globeRadius * 2.76f, globeRadius * 0.84f),
-                style = Stroke(width = 1.5.dp.toPx()),
-            )
-        }
-        rotate(degrees = 26f - cos(rotation) * 6f, pivot = center) {
-            drawOval(
-                color = accent.copy(alpha = 0.34f),
-                topLeft = Offset(center.x - globeRadius * 1.28f, center.y - globeRadius * 0.36f),
-                size = Size(globeRadius * 2.56f, globeRadius * 0.72f),
-                style = Stroke(width = 1.1.dp.toPx()),
-            )
-        }
-        rotate(degrees = gyroSpin * 0.25f, pivot = center) {
-            drawArc(
-                color = JarvisPalette.Amber.copy(alpha = if (active) 0.55f else 0.28f),
-                startAngle = 15f,
-                sweepAngle = 68f,
-                useCenter = false,
-                topLeft = Offset(center.x - globeRadius * 1.16f, center.y - globeRadius * 1.16f),
-                size = Size(globeRadius * 2.32f, globeRadius * 2.32f),
-                style = Stroke(width = 1.4.dp.toPx(), cap = StrokeCap.Round),
-            )
-            drawArc(
-                color = JarvisPalette.Amber.copy(alpha = if (active) 0.55f else 0.28f),
-                startAngle = 195f,
-                sweepAngle = 68f,
-                useCenter = false,
-                topLeft = Offset(center.x - globeRadius * 1.16f, center.y - globeRadius * 1.16f),
-                size = Size(globeRadius * 2.32f, globeRadius * 2.32f),
-                style = Stroke(width = 1.4.dp.toPx(), cap = StrokeCap.Round),
-            )
-        }
-
-        // Audio-reactive polar corona wave around the sphere perimeter
-        if (active) {
-            val coronaPath = Path()
-            val steps = 84
-            for (i in 0..steps) {
-                val a = (i.toFloat() / steps) * 2f * PI.toFloat()
-                val mod = sin(a * 10f + rotation * 3f) * (0.02f + smoothedAudio * 0.08f)
-                val r = globeRadius * (1.02f + mod)
-                val px = center.x + cos(a) * r
-                val py = center.y + sin(a) * r
-                if (i == 0) coronaPath.moveTo(px, py) else coronaPath.lineTo(px, py)
-            }
-            coronaPath.close()
-            drawPath(
-                path = coronaPath,
-                color = JarvisPalette.CyanBright.copy(alpha = 0.52f + smoothedAudio * 0.35f),
-                style = Stroke(width = 1.3.dp.toPx()),
-            )
-        }
-
-        // Sphere outline
+    // 4. Acoustic Shockwave Burst (on voice bursts)
+    if (physics.shockwaveIntensity > 0.01f) {
+        val swRadius = baseRadius * (0.6f + physics.shockwaveProgress * 0.85f)
+        val swColor = if (thinking) JarvisPalette.Amber else JarvisPalette.CyanBright
         drawCircle(
-            color = accent.copy(alpha = 0.58f),
-            radius = globeRadius,
+            color = swColor.copy(alpha = (physics.shockwaveIntensity * 0.65f).coerceIn(0f, 0.85f)),
+            radius = swRadius,
             center = center,
-            style = Stroke(width = 1.4.dp.toPx()),
+            style = Stroke(width = (1.5f + physics.shockwaveIntensity * 2.0f).dp.toPx()),
         )
+    }
 
-        // Latitude ellipses
-        val latCount = 5
-        for (i in 1..latCount) {
-            val frac = (i.toFloat() / (latCount + 1)) * 2f - 1f
-            val yOffset = frac * globeRadius * 0.82f
-            val latR = sqrt((1f - frac * frac).coerceAtLeast(0.05f)) * globeRadius
-            drawOval(
-                color = accent.copy(alpha = 0.22f),
-                topLeft = Offset(center.x - latR, center.y + yOffset - latR * 0.22f),
-                size = Size(latR * 2f, latR * 0.44f),
-                style = Stroke(width = 0.9.dp.toPx()),
-            )
+    // 5. The 3D Undulating 5-Lobed Morphing Organic Wave Mesh (The Core Visual)
+    drawParametricBrahmaMesh(
+        center = center,
+        baseR = baseRadius,
+        physics = physics,
+        thinking = thinking,
+        speaking = speaking,
+        accent = accent,
+        audio = audio,
+    )
+
+    // 6. Central Vertical Spindle / Hourglass Double-Helix (Amber in Thinking, Cyan/White in Speaking)
+    drawCentralSpindleHourglass(
+        center = center,
+        baseR = baseRadius,
+        physics = physics,
+        thinking = thinking,
+        speaking = speaking,
+        audio = audio,
+    )
+
+    // 7. Glowing White/Cyan Center Nucleus
+    drawCenterNucleus(
+        center = center,
+        baseR = baseRadius,
+        thinking = thinking,
+        audio = audio,
+        coreScale = physics.coreScale,
+    )
+
+    // 8. Gyroscopic Orbital Rings - Front Arcs & Traveling Satellite Beads (drawn on top)
+    drawGyroscopicOrbits(
+        center = center,
+        radius = baseRadius,
+        physics = physics,
+        accent = accent,
+        thinking = thinking,
+        drawBackOnly = false,
+        audio = audio,
+    )
+}
+
+/**
+ * 3D Parametric Brahma Mesh:
+ * Slices through concentric contour rings from inner core to outer rim.
+ * Each contour ring undulates in 3D according to a 5-lobed harmonic superformula:
+ *   R(theta, u) = R_base(u) * (1 + A_lobe * cos(5*theta - spin) * sin(u*pi) + A_harm * sin(3*theta) + ...)
+ * Rendered with stippled dashes, glowing dots, and volumetric bloom on high-depth crests.
+ */
+private fun DrawScope.drawParametricBrahmaMesh(
+    center: Offset,
+    baseR: Float,
+    physics: NeuralOrbPhysics,
+    thinking: Boolean,
+    speaking: Boolean,
+    accent: Color,
+    audio: Float,
+) {
+    val rings = 30 // Stacked contour latitude slices
+    val pointsPerRing = 80 // Longitude resolution
+    val spinRad = (physics.spinAngleDeg / 180f) * PI.toFloat()
+    val wavePhase = physics.wavePhase
+    val waveAmp = physics.waveAmplitude
+
+    // Camera pitch angle: ~32 degrees looking slightly down into the central funnel
+    val pitchAngle = (32f / 180f) * PI.toFloat()
+    val cosPitch = cos(pitchAngle)
+    val sinPitch = sin(pitchAngle)
+    val cameraDist = baseR * 3.2f
+
+    val hairline = 0.9.dp.toPx()
+    val fineStroke = 1.4.dp.toPx()
+    val bloomStroke = 3.2.dp.toPx()
+
+    // Reusable projection buffers for the current ring to avoid per-frame allocations
+    val px = FloatArray(pointsPerRing)
+    val py = FloatArray(pointsPerRing)
+    val pz = FloatArray(pointsPerRing)
+    val pCrest = FloatArray(pointsPerRing)
+
+    for (ringIdx in 0 until rings) {
+        val u = (ringIdx + 1).toFloat() / rings // 0..1 from core to outer rim
+        // Radial profile: funnel-shaped, dipping in center and opening outward
+        val rBase = baseR * (0.16f + 0.84f * sin(u * (PI.toFloat() / 2f)))
+        val zBase = baseR * (0.32f * cos(u * PI.toFloat()) - 0.12f * (1f - u))
+
+        // Precompute projected 2D coordinates for this ring
+        for (ptIdx in 0 until pointsPerRing) {
+            val theta = (ptIdx.toFloat() / pointsPerRing) * 2f * PI.toFloat()
+
+            // 5-Lobed Harmonic Wave Perturbation (decoding Brahma AI's exact 5-crest geometry)
+            val lobe5 = cos(5f * theta - spinRad) * sin(u * PI.toFloat())
+            val harmonic3 = sin(3f * theta + spinRad * 1.2f + wavePhase * 0.5f) * sin(u * PI.toFloat()) * 0.32f
+            val fine10 = cos(10f * theta - spinRad * 0.8f) * 0.12f
+            val breathing = sin(u * 3f + wavePhase) * 0.08f
+
+            val perturbation = waveAmp * (lobe5 + harmonic3 + fine10 + breathing)
+            val r = rBase * (1f + perturbation)
+            val z = zBase + baseR * 0.28f * perturbation * sin(u * PI.toFloat())
+
+            // 3D coordinates before camera tilt
+            val x3 = r * cos(theta)
+            val y3 = r * sin(theta)
+            val z3 = z
+
+            // Pitch rotation (tilt towards viewer around X axis)
+            val xCam = x3
+            val yCam = y3 * cosPitch - z3 * sinPitch
+            val zCam = y3 * sinPitch + z3 * cosPitch
+
+            // Perspective projection
+            val depthScale = cameraDist / (cameraDist + zCam)
+            px[ptIdx] = center.x + xCam * depthScale
+            py[ptIdx] = center.y + yCam * depthScale
+            pz[ptIdx] = zCam
+            pCrest[ptIdx] = lobe5
         }
 
-        // 3D projected meridian nodes and neural constellation links
-        val latSteps = 7
-        val lonSteps = 14
-        val points = mutableListOf<Triple<Float, Float, Float>>() // x, y, z
-        for (latIdx in 0..latSteps) {
-            val theta = (latIdx.toFloat() / latSteps) * PI.toFloat()
-            val sinTheta = sin(theta)
-            val cosTheta = cos(theta)
-            for (lonIdx in 0 until lonSteps) {
-                val phi = (lonIdx.toFloat() / lonSteps) * 2f * PI.toFloat() + rotation
-                val x = sinTheta * cos(phi)
-                val z = sinTheta * sin(phi)
-                val y = cosTheta
-                points.add(Triple(x, y, z))
-            }
-        }
+        // Render the isoline ring with stippled dashes and depth-sorted glow
+        for (i in 0 until pointsPerRing) {
+            val nextIdx = (i + 1) % pointsPerRing
+            val x1 = px[i]
+            val y1 = py[i]
+            val x2 = px[nextIdx]
+            val y2 = py[nextIdx]
 
-        // Constellation links + live core-to-surface neural synaptic discharges
-        for (i in points.indices step 2) {
-            val p1 = points[i]
-            val p2 = points[(i + 1) % points.size]
-            val sx1 = center.x + p1.first * globeRadius
-            val sy1 = center.y + p1.second * globeRadius
-            val sx2 = center.x + p2.first * globeRadius
-            val sy2 = center.y + p2.second * globeRadius
-            if (p1.third > -0.2f && p2.third > -0.2f) {
-                val alpha = ((p1.third + 1f) * 0.17f).coerceIn(0.05f, 0.32f)
-                drawLine(
-                    color = accent.copy(alpha = alpha),
-                    start = Offset(sx1, sy1),
-                    end = Offset(sx2, sy2),
-                    strokeWidth = 0.85.dp.toPx(),
-                )
-            }
-            // Synaptic lightning filament from the inner core to active front-facing nodes
-            if (active && p1.third > 0.35f && (i % 7 == 0)) {
-                val ctrlX = (center.x + sx1) * 0.5f + sin(rotation * 2f + i) * 10.dp.toPx()
-                val ctrlY = (center.y + sy1) * 0.5f + cos(rotation * 2f + i) * 10.dp.toPx()
-                val synapse = Path().apply {
-                    moveTo(center.x, center.y)
-                    quadraticTo(ctrlX, ctrlY, sx1, sy1)
+            val avgZ = (pz[i] + pz[nextIdx]) * 0.5f
+            val avgCrest = (pCrest[i] + pCrest[nextIdx]) * 0.5f
+
+            // Normalized depth: 1 = facing viewer in foreground, 0 = far background
+            val depthFactor = ((avgZ + baseR * 1.2f) / (baseR * 2.4f)).coerceIn(0f, 1f)
+            val crestFactor = (avgCrest + 0.5f).coerceIn(0f, 1f)
+
+            // Stipple dash rhythm: alternates drawn lines and micro-gaps matching the screen recording
+            val isDashDrawn = (i + ringIdx * 2) % 6 < 4
+
+            if (isDashDrawn) {
+                // Color & Opacity:
+                // High crests facing forward are brilliant glowing white (#FFFFFF);
+                // Lower valleys and rear-facing rings are deep luminous cyan (#00F2FE / #0A4D68)
+                val isPeakCrest = avgCrest > 0.35f && depthFactor > 0.42f
+                val strokeW = when {
+                    isPeakCrest -> fineStroke * (1.2f + audio * 0.4f)
+                    depthFactor > 0.5f -> fineStroke
+                    else -> hairline
                 }
-                drawPath(
-                    path = synapse,
-                    color = JarvisPalette.CyanBright.copy(alpha = (0.30f + smoothedAudio * 0.45f).coerceAtMost(0.85f)),
-                    style = Stroke(width = 1.1.dp.toPx(), cap = StrokeCap.Round),
+
+                // If peak crest, draw volumetric bloom layer underneath
+                if (isPeakCrest) {
+                    val bloomAlpha = ((depthFactor * 0.45f) + audio * 0.35f).coerceIn(0.15f, 0.85f)
+                    drawLine(
+                        color = (if (thinking) JarvisPalette.Amber else JarvisPalette.CyanBright)
+                            .copy(alpha = bloomAlpha * 0.45f),
+                        start = Offset(x1, y1),
+                        end = Offset(x2, y2),
+                        strokeWidth = bloomStroke,
+                        cap = StrokeCap.Round,
+                    )
+                }
+
+                // Sharp foreground line
+                val lineColor = when {
+                    isPeakCrest -> Color.White.copy(alpha = (0.75f + depthFactor * 0.25f).coerceAtMost(1f))
+                    depthFactor > 0.55f -> JarvisPalette.CyanBright.copy(alpha = 0.45f + depthFactor * 0.45f)
+                    thinking -> JarvisPalette.Amber.copy(alpha = 0.15f + depthFactor * 0.35f)
+                    else -> accent.copy(alpha = 0.08f + depthFactor * 0.35f)
+                }
+
+                drawLine(
+                    color = lineColor,
+                    start = Offset(x1, y1),
+                    end = Offset(x2, y2),
+                    strokeWidth = strokeW,
+                    cap = StrokeCap.Round,
+                )
+            }
+
+            // Draw glowing vertex stipple dots at intervals and peak crests
+            if (i % 4 == 0 && depthFactor > 0.38f) {
+                val dotRadius = if (avgCrest > 0.4f) 2.2.dp.toPx() else 1.3.dp.toPx()
+                val dotAlpha = ((depthFactor - 0.25f) * 1.35f).coerceIn(0.15f, 0.95f)
+                val dotColor = if (avgCrest > 0.4f) {
+                    Color.White.copy(alpha = dotAlpha)
+                } else {
+                    JarvisPalette.CyanBright.copy(alpha = dotAlpha * 0.85f)
+                }
+                drawCircle(
+                    color = dotColor,
+                    radius = dotRadius * (0.8f + audio * 0.3f),
+                    center = Offset(x1, y1),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Central Vertical Spindle / Hourglass Double-Helix:
+ * Exactly matching the vertical helix visible in `thinking_full.png` and `speaking_full.png`!
+ * Formed of stacked horizontal loops rotated around the vertical axis in an hourglass silhouette.
+ */
+private fun DrawScope.drawCentralSpindleHourglass(
+    center: Offset,
+    baseR: Float,
+    physics: NeuralOrbPhysics,
+    thinking: Boolean,
+    speaking: Boolean,
+    audio: Float,
+) {
+    val intensity = physics.spindleIntensity
+    if (intensity < 0.05f) return
+
+    val slices = 26
+    val spindleH = baseR * (0.46f + audio * 0.12f)
+    val maxRadius = baseR * (0.19f + audio * 0.08f) * intensity
+    val spinRad = (physics.spindlePhase / 180f) * PI.toFloat()
+    val pitchAngle = (32f / 180f) * PI.toFloat()
+    val cosPitch = cos(pitchAngle)
+    val sinPitch = sin(pitchAngle)
+    val cameraDist = baseR * 3.2f
+
+    val strokeW = 1.3.dp.toPx()
+
+    for (k in 0 until slices) {
+        val eta = (k.toFloat() / (slices - 1)) * 2f - 1f // -1 to +1
+        // Hourglass radius profile: pinches to zero in the center, widens at top and bottom
+        val loopR = maxRadius * abs(eta).coerceAtLeast(0.06f)
+        val y3 = eta * spindleH
+        val twist = spinRad + eta * (2.8f * PI.toFloat())
+
+        // Sample 16 points around this elliptical spindle loop
+        val loopPts = 16
+        val lx = FloatArray(loopPts)
+        val ly = FloatArray(loopPts)
+        val lz = FloatArray(loopPts)
+
+        for (p in 0 until loopPts) {
+            val beta = (p.toFloat() / loopPts) * 2f * PI.toFloat()
+            // Flat elliptical loop tilted along the twist direction
+            val lx3 = loopR * cos(beta) * cos(twist) - (loopR * 0.35f) * sin(beta) * sin(twist)
+            val lz3 = loopR * cos(beta) * sin(twist) + (loopR * 0.35f) * sin(beta) * cos(twist)
+
+            val xCam = lx3
+            val yCam = y3 * cosPitch - lz3 * sinPitch
+            val zCam = y3 * sinPitch + lz3 * cosPitch
+
+            val scale = cameraDist / (cameraDist + zCam)
+            lx[p] = center.x + xCam * scale
+            ly[p] = center.y + yCam * scale
+            lz[p] = zCam
+        }
+
+        // Draw loop segments
+        for (p in 0 until loopPts) {
+            val pNext = (p + 1) % loopPts
+            val avgZ = (lz[p] + lz[pNext]) * 0.5f
+            val depthAlpha = ((avgZ + baseR) / (baseR * 2f)).coerceIn(0.2f, 1f)
+
+            val loopColor = if (thinking) {
+                // Golden / Amber spindle in THINKING state (exact match to thinking_full.png)
+                if (depthAlpha > 0.6f) {
+                    Color(0xFFFFDF80).copy(alpha = depthAlpha * intensity)
+                } else {
+                    JarvisPalette.Amber.copy(alpha = depthAlpha * 0.85f * intensity)
+                }
+            } else {
+                // Radiant cyan / pure white spindle in SPEAKING / LISTENING states
+                if (depthAlpha > 0.65f) {
+                    Color.White.copy(alpha = depthAlpha * intensity)
+                } else {
+                    JarvisPalette.CyanBright.copy(alpha = depthAlpha * 0.85f * intensity)
+                }
+            }
+
+            drawLine(
+                color = loopColor,
+                start = Offset(lx[p], ly[p]),
+                end = Offset(lx[pNext], ly[pNext]),
+                strokeWidth = strokeW,
+                cap = StrokeCap.Round,
+            )
+        }
+    }
+}
+
+/**
+ * Intense multi-stop glowing center nucleus.
+ */
+private fun DrawScope.drawCenterNucleus(
+    center: Offset,
+    baseR: Float,
+    thinking: Boolean,
+    audio: Float,
+    coreScale: Float,
+) {
+    val coreR = baseR * (0.13f + audio * 0.06f) * coreScale
+
+    // 1. Broad soft atmospheric glow
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                (if (thinking) JarvisPalette.Amber else JarvisPalette.CyanBright).copy(alpha = 0.55f + audio * 0.30f),
+                (if (thinking) Color(0xFFD97706) else JarvisPalette.Cyan).copy(alpha = 0.22f),
+                Color.Transparent,
+            ),
+            center = center,
+            radius = coreR * 3.2f,
+        ),
+        radius = coreR * 3.2f,
+        center = center,
+    )
+
+    // 2. High-intensity middle flare
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(
+                Color.White.copy(alpha = 0.98f),
+                (if (thinking) Color(0xFFFDE68A) else JarvisPalette.CyanBright).copy(alpha = 0.88f),
+                Color.Transparent,
+            ),
+            center = center,
+            radius = coreR * 1.6f,
+        ),
+        radius = coreR * 1.6f,
+        center = center,
+    )
+
+    // 3. Pure white solid nucleus point
+    drawCircle(
+        color = Color.White,
+        radius = coreR * 0.55f,
+        center = center,
+    )
+}
+
+/**
+ * 4 Gyroscopic Inclined Orbital Wire Rings with Traveling Planetary Satellite Beads:
+ * Decodes the 4 intersecting orbit ellipses seen in the screen recording.
+ * Supports drawing back arcs (behind the mesh) and front arcs (in front of the mesh) for true 3D depth.
+ */
+private fun DrawScope.drawGyroscopicOrbits(
+    center: Offset,
+    radius: Float,
+    physics: NeuralOrbPhysics,
+    accent: Color,
+    thinking: Boolean,
+    drawBackOnly: Boolean,
+    audio: Float,
+) {
+    // 4 Distinct gyroscopic inclinations: (inclinationX, tiltY, ringRadiusRatio, orbitAngleDeg)
+    val orbits = listOf(
+        OrbitConfig(incX = 24f, incY = 18f, rRatio = 1.18f, angle = physics.orbitAngle1),
+        OrbitConfig(incX = -44f, incY = -28f, rRatio = 1.28f, angle = physics.orbitAngle2),
+        OrbitConfig(incX = 66f, incY = 48f, rRatio = 1.34f, angle = physics.orbitAngle3),
+        OrbitConfig(incX = -72f, incY = -62f, rRatio = 1.40f, angle = physics.orbitAngle4),
+    )
+
+    val fineStroke = 1.15.dp.toPx()
+    val steps = 64
+
+    orbits.forEachIndexed { orbitIdx, cfg ->
+        val ringR = radius * cfg.rRatio
+        val incXRad = (cfg.incX / 180f) * PI.toFloat()
+        val incYRad = (cfg.incY / 180f) * PI.toFloat()
+        val cosX = cos(incXRad)
+        val sinX = sin(incXRad)
+        val cosY = cos(incYRad)
+        val sinY = sin(incYRad)
+
+        // Precompute 3D points of the orbit ellipse
+        val ptsX = FloatArray(steps)
+        val ptsY = FloatArray(steps)
+        val ptsZ = FloatArray(steps)
+
+        for (s in 0 until steps) {
+            val beta = (s.toFloat() / steps) * 2f * PI.toFloat()
+            val x0 = ringR * cos(beta)
+            val y0 = ringR * sin(beta)
+
+            // 3D rotation by inclination angles
+            val x1 = x0 * cosY
+            val y1 = y0
+            val z1 = -x0 * sinY
+
+            val x2 = x1
+            val y2 = y1 * cosX - z1 * sinX
+            val z2 = y1 * sinX + z1 * cosX
+
+            ptsX[s] = center.x + x2
+            ptsY[s] = center.y + y2
+            ptsZ[s] = z2
+        }
+
+        // Draw ring segments according to front/back pass
+        for (s in 0 until steps) {
+            val nextS = (s + 1) % steps
+            val avgZ = (ptsZ[s] + ptsZ[nextS]) * 0.5f
+            val isBack = avgZ < 0f
+
+            if (isBack == drawBackOnly) {
+                val alpha = if (isBack) {
+                    0.14f
+                } else {
+                    0.38f + audio * 0.18f
+                }
+                val ringColor = (if (thinking && orbitIdx % 2 == 1) JarvisPalette.Amber else accent)
+                    .copy(alpha = alpha)
+
+                drawLine(
+                    color = ringColor,
+                    start = Offset(ptsX[s], ptsY[s]),
+                    end = Offset(ptsX[nextS], ptsY[nextS]),
+                    strokeWidth = fineStroke,
+                    cap = StrokeCap.Round,
                 )
             }
         }
 
-        // Draw glowing 3D surface particles
-        points.forEachIndexed { idx, (x, y, z) ->
-            val depthAlpha = ((z + 1.2f) / 2.2f).coerceIn(0.12f, 0.96f)
-            val dotRadius = if (idx % 5 == 0) 2.7.dp.toPx() else 1.45.dp.toPx()
-            val dotColor = if (idx % 9 == 0) JarvisPalette.Amber else JarvisPalette.CyanBright
-            drawCircle(
-                color = dotColor.copy(alpha = depthAlpha),
-                radius = dotRadius * (0.75f + 0.35f * depthAlpha + smoothedAudio * 0.25f),
-                center = Offset(center.x + x * globeRadius, center.y + y * globeRadius),
-            )
-        }
+        // Draw traveling satellite bead on front pass
+        if (!drawBackOnly) {
+            val beadRad = (cfg.angle / 180f) * PI.toFloat()
+            val bx0 = ringR * cos(beadRad)
+            val by0 = ringR * sin(beadRad)
+            val bx1 = bx0 * cosY
+            val by1 = by0
+            val bz1 = -bx0 * sinY
+            val bx2 = bx1
+            val by2 = by1 * cosX - bz1 * sinX
+            val bz2 = by1 * sinX + bz1 * cosX
 
-        // Bright glowing energy core inside the globe
-        val coreR = globeRadius * (0.26f + smoothedAudio * 0.08f) * pulse
+            // Satellite bead is visible predominantly in front hemisphere
+            val beadDepth = ((bz2 + ringR) / (2f * ringR)).coerceIn(0.15f, 1f)
+            val beadPos = Offset(center.x + bx2, center.y + by2)
+
+            // Outer soft glow
+            val glowColor = if (thinking && orbitIdx % 2 == 1) JarvisPalette.Amber else JarvisPalette.CyanBright
+            drawCircle(
+                color = glowColor.copy(alpha = (0.35f * beadDepth).coerceAtMost(0.85f)),
+                radius = 6.0.dp.toPx(),
+                center = beadPos,
+            )
+
+            // Bright core dot
+            drawCircle(
+                color = Color.White.copy(alpha = beadDepth),
+                radius = 2.4.dp.toPx(),
+                center = beadPos,
+            )
+
+            // Short trailing spark tail
+            for (trail in 1..3) {
+                val trailRad = beadRad - trail * 0.07f
+                val tx0 = ringR * cos(trailRad)
+                val ty0 = ringR * sin(trailRad)
+                val tx1 = tx0 * cosY
+                val ty1 = ty0
+                val tz1 = -tx0 * sinY
+                val tx2 = tx1
+                val ty2 = ty1 * cosX - tz1 * sinX
+
+                drawCircle(
+                    color = glowColor.copy(alpha = (0.24f / trail) * beadDepth),
+                    radius = (2.2f - trail * 0.5f).dp.toPx(),
+                    center = Offset(center.x + tx2, center.y + ty2),
+                )
+            }
+        }
+    }
+}
+
+private data class OrbitConfig(val incX: Float, val incY: Float, val rRatio: Float, val angle: Float)
+
+/**
+ * Cosmic background stardust micro-particles twinkling in 3D.
+ */
+private fun DrawScope.drawCosmicStarDust(
+    center: Offset,
+    baseR: Float,
+    frameTick: Float,
+    accent: Color,
+    thinking: Boolean,
+) {
+    COSMIC_STARDUST.forEachIndexed { i, p ->
+        val r = baseR * p.dist
+        val x = center.x + r * cos(p.el) * cos(p.az)
+        val y = center.y + r * sin(p.el)
+        val twinkle = (0.20f + 0.60f * (sin(frameTick * 2.2f + p.phase) * 0.5f + 0.5f)).coerceIn(0.10f, 0.90f)
+        val dotColor = if (thinking && i % 3 == 0) JarvisPalette.Amber else JarvisPalette.CyanBright
         drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(
-                    Color.White.copy(alpha = 0.97f),
-                    JarvisPalette.CyanBright.copy(alpha = 0.88f),
-                    accent.copy(alpha = 0.34f),
-                    Color.Transparent,
-                ),
-                center = center,
-                radius = coreR * 1.95f,
-            ),
-            radius = coreR * 1.95f,
-            center = center,
+            color = dotColor.copy(alpha = twinkle * 0.55f),
+            radius = (1.0f + (i % 2) * 0.6f).dp.toPx(),
+            center = Offset(x, y),
         )
     }
 }
 
 /**
  * Dynamic 3D flowing particle sine-wave ribbon visualization used inside AI response
- * cards (Screen 4) and the VOICE WAVES showcase.
+ * cards and the VOICE WAVES showcase.
  */
 @Composable
 fun ParticleWaveCanvas(
@@ -767,7 +875,6 @@ fun ParticleWaveCanvas(
         val h = size.height
         val cy = h / 2f
 
-        // Subtle background radial glow
         drawRect(
             brush = Brush.radialGradient(
                 colors = listOf(
@@ -821,9 +928,7 @@ fun ParticleWaveCanvas(
 
 /**
  * The voice wave: a layered, mirrored spectral ribbon that breathes with the
- * assistant's state and live [audioLevel]. Three interference waves are mixed
- * so the silhouette never looks like a single looping sine, and every bar has
- * a bright peak cap plus a faint reflection, matching the reference waveform.
+ * assistant's state and live [audioLevel].
  */
 @Composable
 fun VoiceWave(
@@ -869,7 +974,6 @@ fun VoiceWave(
         val barWidth = (step * 0.34f).coerceAtLeast(1.1f)
         val baseAmp = if (active) height * (0.32f + smoothedAudio * 0.17f) else height * 0.13f
 
-        // Faint centre rail, like the reference's holographic baseline.
         drawLine(
             color = color.copy(alpha = 0.10f),
             start = Offset(0f, centerY),
@@ -888,7 +992,6 @@ fun VoiceWave(
             val alpha = (0.26f + 0.66f * envelope).coerceIn(0.14f, 0.96f)
             val x = step * index + step / 2f
 
-            // Reflected ghost bar for the glassy double-exposure look.
             drawLine(
                 color = color.copy(alpha = alpha * 0.22f),
                 start = Offset(x, centerY + barHeight * 0.18f),
@@ -913,7 +1016,6 @@ fun VoiceWave(
                 cap = StrokeCap.Round,
             )
 
-            // Bright peak cap.
             drawCircle(
                 color = Color.White.copy(alpha = (alpha * 0.85f).coerceIn(0f, 0.92f)),
                 radius = (barWidth * 0.48f).coerceAtLeast(0.7f),
@@ -921,7 +1023,6 @@ fun VoiceWave(
             )
         }
 
-        // Thin interference ribbon over the peaks.
         val ribbon = Path()
         val samples = bars * 3
         for (i in 0..samples) {
@@ -938,7 +1039,6 @@ fun VoiceWave(
             style = Stroke(width = 1.1.dp.toPx(), cap = StrokeCap.Round),
         )
 
-        // One slow diagonal light sweep across the spectrum.
         val sweepX = width * shimmer
         drawRect(
             brush = Brush.horizontalGradient(

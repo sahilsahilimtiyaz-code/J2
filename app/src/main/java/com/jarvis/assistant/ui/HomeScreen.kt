@@ -867,11 +867,10 @@ private fun HomeHudHero(
                 )
             }
 
-            // Central spinning Iron Man Neural Arc Reactor (tap to open 3D Neural Orb HUD)
+            // Central 3D Brahma Morphing Wireframe Orb (tap to open Voice Overlay)
             Box(
                 modifier = Modifier
-                    .size(252.dp)
-                    .clip(CircleShape)
+                    .size(268.dp)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,

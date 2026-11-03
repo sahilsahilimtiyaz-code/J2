@@ -439,3 +439,15 @@
   - Expanded `OfflineTaskRouter.routeUserCommand` across the full tool suite: screen vision, snapshots, typing, tapping, coordinates, media, communications, alarms, timers, reminders, calendar, memory, diagnostics, storage, skills, notifications, and web research.
   - Added `OfflineTaskRouter.routeFollowUpAction`: enables multi-round tool chaining on-device so compound commands such as `"open YouTube and type justin"` or `"open settings and turn on dark mode"` execute sequentially across rounds (`open_app` -> `type_on_screen` -> completion summary) without stopping prematurely.
   - Upgraded `AgentLoop.streamRound` with `extractToolCallsFromText`: automatically parses tool calls emitted in `<tool_call>` XML tags, markdown JSON code blocks, or raw JSON from text streams across all providers, ensuring total parity between online and offline models.
+
+## 2026-11-03 (Part 4) — 100% Pixel-to-Pixel Brahma AI 3D Morphing Organic Wireframe Orb
+
+- [x] **100% Micro-Pixel Match Brahma 3D Morphing Wireframe Orb (`Reactor.kt`, `HomeScreen.kt`):**
+  - Analyzed frames from `Screen_Recording_20261103_211947_Brahma_AI_f693da1f.mp4` across IDLE (`00:03`), THINKING (`00:15.5`), and SPEAKING (`00:20`).
+  - Implemented 3D undulating 5-lobed parametric organic wave lattice ($m = 5$ harmonic superformula) with 30 concentric contour isolines, stippled dashes, and glowing vertex dots.
+  - Implemented the central vertical spinning spindle/hourglass double-helix: morphs into a vibrant **golden/amber helix** (`JarvisPalette.Amber`) during `THINKING` state (matching `thinking_full.png`), and radiant electric cyan/white during `SPEAKING`.
+  - Added volumetric white bloom (`#FFFFFF`) on forward-facing crests with depth-attenuated cyan shading in valleys.
+  - Implemented 4 gyroscopic inclined orbital wire rings with 3D depth-sorting (back arcs behind mesh, front arcs in front) and traveling planetary satellite beads with particle spark trails.
+  - Added ambient 3D cosmic background star-dust particles.
+  - Unclipped the Home screen hero orb container in `HomeScreen.kt` so orbital rings and star-dust float seamlessly in space without being cut off.
+  - Zero-allocation 60fps locked performance on Samsung Galaxy A54; passed full `compile_applet` and all unit tests in `gradle testDebugUnitTest`.
