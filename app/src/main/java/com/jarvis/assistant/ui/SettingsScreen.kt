@@ -304,6 +304,7 @@ fun SettingsScreen(
                 item(key = "detail_voice") {
                     AnimatedVisibility(visible = expandedSection == SettingsSection.VOICE) {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            MicrophoneStatusMonitorCard(state = state, viewModel = viewModel)
                             VoiceSettingsCard(state = state, viewModel = viewModel)
                             BackgroundVoiceCard(state = state, viewModel = viewModel)
                             ScreenUsageHealthCard(state = state, viewModel = viewModel)
@@ -404,6 +405,7 @@ fun SettingsScreen(
                 item(key = "detail_system") {
                     AnimatedVisibility(visible = expandedSection == SettingsSection.SYSTEM) {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            MicrophoneStatusMonitorCard(state = state, viewModel = viewModel)
                             ScreenUsageHealthCard(state = state, viewModel = viewModel)
                             BackgroundVoiceCard(state = state, viewModel = viewModel)
                             ActionLogCard(state = state, onOpenLog = viewModel::openActionLog)
@@ -424,6 +426,7 @@ fun SettingsScreen(
                 item(key = "detail_security") {
                     AnimatedVisibility(visible = expandedSection == SettingsSection.SECURITY) {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            MicrophoneStatusMonitorCard(state = state, viewModel = viewModel)
                             PermissionsCard(state = state, onOpenWizard = viewModel::openPermissions)
                             SafetyCard(state = state, viewModel = viewModel)
                             WhatsAppVoiceNoteCard(state = state, viewModel = viewModel)

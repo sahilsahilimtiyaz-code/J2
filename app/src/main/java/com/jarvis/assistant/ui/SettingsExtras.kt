@@ -706,3 +706,154 @@ fun ActionLogCard(
         }
     }
 }
+
+/**
+ * Real-time Microphone Status Monitor & Diagnostic Panel.
+ *
+ * Displays all 11 lifecycle & hardware telemetry metrics required by the
+ * Microphone State Machine without ever logging or exposing raw audio content.
+ */
+@Composable
+fun MicrophoneStatusMonitorCard(
+    state: JarvisUiState,
+    viewModel: JarvisViewModel,
+) {
+    val diag = state.micDiagnostics
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+
+    LaunchedEffect(diag.currentState, diag.isMicrophoneResourceHeld, diag.listeningStartTimeMs) {
+        while (diag.currentState == com.jarvis.assistant.voice.MicrophoneState.LISTENING ||
+            diag.currentState == com.jarvis.assistant.voice.MicrophoneState.STARTING ||
+            diag.isMicrophoneResourceHeld
+        ) {
+            nowMs = System.currentTimeMillis()
+            kotlinx.coroutines.delay(250L)
+        }
+    }
+
+    val startTimeFormatted = remember(diag.listeningStartTimeMs) {
+        if (diag.listeningStartTimeMs <= 0L) {
+            "Not started"
+        } else {
+            java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US)
+                .format(java.util.Date(diag.listeningStartTimeMs))
+        }
+    }
+
+    val liveDurationMs = if (
+        (diag.currentState == com.jarvis.assistant.voice.MicrophoneState.LISTENING ||
+            diag.currentState == com.jarvis.assistant.voice.MicrophoneState.STARTING) &&
+        diag.listeningStartTimeMs > 0L
+    ) {
+        (nowMs - diag.listeningStartTimeMs).coerceAtLeast(0L)
+    } else {
+        diag.listeningDurationMs
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.36f),
+        ),
+        shape = RoundedCornerShape(18.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Microphone Status Monitor (Diagnostics)",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                    text = if (diag.isMicrophoneResourceHeld) "MIC HELD" else "MIC RELEASED",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (diag.isMicrophoneResourceHeld) {
+                        MaterialTheme.colorScheme.tertiary
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                )
+            }
+
+            Text(
+                text = "Privacy guarantee: Only state transitions and hardware handle counts are tracked. " +
+                    "Audio samples and spoken transcripts are never stored in diagnostic logs.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            DiagnosticRow("Current microphone state", diag.currentState.name)
+            DiagnosticRow("Microphone session ID", diag.sessionId.ifBlank { "none" })
+            DiagnosticRow("Listening start time", startTimeFormatted)
+            DiagnosticRow("Listening duration", "${liveDurationMs} ms")
+            DiagnosticRow("Active recognition session count", diag.activeRecognitionSessionCount.toString())
+            DiagnosticRow("AudioRecord state", diag.audioRecordState)
+            DiagnosticRow("Foreground service state", diag.foregroundServiceState)
+            DiagnosticRow("Last microphone start reason", diag.lastStartReason)
+            DiagnosticRow("Last microphone stop reason", diag.lastStopReason)
+            DiagnosticRow("Last error", diag.lastError ?: "None")
+            DiagnosticRow(
+                "Microphone resource held",
+                if (diag.isMicrophoneResourceHeld) "YES (Active capture)" else "NO (Fully released)",
+            )
+
+            if (diag.transitionHistory.isNotEmpty()) {
+                Text(
+                    text = "Recent transitions: " + diag.transitionHistory.takeLast(4).joinToString(" → "),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                TextButton(onClick = viewModel::forceReleaseMicrophone) {
+                    Text("Force Release Microphone Now")
+                }
+                if (!state.listening) {
+                    TextButton(onClick = viewModel::startListening) {
+                        Text("Test Single-Turn Listen")
+                    }
+                } else {
+                    TextButton(onClick = viewModel::stopListening) {
+                        Text("Stop Active Session")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiagnosticRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(
+            text = "$label:",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(0.48f),
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(0.52f),
+        )
+    }
+}
+

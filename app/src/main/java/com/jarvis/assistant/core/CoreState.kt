@@ -61,8 +61,11 @@ data class CoreState(
      * screen so the owner can read along with the voice.
      */
     val spokenCaption: String? = null,
-    /** True when the microphone stays continuously active while the app is open. */
-    val micLocked: Boolean = true,
+    /** True when the microphone is actively locked for a listening session. */
+    val micLocked: Boolean = false,
+    /** Live microphone state machine and diagnostic telemetry. */
+    val micDiagnostics: com.jarvis.assistant.voice.MicrophoneDiagnostics =
+        com.jarvis.assistant.voice.MicrophoneDiagnostics(),
     /** Active or most recently executed multi-step task plan shown in the timeline. */
     val activePlan: com.jarvis.assistant.brain.TaskPlan? = null,
     /** Content shared into Jarvis via Android Share Sheet or text selection. */

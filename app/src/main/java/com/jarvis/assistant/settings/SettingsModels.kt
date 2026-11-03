@@ -63,12 +63,12 @@ data class VoiceSettings(
     val speed: Float = 1.0f,
     val fallbackToSystem: Boolean = true,
     val language: String = "en-US",
-    /** Resume listening automatically after Jarvis finishes a reply. */
-    val continuousListening: Boolean = true,
-    /** Keep the microphone service running in the background once the app is opened. */
-    val alwaysListening: Boolean = true,
+    /** Resume listening automatically after Jarvis finishes a reply (off by default). */
+    val continuousListening: Boolean = false,
+    /** Keep the microphone service running in the background (off by default). */
+    val alwaysListening: Boolean = false,
     /** Require the wake word before treating speech as a command in background mode. */
-    val requireWakeWord: Boolean = false,
+    val requireWakeWord: Boolean = true,
     val wakeWord: String = "jarvis",
 ) {
     val activeEncryptedKey: String

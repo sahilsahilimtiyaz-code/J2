@@ -84,7 +84,9 @@ data class JarvisUiState(
     val fetchingModels: Boolean = false,
     val freeModelsOnly: Boolean = true,
     val audioLevel: Float = 0f,
-    val micLocked: Boolean = true,
+    val micLocked: Boolean = false,
+    val micDiagnostics: com.jarvis.assistant.voice.MicrophoneDiagnostics =
+        com.jarvis.assistant.voice.MicrophoneDiagnostics(),
     val devicePresence: DevicePresenceSnapshot = DevicePresenceSnapshot(),
     val screenHealth: ScreenUsageHealthSnapshot = ScreenUsageHealthSnapshot(),
     val securityAudit: SecurityAuditStatus = SecurityAuditStatus(),

@@ -398,3 +398,21 @@
   - Enhanced `search_youtube` with `play_immediately: Boolean` (default `true`; when `false`, opens YouTube search results for the query without auto-playing a video).
 - [x] **Verification:** `gradle testDebugUnitTest assembleDebug` green (98 unit tests passing, including 2 new tests in `ProviderStreamingTest`), and `compile_applet` passed.
 
+## 2026-11-03 — Microphone Lifecycle Diagnostic, 7-State Machine & Privacy Indicator Fix
+
+- [x] **Full Audio Architecture Audit & Root Cause Identification:**
+  - Audited `JarvisCore.kt`, `CoreState.kt`, `SttEngine.kt`, `WhisperSttEngine.kt`, `BargeInDetector.kt`, `WakeWord.kt`, `JarvisListeningService.kt`, `ListeningServiceController.kt`, `JarvisRecognitionService.kt`, `JarvisVoiceInteractionService.kt`, `JarvisVoiceInteractionSessionService.kt`, `JarvisTileService.kt`, `SettingsModels.kt`, `SettingsRepository.kt`, `JarvisUiState.kt`, `JarvisViewModel.kt`, `SettingsExtras.kt`, and `SettingsScreen.kt`.
+  - Identified that the persistent `"Being used by Jarvis"` Quick Settings indicator was caused by a combination of: (1) intentional "latched continuous microphone" defaults (`continuousListening = true`, `alwaysListening = true`, `micLocked = true`), (2) automatic `ListeningServiceController.start(appContext)` on every `MainActivity.onStart()`, (3) `AndroidSttEngine`'s infinite `rearm(40L)` loop with 10-minute silence windows, (4) keeping `SpeechRecognizer` open during LLM generation and TTS playback, (5) starting the background service on normal in-app mic taps, (6) not stopping listening when navigating away or locking the screen, and (7) a `SpeechRecognizer` leak in `JarvisRecognitionService` on `onResults`/`onError`.
+- [x] **7-State Microphone State Machine (`MicrophoneStateMachine.kt`):**
+  - Implemented `MicrophoneState` (`IDLE`, `REQUESTING_PERMISSION`, `STARTING`, `LISTENING`, `PROCESSING`, `STOPPING`, `ERROR`) and `MicrophoneDiagnostics` with thread-safe transition tracking, duplicate-session prevention (`tryBeginSession`), and hardware handle accounting.
+- [x] **Deterministic Single-Utterance STT & Hardware Release (`SttEngine.kt`, `WhisperSttEngine.kt`, `BargeInDetector.kt`, `JarvisRecognitionService.kt`, `JarvisCore.kt`):**
+  - Replaced `AndroidSttEngine`'s infinite `rearm(40L)` loop with single-utterance endpointing (`1,500 ms` complete silence) and immediate `stopListening()`, `cancel()`, `destroy()` teardown on `onResults`, `onError`, and `awaitClose`.
+  - Fixed `JarvisRecognitionService` to destroy `activeRecognizer` on `onResults`, `onError`, `onCancel`, and `onDestroy`.
+  - Wired `WhisperSttEngine` and `BargeInDetector` `AudioRecord` lifecycles into `MicrophoneStateMachine`.
+  - Updated `JarvisCore` and `JarvisViewModel` to release the microphone immediately before AI response generation (`send`), before TTS speech (`beginSpeaking`), on manual stop, on navigation away from the Home screen, on app backgrounding (`setUiVisible(false)`), on screen lock (`ACTION_SCREEN_OFF`), and on incoming phone calls / audio focus loss.
+  - Added one-time migration `SLOT_MIC_LIFECYCLE_MIGRATED_V1` in `SettingsRepository` so existing installs automatically migrate `continuousListening` and `alwaysListening` to `false`.
+- [x] **Microphone Status Monitor UI (`SettingsExtras.kt`, `SettingsScreen.kt`):**
+  - Added `MicrophoneStatusMonitorCard` under Settings → Voice Settings, System, and Security showing all 11 required diagnostic metrics plus live duration and a one-tap `"Force Release Microphone Now"` control.
+- [x] **Automated Unit Tests (`MicrophoneStateMachineTest.kt`):**
+  - Added 11 unit test methods covering all 12 required microphone lifecycle scenarios.
+

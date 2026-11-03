@@ -27,7 +27,10 @@ import kotlin.math.sqrt
  * playback ramps up, and the threshold is calibrated against the measured
  * room noise.
  */
-class BargeInDetector(private val context: Context) {
+class BargeInDetector(
+    private val context: Context,
+    private val stateMachine: MicrophoneStateMachine? = null,
+) {
     private var job: Job? = null
     var lastError: String? = null
         private set
@@ -78,9 +81,11 @@ class BargeInDetector(private val context: Context) {
 
             if (recorder.state != AudioRecord.STATE_INITIALIZED) {
                 runCatching { recorder.release() }
+                stateMachine?.onAudioRecordStateChanged("RELEASED", false)
                 lastError = "Microphone could not be initialised."
                 return@launch
             }
+            stateMachine?.onAudioRecordStateChanged("INITIALIZED", false)
 
             val effects = mutableListOf<Any>()
             if (AcousticEchoCanceler.isAvailable()) {
@@ -103,6 +108,7 @@ class BargeInDetector(private val context: Context) {
             val buffer = ShortArray(minBuffer)
             try {
                 recorder.startRecording()
+                stateMachine?.onAudioRecordStateChanged("RECORDING", true)
                 calibrate(recorder, buffer)
                 run(recorder, buffer, onSpeech)
             } catch (e: Exception) {
@@ -110,6 +116,7 @@ class BargeInDetector(private val context: Context) {
             } finally {
                 runCatching { recorder.stop() }
                 runCatching { recorder.release() }
+                stateMachine?.onAudioRecordStateChanged("RELEASED", false)
                 effects.forEach { effect ->
                     runCatching {
                         when (effect) {

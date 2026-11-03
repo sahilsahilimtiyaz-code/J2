@@ -481,3 +481,22 @@
 - **Fail-Closed Consequential Action Policy (`FailClosedActionPolicy`):**
   - Any action matching `SEND_MESSAGE`, `PUBLISH_OR_SHARE`, `PAYMENT_OR_PURCHASE`, `DELETE_DATA`, `UNINSTALL_APP`, `CHANGE_ACCOUNT_SECURITY`, or `GRANT_PERMISSION` requires `userApprovedConsequential = true` (or approval through `ConfirmationGate`) and records an anti-duplication key once dispatched so consequential actions are never auto-retried blindly.
 
+## 2026-11-03 — Microphone Lifecycle Diagnostic, 7-State Machine & Privacy Indicator Fix (Supersedes 2026-11-01 Latched Continuous Microphone)
+
+- **Why the 2026-11-01 "Latched Continuous Microphone" Design Was Replaced:**
+  - The 2026-11-01 design intentionally kept `SpeechRecognizer` open 24/7 (`VoiceSettings.continuousListening = true`, `alwaysListening = true`, `CoreState.micLocked = true`, `AndroidSttEngine` 10-minute silence windows + infinite `rearm(40L)` loop, automatic `ListeningServiceController.start(appContext)` on every `MainActivity.onStart()`, and keeping the recognizer open during LLM response generation and TTS playback).
+  - As a result, Android 14–16's green privacy indicator remained permanently illuminated (`"Being used by Jarvis"` in Quick Settings) even when Jarvis was idle, generating an AI reply, speaking via TTS, navigated away from the Home screen, or backgrounded/locked.
+- **Deterministic 7-State Microphone State Machine (`MicrophoneStateMachine.kt`):**
+  - Implemented `MicrophoneState` (`IDLE`, `REQUESTING_PERMISSION`, `STARTING`, `LISTENING`, `PROCESSING`, `STOPPING`, `ERROR`) and `MicrophoneDiagnostics` tracking all 11 required diagnostic metrics (`currentState`, `sessionId`, `listeningStartTimeMs`, `listeningDurationMs`, `activeRecognitionSessionCount`, `audioRecordState`, `foregroundServiceState`, `lastStartReason`, `lastStopReason`, `lastError`, `isMicrophoneResourceHeld`).
+  - **Single-Utterance Endpointing & Immediate Hardware Release (`SttEngine.kt`, `JarvisRecognitionService.kt`):**
+    - Replaced `AndroidSttEngine`'s 600,000 ms silence hints and `rearm(40L)` loop with standard single-utterance endpointing (`1,500 ms` complete silence / `1,200 ms` possibly-complete silence).
+    - Immediately calls `stopListening()`, `cancel()`, and `destroy()` on `SpeechRecognizer` upon `onResults`, `onError`, and `awaitClose`, plus `forceDestroyActive()` on manual cancellation, screen lock, navigation away, or incoming phone call.
+    - Fixed `JarvisRecognitionService` so `activeRecognizer` is also destroyed immediately on `onResults` and `onError`.
+  - **Safe Opt-In Defaults + Existing-Install Migration (`SettingsModels.kt`, `SettingsRepository.kt`, `CoreState.kt`):**
+    - Changed `VoiceSettings` defaults to `continuousListening = false`, `alwaysListening = false`, `requireWakeWord = true`, and `CoreState.micLocked = false`.
+    - Added a one-time migration (`SLOT_MIC_LIFECYCLE_MIGRATED_V1`) in `SettingsRepository.decodeWithBackup` so existing installations that had persisted `continuousListening = true` / `alwaysListening = true` under the old defaults automatically reset to safe single-utterance defaults upon upgrade.
+  - **Zero Microphone Access During AI Generation, TTS, Navigation Away, Screen Lock, or Phone Calls (`JarvisCore.kt`, `JarvisViewModel.kt`):**
+    - `JarvisCore.send()` and `JarvisCore.beginSpeaking()` call `releaseMicrophoneBeforeProcessing()` so the microphone is 100% released before LLM streaming or TTS playback begins.
+    - `JarvisCore.startListening()` no longer starts `JarvisListeningService` on a normal in-app mic button tap.
+    - Closing the voice overlay or navigating to another tab (`SETTINGS`, `TOOLS`, `MEMORY`, `LOG`, `SKILLS`, `PROPOSALS`, `PERMISSIONS`), backgrounding the app (`setUiVisible(false)`), locking the screen (`Intent.ACTION_SCREEN_OFF`), or receiving an incoming phone call / losing audio focus (`PHONE_STATE` `RINGING`/`OFFHOOK` or `AUDIOFOCUS_LOSS_TRANSIENT`) immediately destroys the active recognizer and transitions the state machine to `IDLE`.
+

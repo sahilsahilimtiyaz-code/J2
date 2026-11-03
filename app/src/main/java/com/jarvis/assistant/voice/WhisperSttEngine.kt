@@ -37,11 +37,16 @@ class WhisperSttEngine(
     private val getApiKey: () -> String?,
     private val endpointUrl: String = "https://api.groq.com/openai/v1/audio/transcriptions",
     private val model: String = "whisper-large-v3-turbo",
+    private val stateMachine: MicrophoneStateMachine? = null,
 ) : SttEngine {
 
     override fun listen(locale: Locale): Flow<SttEvent> = callbackFlow {
         val apiKey = getApiKey()
         if (apiKey.isNullOrBlank()) {
+            stateMachine?.onRecognitionError(
+                errorMessage = "Whisper STT requires an active API key.",
+                stopReason = "Missing Whisper API key",
+            )
             trySend(SttEvent.Error("Whisper STT requires an active API key."))
             close()
             return@callbackFlow
@@ -62,17 +67,27 @@ class WhisperSttEngine(
                 bufferSize,
             )
         } catch (e: Exception) {
+            stateMachine?.onRecognitionError(
+                errorMessage = "Could not initialize microphone: ${e.message}",
+                stopReason = "AudioRecord constructor failed",
+            )
             trySend(SttEvent.Error("Could not initialize microphone: ${e.message}"))
             close()
             return@callbackFlow
         }
 
         if (record.state != AudioRecord.STATE_INITIALIZED) {
-            record.release()
+            runCatching { record.release() }
+            stateMachine?.onAudioRecordStateChanged("RELEASED", false)
+            stateMachine?.onRecognitionError(
+                errorMessage = "Microphone hardware failed to initialize.",
+                stopReason = "AudioRecord uninitialized",
+            )
             trySend(SttEvent.Error("Microphone hardware failed to initialize."))
             close()
             return@callbackFlow
         }
+        stateMachine?.onAudioRecordStateChanged("INITIALIZED", false)
 
         val pcmStream = ByteArrayOutputStream()
         val readBuffer = ByteArray(2048)
@@ -80,11 +95,26 @@ class WhisperSttEngine(
         var speechDetected = false
         var totalRecordedBytes = 0
         val maxRecordingBytes = sampleRate * 2 * 30 // 30 seconds max
+        var released = false
+
+        fun releaseAudioRecord() {
+            if (!released) {
+                released = true
+                runCatching { record.stop() }
+                runCatching { record.release() }
+                stateMachine?.onAudioRecordStateChanged("RELEASED", false)
+            }
+        }
 
         try {
             record.startRecording()
+            stateMachine?.onAudioRecordStateChanged("RECORDING", true)
         } catch (e: Exception) {
-            record.release()
+            releaseAudioRecord()
+            stateMachine?.onRecognitionError(
+                errorMessage = "Could not start audio capture: ${e.message}",
+                stopReason = "AudioRecord startRecording failed",
+            )
             trySend(SttEvent.Error("Could not start audio capture: ${e.message}"))
             close()
             return@callbackFlow
@@ -93,54 +123,61 @@ class WhisperSttEngine(
         trySend(SttEvent.Partial("Listening with Whisper..."))
 
         val captureJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
-            while (isActive && totalRecordedBytes < maxRecordingBytes) {
-                val read = record.read(readBuffer, 0, readBuffer.size)
-                if (read > 0) {
-                    pcmStream.write(readBuffer, 0, read)
-                    totalRecordedBytes += read
+            try {
+                while (isActive && totalRecordedBytes < maxRecordingBytes) {
+                    val read = record.read(readBuffer, 0, readBuffer.size)
+                    if (read > 0) {
+                        pcmStream.write(readBuffer, 0, read)
+                        totalRecordedBytes += read
 
-                    // Calculate RMS
-                    var sum = 0.0
-                    val shortCount = read / 2
-                    for (i in 0 until shortCount) {
-                        val sample = (readBuffer[i * 2 + 1].toInt() shl 8) or (readBuffer[i * 2].toInt() and 0xFF)
-                        sum += sample * sample
-                    }
-                    val rms = kotlin.math.sqrt(sum / shortCount.coerceAtLeast(1))
-                    val normalizedRms = (rms / 32767.0).toFloat().coerceIn(0f, 1f)
-                    trySend(SttEvent.Rms(normalizedRms))
+                        // Calculate RMS
+                        var sum = 0.0
+                        val shortCount = read / 2
+                        for (i in 0 until shortCount) {
+                            val sample = (readBuffer[i * 2 + 1].toInt() shl 8) or (readBuffer[i * 2].toInt() and 0xFF)
+                            sum += sample * sample
+                        }
+                        val rms = kotlin.math.sqrt(sum / shortCount.coerceAtLeast(1))
+                        val normalizedRms = (rms / 32767.0).toFloat().coerceIn(0f, 1f)
+                        trySend(SttEvent.Rms(normalizedRms))
 
-                    // Voice Activity Detection heuristic
-                    if (normalizedRms > 0.06f) {
-                        speechDetected = true
-                        silenceStartTime = 0L
-                    } else if (speechDetected) {
-                        val now = System.currentTimeMillis()
-                        if (silenceStartTime == 0L) {
-                            silenceStartTime = now
-                        } else if (now - silenceStartTime > 1800L) {
-                            // 1.8 seconds of silence after speech detected -> end of utterance
-                            break
+                        // Voice Activity Detection heuristic
+                        if (normalizedRms > 0.06f) {
+                            speechDetected = true
+                            silenceStartTime = 0L
+                        } else if (speechDetected) {
+                            val now = System.currentTimeMillis()
+                            if (silenceStartTime == 0L) {
+                                silenceStartTime = now
+                            } else if (now - silenceStartTime > 1800L) {
+                                // 1.8 seconds of silence after speech detected -> end of utterance
+                                break
+                            }
                         }
                     }
                 }
+            } finally {
+                // Always release AudioRecord immediately before network transcription
+                releaseAudioRecord()
             }
 
             trySend(SttEvent.End)
             trySend(SttEvent.Partial("Transcribing audio..."))
 
-            try {
-                record.stop()
-            } catch (_: Exception) {}
-            record.release()
-
             val rawPcm = pcmStream.toByteArray()
             if (rawPcm.size < sampleRate * 2 / 2) { // Less than 0.5 sec
+                stateMachine?.onRecognitionError(
+                    errorMessage = "No speech detected.",
+                    stopReason = "Whisper timeout (no speech)",
+                )
                 trySend(SttEvent.Error("No speech detected."))
                 close()
                 return@launch
             }
 
+            stateMachine?.onUtteranceCapturedBeginProcessing(
+                stopReason = "Whisper capture completed — transcribing",
+            )
             val wavBytes = pcmToWav(rawPcm, sampleRate = sampleRate, channels = 1)
 
             val transcriptionResult = transcribeAudio(
@@ -152,6 +189,10 @@ class WhisperSttEngine(
             if (transcriptionResult.isNotBlank()) {
                 trySend(SttEvent.Final(transcriptionResult))
             } else {
+                stateMachine?.onRecognitionError(
+                    errorMessage = "I did not catch that.",
+                    stopReason = "Whisper empty transcription",
+                )
                 trySend(SttEvent.Error("I did not catch that."))
             }
             close()
@@ -159,8 +200,7 @@ class WhisperSttEngine(
 
         awaitClose {
             captureJob.cancel()
-            runCatching { record.stop() }
-            runCatching { record.release() }
+            releaseAudioRecord()
         }
     }.flowOn(Dispatchers.IO)
 

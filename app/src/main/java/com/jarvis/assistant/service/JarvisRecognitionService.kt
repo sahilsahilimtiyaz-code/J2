@@ -63,10 +63,12 @@ class JarvisRecognitionService : RecognitionService() {
 
                 override fun onError(error: Int) {
                     runCatching { listener.error(error) }
+                    destroyActiveRecognizer()
                 }
 
                 override fun onResults(results: Bundle?) {
                     runCatching { listener.results(results ?: Bundle()) }
+                    destroyActiveRecognizer()
                 }
 
                 override fun onPartialResults(partialResults: Bundle?) {
@@ -86,13 +88,15 @@ class JarvisRecognitionService : RecognitionService() {
                 }
             }
             runCatching { recognizer.startListening(requestIntent) }
-                .onFailure { runCatching { listener.error(SpeechRecognizer.ERROR_CLIENT) } }
+                .onFailure {
+                    runCatching { listener.error(SpeechRecognizer.ERROR_CLIENT) }
+                    destroyActiveRecognizer()
+                }
         }
     }
 
     override fun onCancel(listener: Callback?) {
         mainHandler.post {
-            runCatching { activeRecognizer?.cancel() }
             destroyActiveRecognizer()
         }
     }
@@ -109,7 +113,12 @@ class JarvisRecognitionService : RecognitionService() {
     }
 
     private fun destroyActiveRecognizer() {
-        runCatching { activeRecognizer?.destroy() }
+        val rec = activeRecognizer
         activeRecognizer = null
+        if (rec != null) {
+            runCatching { rec.stopListening() }
+            runCatching { rec.cancel() }
+            runCatching { rec.destroy() }
+        }
     }
 }
