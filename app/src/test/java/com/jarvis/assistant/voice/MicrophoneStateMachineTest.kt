@@ -262,24 +262,44 @@ class MicrophoneStateMachineTest {
         assertEquals("RELEASED", sm.diagnostics.value.audioRecordState)
     }
 
-    // Scenario 12: Restart Jarvis and inspect microphone state and safe defaults
+    // Scenario 12: Restart Jarvis and inspect microphone state and live-call defaults
     @Test
     fun scenario12_restartJarvis_inspectDefaultMicrophoneState() {
         val sm = MicrophoneStateMachine()
         val defaultVoiceSettings = VoiceSettings()
         val defaultCoreState = CoreState()
 
-        // Verify safe cold-boot defaults: microphone is IDLE, not locked, and continuous/background listening are OFF
+        // Verify clean cold-boot state machine and live-call defaults
         assertEquals(MicrophoneState.IDLE, sm.currentState)
         assertFalse(sm.diagnostics.value.isMicrophoneResourceHeld)
         assertEquals(0, sm.diagnostics.value.activeRecognitionSessionCount)
         assertEquals("STOPPED", sm.diagnostics.value.foregroundServiceState)
         assertEquals("RELEASED", sm.diagnostics.value.audioRecordState)
 
-        assertFalse("continuousListening must default to false", defaultVoiceSettings.continuousListening)
-        assertFalse("alwaysListening must default to false", defaultVoiceSettings.alwaysListening)
+        assertTrue("continuousListening must default to true for live call mode", defaultVoiceSettings.continuousListening)
+        assertTrue("alwaysListening must default to true for live call mode", defaultVoiceSettings.alwaysListening)
         assertTrue("requireWakeWord must default to true", defaultVoiceSettings.requireWakeWord)
-        assertFalse("CoreState.listening must default to false", defaultCoreState.listening)
-        assertFalse("CoreState.micLocked must default to false", defaultCoreState.micLocked)
+        assertFalse("CoreState.listening must default to false before UI attach", defaultCoreState.listening)
+        assertFalse("CoreState.micLocked must default to false before UI attach", defaultCoreState.micLocked)
+
+        // Verify that when LiveCallAudioAnchor is active, OP_RECORD_AUDIO stays continuously held
+        // across utterance processing and immediate next-turn re-arming without dropping to false
+        sm.onAudioRecordStateChanged("RECORDING (LIVE CALL)", isRecording = true)
+        val firstSession = sm.tryBeginSession("Live call turn 1")
+        assertNotNull(firstSession)
+        sm.onRecognitionHardwareOpened()
+        sm.onListeningReady()
+        assertTrue(sm.diagnostics.value.isMicrophoneResourceHeld)
+
+        // Utterance finishes -> recognizer stops for LLM turn while LiveCallAudioAnchor stays recording
+        sm.onProcessingUtterance("Turn 1 captured")
+        sm.onRecognitionHardwareReleased("Paused recognizer for reply")
+        sm.completeProcessingToIdle("Turn 1 processing")
+        assertEquals(MicrophoneState.IDLE, sm.currentState)
+        assertTrue("LiveCallAudioAnchor keeps microphone held during reply so OS indicator never blinks off", sm.diagnostics.value.isMicrophoneResourceHeld)
+
+        // Next turn starts immediately while LiveCallAudioAnchor is still holding the mic
+        val secondSession = sm.tryBeginSession("Live call turn 2")
+        assertNotNull("Next recognition pass must start while LiveCallAudioAnchor is active", secondSession)
     }
 }

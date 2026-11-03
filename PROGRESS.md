@@ -398,21 +398,19 @@
   - Enhanced `search_youtube` with `play_immediately: Boolean` (default `true`; when `false`, opens YouTube search results for the query without auto-playing a video).
 - [x] **Verification:** `gradle testDebugUnitTest assembleDebug` green (98 unit tests passing, including 2 new tests in `ProviderStreamingTest`), and `compile_applet` passed.
 
-## 2026-11-03 — Microphone Lifecycle Diagnostic, 7-State Machine & Privacy Indicator Fix
+## 2026-11-03 — Live-Call Continuous Microphone (`LiveCallAudioAnchor`) & Elimination of ON/OFF Privacy Indicator Cycling
 
-- [x] **Full Audio Architecture Audit & Root Cause Identification:**
-  - Audited `JarvisCore.kt`, `CoreState.kt`, `SttEngine.kt`, `WhisperSttEngine.kt`, `BargeInDetector.kt`, `WakeWord.kt`, `JarvisListeningService.kt`, `ListeningServiceController.kt`, `JarvisRecognitionService.kt`, `JarvisVoiceInteractionService.kt`, `JarvisVoiceInteractionSessionService.kt`, `JarvisTileService.kt`, `SettingsModels.kt`, `SettingsRepository.kt`, `JarvisUiState.kt`, `JarvisViewModel.kt`, `SettingsExtras.kt`, and `SettingsScreen.kt`.
-  - Identified that the persistent `"Being used by Jarvis"` Quick Settings indicator was caused by a combination of: (1) intentional "latched continuous microphone" defaults (`continuousListening = true`, `alwaysListening = true`, `micLocked = true`), (2) automatic `ListeningServiceController.start(appContext)` on every `MainActivity.onStart()`, (3) `AndroidSttEngine`'s infinite `rearm(40L)` loop with 10-minute silence windows, (4) keeping `SpeechRecognizer` open during LLM generation and TTS playback, (5) starting the background service on normal in-app mic taps, (6) not stopping listening when navigating away or locking the screen, and (7) a `SpeechRecognizer` leak in `JarvisRecognitionService` on `onResults`/`onError`.
-- [x] **7-State Microphone State Machine (`MicrophoneStateMachine.kt`):**
-  - Implemented `MicrophoneState` (`IDLE`, `REQUESTING_PERMISSION`, `STARTING`, `LISTENING`, `PROCESSING`, `STOPPING`, `ERROR`) and `MicrophoneDiagnostics` with thread-safe transition tracking, duplicate-session prevention (`tryBeginSession`), and hardware handle accounting.
-- [x] **Deterministic Single-Utterance STT & Hardware Release (`SttEngine.kt`, `WhisperSttEngine.kt`, `BargeInDetector.kt`, `JarvisRecognitionService.kt`, `JarvisCore.kt`):**
-  - Replaced `AndroidSttEngine`'s infinite `rearm(40L)` loop with single-utterance endpointing (`1,500 ms` complete silence) and immediate `stopListening()`, `cancel()`, `destroy()` teardown on `onResults`, `onError`, and `awaitClose`.
-  - Fixed `JarvisRecognitionService` to destroy `activeRecognizer` on `onResults`, `onError`, `onCancel`, and `onDestroy`.
-  - Wired `WhisperSttEngine` and `BargeInDetector` `AudioRecord` lifecycles into `MicrophoneStateMachine`.
-  - Updated `JarvisCore` and `JarvisViewModel` to release the microphone immediately before AI response generation (`send`), before TTS speech (`beginSpeaking`), on manual stop, on navigation away from the Home screen, on app backgrounding (`setUiVisible(false)`), on screen lock (`ACTION_SCREEN_OFF`), and on incoming phone calls / audio focus loss.
-  - Added one-time migration `SLOT_MIC_LIFECYCLE_MIGRATED_V1` in `SettingsRepository` so existing installs automatically migrate `continuousListening` and `alwaysListening` to `false`.
-- [x] **Microphone Status Monitor UI (`SettingsExtras.kt`, `SettingsScreen.kt`):**
-  - Added `MicrophoneStatusMonitorCard` under Settings → Voice Settings, System, and Security showing all 11 required diagnostic metrics plus live duration and a one-tap `"Force Release Microphone Now"` control.
-- [x] **Automated Unit Tests (`MicrophoneStateMachineTest.kt`):**
-  - Added 11 unit test methods covering all 12 required microphone lifecycle scenarios.
-
+- [x] **Screen Recording Root-Cause Analysis (`Screen_Recording_20261103_175926_Jarvis.mp4`):**
+  - Analyzed the 23-second screen recording showing the Samsung One UI green microphone indicator turning ON for ~4–5s (`00:00–00:02`, `00:07–00:12`, `00:17–00:20`), shrinking to a dot (`00:03`, `00:13`, `00:21`), and turning OFF for ~3s (`00:04–00:06`, `00:14–00:16`, `00:22–00:23`) in an endless cycle.
+  - Identified that Android's `SpeechRecognizer` closes its audio session after ~4–5s of silence (`ERROR_SPEECH_TIMEOUT` / `ERROR_NO_MATCH`), and without a continuous in-process `AudioRecord` anchor (plus `JarvisCore`'s `350ms–2,500ms` backoff delay), `OP_RECORD_AUDIO` repeatedly dropped to `0` and re-triggered Samsung's status-bar microphone pill animation.
+- [x] **Continuous `LiveCallAudioAnchor` (`SttEngine.kt`, `MicrophoneStateMachine.kt`):**
+  - Implemented `LiveCallAudioAnchor` (`16kHz` mono `PCM_16BIT` `AudioRecord` with `setPrivacySensitive(false)` on API 30+) so `com.jarvis.assistant` holds a continuous, steady `OP_RECORD_AUDIO` session while Jarvis's microphone is live — identical to a live phone call.
+  - Updated `AndroidSttEngine.listen()` to re-arm `SpeechRecognizer` in-place within `15–35 ms` on silence timeouts (`ERROR_SPEECH_TIMEOUT`, `ERROR_NO_MATCH`, `ERROR_CLIENT`, `ERROR_RECOGNIZER_BUSY`) without closing the `Flow` or emitting error drops.
+  - Added `pauseRecognitionKeepLiveAnchor()` so during AI thinking/speaking turns, `SpeechRecognizer` pauses (preventing self-transcription) while `LiveCallAudioAnchor` keeps the microphone channel live.
+- [x] **Uninterrupted Live Session Across In-App Screens & Quick Settings (`JarvisCore.kt`, `JarvisViewModel.kt`, `SettingsModels.kt`, `SettingsRepository.kt`):**
+  - Removed `releaseForegroundMicOnNavigation()` so navigating to `PERMISSIONS` (as shown in the user's video), `SETTINGS`, `TOOLS`, `MEMORY`, or pulling down Quick Settings never drops the live microphone.
+  - Removed `requestListeningAudioFocus()` during listening so notification chimes or TTS audio-focus shifts never trigger `handleIncomingCallInterruption` and kill the mic.
+  - Fixed `handleServiceUtterance` in `JarvisCore` to return `Boolean` so non-wake-word background speech continues the listening loop instead of breaking out of it.
+  - Restored `continuousListening = true` and `alwaysListening = true` by default with automatic migration `SLOT_MIC_LIVE_CALL_MODE_V2` in `SettingsRepository`.
+- [x] **7-State Microphone State Machine, Monitor UI & Unit Tests (`MicrophoneStateMachine.kt`, `SettingsExtras.kt`, `MicrophoneStateMachineTest.kt`):**
+  - Verified all 11 unit test methods in `MicrophoneStateMachineTest` and full debug APK assembly (`gradle testDebugUnitTest assembleDebug`).

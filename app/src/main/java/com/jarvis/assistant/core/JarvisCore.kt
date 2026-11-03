@@ -425,25 +425,24 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         uiVisible = visible
         if (visible) {
             fishTts.warmUp()
-            maybeGreet()
             val current = settings.value
             if (current.health.enabled) {
                 runCatching {
                     com.jarvis.assistant.service.ScreenUsageHealthService.ensureStarted(appContext)
                 }
             }
-            // Only start the background microphone service if the owner explicitly enabled
-            // alwaysListening in Settings -> Voice. Never start it automatically by default.
-            if (!serviceActive &&
-                !userPausedMic &&
-                current.voice.alwaysListening &&
-                isGranted(Manifest.permission.RECORD_AUDIO)
-            ) {
-                runCatching { ListeningServiceController.start(appContext) }
+            if (!userPausedMic && isGranted(Manifest.permission.RECORD_AUDIO)) {
+                if (current.voice.continuousListening || current.voice.alwaysListening || _conversationMode.value) {
+                    sttEngine.ensureLiveCallAnchor()
+                }
+                if (!serviceActive && current.voice.alwaysListening) {
+                    runCatching { ListeningServiceController.start(appContext) }
+                }
+                if (current.voice.continuousListening || serviceActive) {
+                    ensureForegroundMicIfLocked(immediate = true)
+                }
             }
-            if (current.voice.continuousListening && !userPausedMic) {
-                ensureForegroundMicIfLocked()
-            }
+            maybeGreet()
         } else if (!serviceActive) {
             // No foreground service is holding the session, so leaving the app or locking
             // the screen immediately stops and destroys the recognizer and releases the microphone.
@@ -467,22 +466,25 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         setUiVisible(false)
     }
 
-    private fun ensureForegroundMicIfLocked() {
+    private fun ensureForegroundMicIfLocked(immediate: Boolean = false) {
         scope.launch {
-            delay(450)
+            if (!immediate) {
+                delay(120)
+            }
             if ((!uiVisible && !serviceActive) || userPausedMic) return@launch
             val current = settings.value
             if (current.profile.name.isBlank()) return@launch
-            // Only auto-open the microphone if continuousListening or background service is explicitly active
-            if (!current.voice.continuousListening && !serviceActive) return@launch
+            if (!current.voice.continuousListening && !serviceActive && !_conversationMode.value) return@launch
+            if (isGranted(Manifest.permission.RECORD_AUDIO)) {
+                sttEngine.ensureLiveCallAnchor()
+            }
             if (_state.value.generating || _state.value.speaking) return@launch
             if (manualListenJob?.isActive == true) return@launch
-            if (greetingInFlight) return@launch
             if (isGranted(Manifest.permission.RECORD_AUDIO)) {
                 startListeningInternal(
                     interrupt = false,
                     isAutoLoop = true,
-                    reason = if (serviceActive) "Background wake-word service active" else "Continuous listening enabled",
+                    reason = if (serviceActive) "Background wake-word service active" else "Continuous live call listening",
                 )
             }
         }
@@ -501,10 +503,16 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
     private fun observeSettings() {
         scope.launch {
             settings.collect { current ->
+                micStateMachine.onContinuousModeChanged(
+                    current.voice.continuousListening || current.voice.alwaysListening,
+                )
                 if (current.profile.name.isNotBlank()) {
                     withContext(Dispatchers.IO) { memoryRepository.syncProfile(current.profile) }
-                    if (current.voice.continuousListening && (uiVisible || serviceActive) && !userPausedMic) {
-                        ensureForegroundMicIfLocked()
+                    if ((current.voice.continuousListening || current.voice.alwaysListening) &&
+                        (uiVisible || serviceActive) &&
+                        !userPausedMic
+                    ) {
+                        ensureForegroundMicIfLocked(immediate = true)
                     }
                 }
             }
@@ -563,6 +571,9 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                 addGreeting(current)
             } finally {
                 greetingInFlight = false
+                if (!_state.value.speaking && !_state.value.generating) {
+                    ensureForegroundMicIfLocked(immediate = true)
+                }
             }
         }
     }
@@ -1410,6 +1421,8 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
     // Voice input -------------------------------------------------------------
 
     private fun releaseMicrophoneBeforeProcessing(reason: String) {
+        val keepLiveCallAnchor = !userPausedMic &&
+            (settings.value.voice.continuousListening || serviceActive || _conversationMode.value)
         val wasListening = _state.value.listening ||
             manualListenJob?.isActive == true ||
             micStateMachine.diagnostics.value.isMicrophoneResourceHeld ||
@@ -1418,11 +1431,16 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         manualListenJob = null
         abandonListeningAudioFocus()
         if (wasListening) {
-            sttEngine.forceDestroyActive(reason)
-            if (micStateMachine.currentState == com.jarvis.assistant.voice.MicrophoneState.PROCESSING) {
+            if (keepLiveCallAnchor) {
+                sttEngine.pauseRecognitionKeepLiveAnchor(reason)
                 micStateMachine.completeProcessingToIdle(reason)
             } else {
-                micStateMachine.forceReleaseAll(reason)
+                sttEngine.forceDestroyActive(reason, releaseLiveAnchor = true)
+                if (micStateMachine.currentState == com.jarvis.assistant.voice.MicrophoneState.PROCESSING) {
+                    micStateMachine.completeProcessingToIdle(reason)
+                } else {
+                    micStateMachine.forceReleaseAll(reason)
+                }
             }
         }
         _state.update {
@@ -1430,7 +1448,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                 listening = false,
                 partialTranscript = "",
                 audioLevel = 0f,
-                micLocked = false,
+                micLocked = keepLiveCallAnchor,
             )
         }
     }
@@ -1438,9 +1456,9 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
     fun startListening(reason: String = "User tapped microphone") {
         userPausedMic = false
         autoListenAllowed = settings.value.voice.continuousListening || serviceActive
-        // IMPORTANT: Do NOT automatically start the background foreground service when the
-        // owner simply taps the in-app microphone button. Only explicit background listening
-        // toggles start JarvisListeningService.
+        if (isGranted(Manifest.permission.RECORD_AUDIO)) {
+            sttEngine.ensureLiveCallAnchor()
+        }
         startListeningInternal(interrupt = true, isAutoLoop = false, reason = reason)
     }
 
@@ -1486,24 +1504,23 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             return
         }
 
+        sttEngine.ensureLiveCallAnchor()
         val sessionId = micStateMachine.tryBeginSession(reason) ?: return
         if (interrupt) interruptSpeech()
-        requestListeningAudioFocus()
 
         manualListenJob?.cancel()
         manualListenJob = scope.launch {
-            var consecutiveErrors = 0
             val keepLooping = {
                 isActive &&
                     !userPausedMic &&
-                    (settings.value.voice.continuousListening || serviceActive) &&
+                    (settings.value.voice.continuousListening || serviceActive || _conversationMode.value) &&
                     (uiVisible || serviceActive)
             }
 
             _state.update {
                 it.copy(
                     listening = true,
-                    micLocked = settings.value.voice.continuousListening || serviceActive,
+                    micLocked = settings.value.voice.continuousListening || serviceActive || _conversationMode.value,
                     partialTranscript = "",
                     error = null,
                 )
@@ -1532,20 +1549,15 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
 
                             is SttEvent.Final -> {
                                 val text = event.text.trim()
-                                consecutiveErrors = 0
-                                // The recognizer has already been stopped & destroyed by AndroidSttEngine
-                                // and transitioned to PROCESSING. Release UI listening state before AI turn.
-                                abandonListeningAudioFocus()
                                 _state.update {
                                     it.copy(
-                                        listening = false,
                                         partialTranscript = "",
                                         audioLevel = 0f,
-                                        micLocked = settings.value.voice.continuousListening || serviceActive,
+                                        micLocked = settings.value.voice.continuousListening || serviceActive || _conversationMode.value,
                                     )
                                 }
                                 micStateMachine.completeProcessingToIdle(
-                                    "Speech utterance finished — microphone released ($sessionId)",
+                                    "Speech utterance captured ($sessionId)",
                                 )
                                 if (text.isNotBlank()) {
                                     capturedCommand = text
@@ -1554,31 +1566,24 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                             }
 
                             is SttEvent.Error -> {
-                                consecutiveErrors++
-                                abandonListeningAudioFocus()
-                                _state.update {
-                                    it.copy(
-                                        listening = false,
-                                        partialTranscript = "",
-                                        audioLevel = 0f,
-                                        micLocked = false,
-                                    )
-                                }
-                                val isSilenceTimeout = event.code == SpeechRecognizer.ERROR_SPEECH_TIMEOUT ||
-                                    event.code == SpeechRecognizer.ERROR_NO_MATCH
-                                if (!isAutoLoop && uiVisible) {
-                                    if (isSilenceTimeout) {
-                                        _state.update { it.copy(notice = "No speech detected. Microphone released.") }
-                                    } else {
-                                        _state.update { it.copy(error = event.message) }
-                                    }
-                                }
                                 val unrecoverable = event.code == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ||
                                     event.message.contains("not available", ignoreCase = true) ||
-                                    event.message.contains("could not be started", ignoreCase = true) ||
                                     event.message.contains("permission", ignoreCase = true)
-                                if (unrecoverable || !keepLooping()) {
-                                    if (unrecoverable) userPausedMic = true
+                                if (unrecoverable) {
+                                    userPausedMic = true
+                                    stopLoopAfterPass = true
+                                    if (uiVisible) {
+                                        _state.update {
+                                            it.copy(
+                                                listening = false,
+                                                partialTranscript = "",
+                                                audioLevel = 0f,
+                                                micLocked = false,
+                                                error = event.message,
+                                            )
+                                        }
+                                    }
+                                } else if (!keepLooping()) {
                                     stopLoopAfterPass = true
                                 }
                             }
@@ -1587,64 +1592,66 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                         }
                     }
                 } catch (e: CancellationException) {
-                    abandonListeningAudioFocus()
                     throw e
                 } catch (e: Exception) {
-                    abandonListeningAudioFocus()
                     micStateMachine.onError(
                         errorMessage = e.message ?: "Speech recognition failed.",
                         stopReason = "Unhandled recognition exception",
                     )
-                    if (!isAutoLoop && uiVisible) {
-                        _state.update {
-                            it.copy(
-                                listening = false,
-                                micLocked = false,
-                                audioLevel = 0f,
-                                error = e.message ?: "Speech recognition failed.",
-                            )
-                        }
+                    if (!keepLooping()) {
+                        stopLoopAfterPass = true
                     }
-                    stopLoopAfterPass = true
                 }
 
                 val commandToDispatch = capturedCommand
                 if (commandToDispatch != null) {
                     val voice = settings.value.voice
-                    if (uiVisible || !voice.requireWakeWord) {
+                    if (uiVisible || !voice.requireWakeWord || _conversationMode.value) {
                         val parsed = WakeWord.parse(commandToDispatch, voice.wakeWord, false)
                         if (parsed.summonsOnly) {
                             summon()
                         } else {
                             send(parsed.command.ifBlank { commandToDispatch })
                         }
+                        break
                     } else {
-                        handleServiceUtterance(commandToDispatch)
+                        val dispatched = handleServiceUtterance(commandToDispatch)
+                        if (dispatched) {
+                            break
+                        }
+                        // Utterance did not contain the wake word in background mode:
+                        // stay live and immediately continue listening!
+                        stopLoopAfterPass = false
                     }
-                    break
                 }
 
                 if (stopLoopAfterPass || !keepLooping()) {
                     break
                 }
 
-                // Only reached when background service or continuousListening is explicitly enabled
-                delay((350L * consecutiveErrors.coerceAtLeast(1)).coerceAtMost(2_500L))
+                delay(25L)
                 if (keepLooping()) {
-                    micStateMachine.tryBeginSession("Continuous/background re-arm")
+                    sttEngine.ensureLiveCallAnchor()
+                    micStateMachine.tryBeginSession("Continuous live call re-arm")
                 }
             } while (keepLooping())
 
-            abandonListeningAudioFocus()
-            if (micStateMachine.currentState != com.jarvis.assistant.voice.MicrophoneState.IDLE) {
-                micStateMachine.completeStop("Listening session ended")
+            val stillInLiveTurn = !userPausedMic &&
+                (_state.value.generating || _state.value.speaking) &&
+                (settings.value.voice.continuousListening || serviceActive || _conversationMode.value)
+
+            if (!stillInLiveTurn && !keepLooping()) {
+                sttEngine.forceDestroyActive("Listening session ended", releaseLiveAnchor = true)
+                if (micStateMachine.currentState != com.jarvis.assistant.voice.MicrophoneState.IDLE) {
+                    micStateMachine.completeStop("Listening session ended")
+                }
             }
             _state.update {
                 it.copy(
                     listening = false,
                     partialTranscript = "",
                     audioLevel = 0f,
-                    micLocked = false,
+                    micLocked = stillInLiveTurn || keepLooping(),
                 )
             }
         }
@@ -1660,7 +1667,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         manualListenJob?.cancel()
         manualListenJob = null
         abandonListeningAudioFocus()
-        sttEngine.forceDestroyActive(reason)
+        sttEngine.forceDestroyActive(reason, releaseLiveAnchor = true)
         micStateMachine.forceReleaseAll(reason)
         _state.update {
             it.copy(
@@ -1678,6 +1685,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
     fun toggleListening() {
         val micRunning = _state.value.listening ||
             manualListenJob?.isActive == true ||
+            sttEngine.liveAnchor.isLive ||
             micStateMachine.currentState == com.jarvis.assistant.voice.MicrophoneState.STARTING ||
             micStateMachine.currentState == com.jarvis.assistant.voice.MicrophoneState.LISTENING
         if (micRunning) {
@@ -1717,10 +1725,6 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         var errorCode: Int? = null
         try {
             withTimeoutOrNull(LISTEN_WINDOW_MS) {
-                // The engine keeps the microphone open and only completes when it has
-                // one final utterance. Stop collecting immediately after Final: the
-                // turn is about to start, and the microphone must be released before
-                // text-to-speech requests audio focus.
                 sttEngine.listen(locale).transformWhile { event ->
                     emit(event)
                     event !is SttEvent.Final
@@ -1761,7 +1765,6 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         } catch (e: Exception) {
             errorText = e.message ?: "Speech recognition failed."
         } finally {
-            // Keep `listening = true` steady while continuous listening is active; only clear partialTranscript
             _state.update { it.copy(partialTranscript = "", audioLevel = 0f) }
         }
         if (result == null && reportErrors && errorText != null) {
@@ -1802,6 +1805,8 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             }
             return false
         }
+        userPausedMic = false
+        sttEngine.ensureLiveCallAnchor()
         if (!serviceActive) {
             val started = ListeningServiceController.start(appContext)
             if (!started) {
@@ -1833,8 +1838,11 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         _state.update { it.copy(serviceActive = true) }
         serviceJob?.cancel()
         serviceJob = null
-        if (!userPausedMic && !_state.value.speaking && !_state.value.generating) {
-            ensureForegroundMicIfLocked()
+        if (!userPausedMic && isGranted(Manifest.permission.RECORD_AUDIO)) {
+            sttEngine.ensureLiveCallAnchor()
+            if (!_state.value.speaking && !_state.value.generating) {
+                ensureForegroundMicIfLocked(immediate = true)
+            }
         }
     }
 
@@ -1858,42 +1866,21 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         }
     }
 
-    private fun handleServiceUtterance(text: String) {
+    private fun handleServiceUtterance(text: String): Boolean {
         val voice = settings.value.voice
         val parsed = WakeWord.parse(text, voice.wakeWord, voice.requireWakeWord)
-        if (!parsed.addressed) return
+        if (!parsed.addressed) return false
         if (parsed.summonsOnly) {
             summon()
-            return
+            return true
         }
         send(parsed.command)
+        return true
     }
 
     // Audio focus -------------------------------------------------------------
 
-    private fun requestListeningAudioFocus(): Boolean {
-        val manager = audioManager ?: return false
-        val request = listeningFocusRequest ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ASSISTANT)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build(),
-            )
-            .setWillPauseWhenDucked(false)
-            .setOnAudioFocusChangeListener { change ->
-                if (change == AudioManager.AUDIOFOCUS_LOSS ||
-                    change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
-                ) {
-                    handleIncomingCallInterruption("Audio focus lost during listening ($change)")
-                }
-            }
-            .build()
-            .also { listeningFocusRequest = it }
-        val granted = runCatching { manager.requestAudioFocus(request) }
-            .getOrDefault(AudioManager.AUDIOFOCUS_REQUEST_FAILED)
-        return granted == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
-    }
+    private fun requestListeningAudioFocus(): Boolean = true
 
     private fun abandonListeningAudioFocus() {
         val manager = audioManager ?: return

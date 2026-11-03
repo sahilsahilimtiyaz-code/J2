@@ -151,8 +151,7 @@ class MicrophoneStateMachine(
             if (snap.state == MicrophoneState.STARTING ||
                 snap.state == MicrophoneState.LISTENING ||
                 snap.state == MicrophoneState.STOPPING ||
-                snap.activeRecognitionSessionCount > 0 ||
-                audioRecordRecording
+                snap.activeRecognitionSessionCount > 0
             ) {
                 return null
             }
@@ -166,6 +165,7 @@ class MicrophoneStateMachine(
                 listeningStartTimeMs = now,
                 listeningDurationMs = 0L,
                 lastStartReason = reason,
+                isMicrophoneResourceHeld = audioRecordRecording,
                 transitionHistory = appendTransition(snap.transitionHistory, MicrophoneState.STARTING),
             )
             return newId
@@ -246,13 +246,12 @@ class MicrophoneStateMachine(
     fun completeProcessingToIdle(stopReason: String? = null) {
         synchronized(lock) {
             val snap = _diagnostics.value
-            val held = snap.activeRecognitionSessionCount > 0 || audioRecordRecording
-            if (!held && snap.state != MicrophoneState.IDLE) {
+            if (snap.activeRecognitionSessionCount == 0 && snap.state != MicrophoneState.IDLE) {
                 activeSessionId = null
                 _diagnostics.value = snap.copy(
                     state = MicrophoneState.IDLE,
                     lastStopReason = stopReason ?: snap.lastStopReason,
-                    isMicrophoneResourceHeld = false,
+                    isMicrophoneResourceHeld = audioRecordRecording,
                     transitionHistory = appendTransition(snap.transitionHistory, MicrophoneState.IDLE),
                 )
             }

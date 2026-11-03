@@ -292,9 +292,9 @@ class SettingsRepository(
             }
         }
 
-        val migrateMicLifecycle = vault.getMetadata(SLOT_MIC_LIFECYCLE_MIGRATED_V1) != "true"
-        if (migrateMicLifecycle) {
-            vault.putMetadata(SLOT_MIC_LIFECYCLE_MIGRATED_V1, "true")
+        val migrateLiveCallMode = vault.getMetadata(SLOT_MIC_LIVE_CALL_MODE_V2) != "true"
+        if (migrateLiveCallMode) {
+            vault.putMetadata(SLOT_MIC_LIVE_CALL_MODE_V2, "true")
         }
 
         val restoredVoice = v.copy(
@@ -304,9 +304,9 @@ class SettingsRepository(
             voiceId = activeVid,
             fishVoiceId = fishVid,
             elevenLabsVoiceId = elevenVid,
-            continuousListening = if (migrateMicLifecycle) false else v.continuousListening,
-            alwaysListening = if (migrateMicLifecycle) false else v.alwaysListening,
-            requireWakeWord = if (migrateMicLifecycle) true else v.requireWakeWord,
+            continuousListening = if (migrateLiveCallMode) true else v.continuousListening,
+            alwaysListening = if (migrateLiveCallMode) true else v.alwaysListening,
+            requireWakeWord = v.requireWakeWord,
         )
 
         // Ensure the synchronous Keystore Vault stays populated with any keys loaded from DataStore
@@ -448,7 +448,7 @@ class SettingsRepository(
 
     private companion object {
         const val SLOT_GLOBAL_FREE_PROVIDERS_SEEDED = "seeded_global_free_providers"
-        const val SLOT_MIC_LIFECYCLE_MIGRATED_V1 = "mic_lifecycle_migrated_v1"
+        const val SLOT_MIC_LIVE_CALL_MODE_V2 = "mic_live_call_mode_v2"
         val STATE_KEY = stringPreferencesKey("settings_v1")
         val VOICE_KEY_BACKUP = stringPreferencesKey("voice_api_key_backup_v1")
         val FISH_KEY_BACKUP = stringPreferencesKey("voice_fish_api_key_backup_v1")

@@ -304,16 +304,7 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
 
     // Navigation --------------------------------------------------------------
 
-    private fun releaseForegroundMicOnNavigation(destination: String) {
-        if (_ui.value.listening && !_ui.value.serviceActive && !_ui.value.settings.voice.continuousListening) {
-            core.stopListening(reason = "Navigated away to $destination", stopBackgroundService = false)
-        }
-    }
-
     fun selectTab(tab: JarvisTab) {
-        if (tab != JarvisTab.HOME) {
-            releaseForegroundMicOnNavigation(tab.name)
-        }
         _ui.update { state ->
             state.copy(
                 tab = tab,
@@ -340,7 +331,6 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun openSettings() {
-        releaseForegroundMicOnNavigation("SETTINGS")
         _ui.update { it.copy(tab = JarvisTab.SETTINGS, notice = null) }
     }
 
@@ -349,7 +339,6 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun openPermissions() {
-        releaseForegroundMicOnNavigation("PERMISSIONS")
         _ui.update {
             it.copy(
                 tab = JarvisTab.PERMISSIONS,
@@ -365,17 +354,14 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun openActionLog() {
-        releaseForegroundMicOnNavigation("LOG")
         _ui.update { it.copy(tab = JarvisTab.LOG, quickPanelOpen = false) }
     }
 
     fun openSkills() {
-        releaseForegroundMicOnNavigation("SKILLS")
         _ui.update { it.copy(tab = JarvisTab.SKILLS, quickPanelOpen = false) }
     }
 
     fun openProposals() {
-        releaseForegroundMicOnNavigation("PROPOSALS")
         _ui.update { it.copy(tab = JarvisTab.PROPOSALS, quickPanelOpen = false) }
     }
 
