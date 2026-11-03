@@ -39,7 +39,7 @@ class BargeInDetector(
     var armDelayMs: Long = 700L
 
     /** Minimum loudness (RMS) that counts as speech, before calibration. */
-    var baseThreshold: Double = 2200.0
+    var baseThreshold: Double = 650.0
 
     val isRunning: Boolean get() = job?.isActive == true
 

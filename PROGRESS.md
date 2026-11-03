@@ -487,3 +487,36 @@
   - All 124 unit tests passed via `gradle testDebugUnitTest` in 6s.
   - Full debug APK built and packaged via `gradle assembleDebug` in 2s.
 
+## 2026-11-03 (Part 6) — 3D Touch Physics for Brahma AI Orb & Microphone Sensitivity Fix
+
+- [x] **Microphone Sensitivity Overhaul (`SttEngine.kt`, `BargeInDetector.kt`):**
+  - **Root Cause of Having to Shout/Scream:**
+    1. `createBestAudioRecord` was selecting `MediaRecorder.AudioSource.VOICE_COMMUNICATION` first. On Samsung Galaxy devices (such as the Galaxy A54), `VOICE_COMMUNICATION` activates hardware VoIP acoustic echo cancellation, aggressive high-pass filtering, and an aggressive noise gate with low preamp gain unless held directly to the ear.
+    2. In `runCaptureLoop()`, the VAD voice threshold was clamped to a minimum of `260.0` RMS (scaling up to `1450.0`), required `peak >= 520`, and required 3 consecutive frames. Normal conversational speech at arm's length (30-40cm) only generates ~60-220 RMS and peak ~150-400, meaning quiet/normal speech was filtered out completely, forcing the user to shout/scream directly into the mic port.
+    3. `listen()` previously did NOT start `SpeechRecognizer` immediately; it stayed in standby until the loud VAD trigger fired.
+    4. AudioLevel was scaled linearly as `rms / 5500.0`, clamping normal speech to `0.04f` so the orb appeared completely deaf.
+  - **Engineering Solution:**
+    1. Prioritized `MediaRecorder.AudioSource.VOICE_RECOGNITION` as the primary audio source, followed by `MIC`, and then `VOICE_COMMUNICATION`. On Samsung and Android devices, `VOICE_RECOGNITION` provides un-gated, high-gain, flat-frequency audio capture tuned for speech recognition.
+    2. Tuned adaptive ambient noise floor to track dynamically (`12.0` to `320.0` RMS) and set sensitive voice threshold `(noiseFloorRms * 1.25 + 12.0).coerceIn(28.0, 220.0)` with `peak >= 100`, firing with 1 frame (`consecutiveVoiceFrames >= 1`) backed by the 750ms circular pre-roll buffer.
+    3. Converted audioLevel to perceptual logarithmic scaling: `(ln((rms / 14.0).coerceAtLeast(1.0)) / ln(45.0)).toFloat().coerceIn(0.05f, 1f)` so normal conversational speech provides lively, responsive 0.3 - 0.75 amplitude on the 3D orb.
+    4. Started `startRecognitionForSpeech()` IMMEDIATELY upon `listen()` being called. Speech recognition is actively listening from the first millisecond with zero delay and zero shouting. Added auto re-arm on silence timeouts.
+    5. Decreased `BargeInDetector` threshold from `2200.0` to `650.0` so barge-in interruption works with a natural speaking voice.
+
+- [x] **Full 3D Interactive Touch Physics for Brahma AI Orb (`Reactor.kt`, `HomeScreen.kt`):**
+  - **3D Touch & Gesture Architecture (`NeuralOrbPhysics`, `ArcReactor`):**
+    - Added interactive pointer input gesture detectors (`detectDragGestures` and `detectTapGestures`) directly to `ArcReactor`'s Compose canvas.
+    - **Horizontal Drag (3D Yaw):** Dragging horizontally spins the 3D orb along the Y-axis with instantaneous angular velocity tracking.
+    - **Vertical Drag (3D Pitch):** Dragging vertically tilts the 3D camera (`pitchAngleDeg`), allowing the user to tilt up or look directly down into the interior funnel/vortex of the 3D superquadric harmonic lattice.
+    - **Flick Momentum & Inertia:** Releasing a flick transfers drag velocity to physical angular momentum (`touchYawVelocity`, `touchPitchVelocity`), which coasts smoothly with aerodynamic friction damping before settling.
+    - **Cinematic Spring-Back:** Pitch smoothly springs back towards the cinematic viewing angle (32°) when touch ends.
+    - **Surface Membrane Touch Depression:** Touching the orb calculates the normalized contact point `(touchNormX, touchNormY)`. The 3D lattice membrane under the finger physically indents and deforms elastically (`touchDeform`).
+    - **Expanding 3D Surface Ripples:** Tapping or touching emits realistic 3D damped sine ripple waves that propagate radially outward across the 30 contour rings.
+    - **Elastic Tap Bounce:** Tapping triggers an elastic spring impact bounce (`touchImpactScale`) and acoustic shockwave.
+    - **3D Meridian Wireframe Ribs:** Added radial longitude wireframe ribs connecting adjacent contour rings, producing the unmistakable 3D undulating wireframe lattice cage seen in the Brahma AI screen recording.
+    - Removed container-level click interceptor in `HomeScreen.kt` so touches pass directly to the 3D physics engine, while tapping cleanly triggers voice overlay/toggle.
+
+- [x] **Testing & Verification:**
+  - `compile_applet`: Succeeded.
+  - `gradle testDebugUnitTest`: Succeeded, all 124 unit tests passed.
+  - `gradle assembleDebug`: Succeeded, debug APK compiled cleanly (44 tasks up to date).
+

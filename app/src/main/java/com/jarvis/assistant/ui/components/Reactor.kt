@@ -9,6 +9,8 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -28,11 +30,13 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import com.jarvis.assistant.ui.theme.JarvisPalette
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.exp
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -60,10 +64,13 @@ val ReactorState.label: String
  * - Central vertical spindle / hourglass twist rotation & expansion
  * - Spring-mass-damper acoustic coupling driven by microphone RMS audio level
  * - Gyroscopic orbital satellites angular momentum
+ * - Interactive 3D Touch Physics: horizontal drag (yaw rotation), vertical drag (funnel pitch tilt),
+ *   elastic membrane depression at finger contact, expanding 3D surface ripples, and flick momentum.
  */
 @Stable
 class NeuralOrbPhysics(val nodeCount: Int = 24) {
     var spinAngleDeg by mutableFloatStateOf(0f)
+    var pitchAngleDeg by mutableFloatStateOf(32f) // Cinematic 32° lookdown into funnel
     var wavePhase by mutableFloatStateOf(0f)
     var spindlePhase by mutableFloatStateOf(0f)
     var orbitAngle1 by mutableFloatStateOf(0f)
@@ -80,7 +87,57 @@ class NeuralOrbPhysics(val nodeCount: Int = 24) {
     var shockwaveProgress by mutableFloatStateOf(0f)
     var frameTick by mutableFloatStateOf(0f)
 
+    // Interactive 3D Touch Physics State
+    var isTouched by mutableStateOf(false)
+    var touchNormX by mutableFloatStateOf(0f)
+    var touchNormY by mutableFloatStateOf(0f)
+    var touchDeform by mutableFloatStateOf(0f)
+    var touchRippleProgress by mutableFloatStateOf(0f)
+    var touchRippleIntensity by mutableFloatStateOf(0f)
+    var touchYawVelocity by mutableFloatStateOf(0f)
+    var touchPitchVelocity by mutableFloatStateOf(0f)
+    var touchImpactScale by mutableFloatStateOf(0f)
+
     private var prevAudio = 0f
+
+    fun onTouchDown(normX: Float, normY: Float) {
+        isTouched = true
+        touchNormX = normX
+        touchNormY = normY
+        touchDeform = 0.45f
+        touchRippleProgress = 0f
+        touchRippleIntensity = 0.90f
+        touchImpactScale = 0.08f
+    }
+
+    fun onTouchDrag(deltaX: Float, deltaY: Float, normX: Float, normY: Float) {
+        touchNormX = normX
+        touchNormY = normY
+        // Horizontal drag directly spins the 3D orb around Y-axis
+        spinAngleDeg = (spinAngleDeg + deltaX * 0.45f) % 360f
+        // Vertical drag tilts the 3D camera around X-axis (look down into or up at the funnel)
+        pitchAngleDeg = (pitchAngleDeg - deltaY * 0.35f).coerceIn(-48f, 78f)
+        touchYawVelocity = deltaX * 16f
+        touchPitchVelocity = -deltaY * 12f
+        touchDeform = 0.50f
+    }
+
+    fun onTouchUp() {
+        isTouched = false
+        // Transfer flick velocity into angular momentum
+        angularVelocity = (angularVelocity + touchYawVelocity * 0.15f).coerceIn(-260f, 260f)
+    }
+
+    fun onTap(normX: Float, normY: Float) {
+        touchNormX = normX
+        touchNormY = normY
+        touchDeform = 0.60f
+        touchRippleProgress = 0f
+        touchRippleIntensity = 1.0f
+        shockwaveProgress = 0f
+        shockwaveIntensity = 0.95f
+        touchImpactScale = 0.14f
+    }
 
     fun step(
         dtSeconds: Float,
@@ -101,8 +158,8 @@ class NeuralOrbPhysics(val nodeCount: Int = 24) {
             listening -> 36f + audio * 40f
             else -> 20f
         }
-        val angularAccel = (targetOmega - angularVelocity) * 5.0f
-        angularVelocity = (angularVelocity + angularAccel * dt).coerceIn(12f, 220f)
+        val angularAccel = (targetOmega - angularVelocity) * 4.5f
+        angularVelocity = (angularVelocity + angularAccel * dt).coerceIn(-260f, 260f)
         spinAngleDeg = (spinAngleDeg + angularVelocity * dt) % 360f
 
         // Gyroscopic satellite orbits (different inclinations and rates)
@@ -111,7 +168,29 @@ class NeuralOrbPhysics(val nodeCount: Int = 24) {
         orbitAngle3 = (orbitAngle3 + (angularVelocity * 0.85f + 22f) * dt) % 360f
         orbitAngle4 = (orbitAngle4 - (angularVelocity * 0.55f + 12f) * dt) % 360f
 
-        // 2. 5-Lobed Organic Harmonic Wave Amplitude
+        // 2. Touch Physics Dynamics (Inertial coasting, pitch spring-back, elastic membrane relaxation)
+        if (!isTouched) {
+            // Apply inertial friction to flick spin & pitch
+            touchYawVelocity *= (1f - dt * 2.5f)
+            touchPitchVelocity *= (1f - dt * 3.5f)
+            pitchAngleDeg = (pitchAngleDeg + touchPitchVelocity * dt).coerceIn(-48f, 78f)
+            // Soft spring pull back towards comfortable cinematic viewing angle (32 degrees)
+            pitchAngleDeg += (32f - pitchAngleDeg) * (dt * 1.6f)
+            // Elastic touch depression relaxation
+            touchDeform += (0f - touchDeform) * (dt * 7.5f)
+        }
+        touchImpactScale += (0f - touchImpactScale) * (dt * 9.0f)
+
+        // Propagate expanding 3D surface ripple waves
+        if (touchRippleIntensity > 0.008f) {
+            touchRippleProgress += dt * 2.3f
+            touchRippleIntensity *= (1f - dt * 2.6f)
+        } else {
+            touchRippleIntensity = 0f
+            touchRippleProgress = 0f
+        }
+
+        // 3. 5-Lobed Organic Harmonic Wave Amplitude
         val targetWaveAmp = when {
             thinking -> 0.38f // Crisp pronounced 5-lobed star geometry as in thinking frame
             speaking -> 0.28f + audio * 0.42f // Dynamic sound-wave undulation as in speaking frame
@@ -127,7 +206,7 @@ class NeuralOrbPhysics(val nodeCount: Int = 24) {
         }
         wavePhase = (wavePhase + waveSpeed * dt) % (2f * PI.toFloat() * 100f)
 
-        // 3. Central Vertical Spindle / Hourglass Double-Helix intensity & spin
+        // 4. Central Vertical Spindle / Hourglass Double-Helix intensity & spin
         val targetSpindle = when {
             thinking -> 1.0f // Golden/Amber prominent vertical hourglass
             speaking -> 0.85f + audio * 0.15f // Radiant cyan/white vertical spindle
@@ -142,13 +221,13 @@ class NeuralOrbPhysics(val nodeCount: Int = 24) {
         }
         spindlePhase = (spindlePhase + spindleSpeed * dt) % 360f
 
-        // 4. Spring-mass-damper core radius (Hooke's law with voice transients)
+        // 5. Spring-mass-damper core radius (Hooke's law with voice transients and touch bounce)
         val targetScale = when {
             speaking -> 1.05f + audio * 0.20f
             thinking -> 1.03f + sin(frameTick * 6f) * 0.04f
             listening -> 1.02f + audio * 0.12f
             else -> 1.0f + sin(frameTick * 1.5f) * 0.025f
-        }
+        } + touchImpactScale
         val stiffness = 160f
         val damping = 14f
         val audioImpulse = (audio - prevAudio).coerceAtLeast(0f) * 4.5f
@@ -156,7 +235,7 @@ class NeuralOrbPhysics(val nodeCount: Int = 24) {
         coreVelocity += springForce * dt
         coreScale = (coreScale + coreVelocity * dt).coerceIn(0.85f, 1.45f)
 
-        // 5. Acoustic shockwave emission on speech bursts
+        // 6. Acoustic shockwave emission on speech bursts
         if (audio - prevAudio > 0.08f || (shockwaveIntensity <= 0.02f && speaking && audio > 0.25f)) {
             shockwaveProgress = 0f
             shockwaveIntensity = (0.5f + audio * 0.5f).coerceAtMost(1f)
@@ -239,6 +318,7 @@ fun ArcReactor(
     accent: Color = JarvisPalette.Cyan,
     audioLevel: Float = 0f,
     toolActive: Boolean = false,
+    onTap: (() -> Unit)? = null,
 ) {
     val thinking = state == ReactorState.THINKING || toolActive
     val speaking = state == ReactorState.SPEAKING
@@ -257,7 +337,53 @@ fun ArcReactor(
         label = "brahma_audio",
     )
 
-    Canvas(modifier = modifier) {
+    Canvas(
+        modifier = modifier
+            .pointerInput(physics) {
+                detectTapGestures(
+                    onPress = { offset ->
+                        val halfW = size.width / 2f
+                        val halfH = size.height / 2f
+                        val normX = if (halfW > 0) ((offset.x - halfW) / halfW).coerceIn(-1f, 1f) else 0f
+                        val normY = if (halfH > 0) ((offset.y - halfH) / halfH).coerceIn(-1f, 1f) else 0f
+                        physics.onTouchDown(normX, normY)
+                        val released = tryAwaitRelease()
+                        if (released) {
+                            physics.onTouchUp()
+                        }
+                    },
+                    onTap = { offset ->
+                        val halfW = size.width / 2f
+                        val halfH = size.height / 2f
+                        val normX = if (halfW > 0) ((offset.x - halfW) / halfW).coerceIn(-1f, 1f) else 0f
+                        val normY = if (halfH > 0) ((offset.y - halfH) / halfH).coerceIn(-1f, 1f) else 0f
+                        physics.onTap(normX, normY)
+                        onTap?.invoke()
+                    },
+                )
+            }
+            .pointerInput(physics) {
+                detectDragGestures(
+                    onDragStart = { offset ->
+                        val halfW = size.width / 2f
+                        val halfH = size.height / 2f
+                        val normX = if (halfW > 0) ((offset.x - halfW) / halfW).coerceIn(-1f, 1f) else 0f
+                        val normY = if (halfH > 0) ((offset.y - halfH) / halfH).coerceIn(-1f, 1f) else 0f
+                        physics.onTouchDown(normX, normY)
+                    },
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        val halfW = size.width / 2f
+                        val halfH = size.height / 2f
+                        val normX = if (halfW > 0) ((change.position.x - halfW) / halfW).coerceIn(-1f, 1f) else 0f
+                        val normY = if (halfH > 0) ((change.position.y - halfH) / halfH).coerceIn(-1f, 1f) else 0f
+                        physics.onTouchDrag(dragAmount.x, dragAmount.y, normX, normY)
+                    },
+                    onDragEnd = { physics.onTouchUp() },
+                    onDragCancel = { physics.onTouchUp() },
+                )
+            },
+    ) {
         drawBrahmaHolographicOrb(
             physics = physics,
             thinking = thinking,
@@ -279,6 +405,7 @@ fun HolographicGlobe(
     accent: Color = JarvisPalette.Cyan,
     audioLevel: Float = 0f,
     toolActive: Boolean = false,
+    onTap: (() -> Unit)? = null,
 ) {
     val state = when {
         toolActive -> ReactorState.THINKING
@@ -292,6 +419,7 @@ fun HolographicGlobe(
         accent = accent,
         audioLevel = audioLevel,
         toolActive = toolActive,
+        onTap = onTap,
     )
 }
 
@@ -418,8 +546,8 @@ private fun DrawScope.drawParametricBrahmaMesh(
     val wavePhase = physics.wavePhase
     val waveAmp = physics.waveAmplitude
 
-    // Camera pitch angle: ~32 degrees looking slightly down into the central funnel
-    val pitchAngle = (32f / 180f) * PI.toFloat()
+    // Dynamic 3D Camera Pitch Tilt (user can drag up/down to tilt and look inside the funnel)
+    val pitchAngle = (physics.pitchAngleDeg / 180f) * PI.toFloat()
     val cosPitch = cos(pitchAngle)
     val sinPitch = sin(pitchAngle)
     val cameraDist = baseR * 3.2f
@@ -428,11 +556,23 @@ private fun DrawScope.drawParametricBrahmaMesh(
     val fineStroke = 1.4.dp.toPx()
     val bloomStroke = 3.2.dp.toPx()
 
+    // Interactive 3D Touch Physics parameters
+    val touchDeform = physics.touchDeform
+    val touchX = physics.touchNormX * baseR
+    val touchY = physics.touchNormY * baseR
+    val rippleProg = physics.touchRippleProgress
+    val rippleInt = physics.touchRippleIntensity
+
     // Reusable projection buffers for the current ring to avoid per-frame allocations
     val px = FloatArray(pointsPerRing)
     val py = FloatArray(pointsPerRing)
     val pz = FloatArray(pointsPerRing)
     val pCrest = FloatArray(pointsPerRing)
+
+    val prevPx = FloatArray(pointsPerRing)
+    val prevPy = FloatArray(pointsPerRing)
+    val prevPz = FloatArray(pointsPerRing)
+    var hasPrevRing = false
 
     for (ringIdx in 0 until rings) {
         val u = (ringIdx + 1).toFloat() / rings // 0..1 from core to outer rim
@@ -455,9 +595,27 @@ private fun DrawScope.drawParametricBrahmaMesh(
             val z = zBase + baseR * 0.28f * perturbation * sin(u * PI.toFloat())
 
             // 3D coordinates before camera tilt
-            val x3 = r * cos(theta)
-            val y3 = r * sin(theta)
-            val z3 = z
+            var x3 = r * cos(theta)
+            var y3 = r * sin(theta)
+            var z3 = z
+
+            // Interactive 3D Touch Physics: finger physically deforms the elastic lattice membrane
+            if (touchDeform > 0.01f || rippleInt > 0.01f) {
+                val dx = x3 - touchX
+                val dy = y3 - touchY
+                val distSq = dx * dx + dy * dy
+                val touchRadiusSq = baseR * baseR * 0.40f
+                if (touchDeform > 0.01f && distSq < touchRadiusSq * 3.5f) {
+                    val gaussian = exp(-distSq / touchRadiusSq)
+                    z3 -= baseR * 0.38f * touchDeform * gaussian
+                }
+                if (rippleInt > 0.01f) {
+                    val d = sqrt(distSq) / baseR
+                    val ripple = sin(d * 18f - rippleProg * 26f) *
+                        exp(-abs(d - rippleProg * 1.15f) * 4.2f) * rippleInt
+                    z3 += baseR * 0.26f * ripple
+                }
+            }
 
             // Pitch rotation (tilt towards viewer around X axis)
             val xCam = x3
@@ -547,6 +705,32 @@ private fun DrawScope.drawParametricBrahmaMesh(
                 )
             }
         }
+
+        // Draw connecting 3D meridian wireframe ribs (creates the exact Brahma AI lattice cage)
+        if (hasPrevRing) {
+            for (ptIdx in 0 until pointsPerRing step 5) {
+                val ribAvgZ = (pz[ptIdx] + prevPz[ptIdx]) * 0.5f
+                val ribDepth = ((ribAvgZ + baseR * 1.2f) / (baseR * 2.4f)).coerceIn(0f, 1f)
+                if (ribDepth > 0.28f) {
+                    val ribAlpha = if (thinking) ribDepth * 0.26f else ribDepth * 0.34f + audio * 0.20f
+                    val ribColor = (if (thinking) JarvisPalette.Amber else JarvisPalette.CyanBright)
+                        .copy(alpha = ribAlpha.coerceIn(0.06f, 0.85f))
+                    drawLine(
+                        color = ribColor,
+                        start = Offset(prevPx[ptIdx], prevPy[ptIdx]),
+                        end = Offset(px[ptIdx], py[ptIdx]),
+                        strokeWidth = if (ribDepth > 0.6f) fineStroke else hairline,
+                        cap = StrokeCap.Round,
+                    )
+                }
+            }
+        }
+        for (i in 0 until pointsPerRing) {
+            prevPx[i] = px[i]
+            prevPy[i] = py[i]
+            prevPz[i] = pz[i]
+        }
+        hasPrevRing = true
     }
 }
 
@@ -570,7 +754,7 @@ private fun DrawScope.drawCentralSpindleHourglass(
     val spindleH = baseR * (0.46f + audio * 0.12f)
     val maxRadius = baseR * (0.19f + audio * 0.08f) * intensity
     val spinRad = (physics.spindlePhase / 180f) * PI.toFloat()
-    val pitchAngle = (32f / 180f) * PI.toFloat()
+    val pitchAngle = (physics.pitchAngleDeg / 180f) * PI.toFloat()
     val cosPitch = cos(pitchAngle)
     val sinPitch = sin(pitchAngle)
     val cameraDist = baseR * 3.2f

@@ -150,9 +150,9 @@ class LiveCallAudioAnchor(
         bufferSize: Int,
     ): AudioRecord? {
         val sources = intArrayOf(
-            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
             MediaRecorder.AudioSource.VOICE_RECOGNITION,
             MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
         )
         for (source in sources) {
             val candidate = runCatching {
@@ -195,7 +195,7 @@ class LiveCallAudioAnchor(
     private fun runCaptureLoop() {
         val frameShorts = ShortArray(FRAME_SHORTS) // 320 shorts = 20ms @ 16kHz
         val pcmBytes = ByteArray(FRAME_SHORTS * 2)
-        var noiseFloorRms = 140.0
+        var noiseFloorRms = 35.0
         var consecutiveVoiceFrames = 0
         var lastVoiceFrameAtMs = 0L
         var speechTriggeredAtMs = 0L
@@ -221,16 +221,23 @@ class LiveCallAudioAnchor(
                 sumSq += (s * s).toDouble()
             }
             val rms = kotlin.math.sqrt(sumSq / read)
-            val normalizedLevel = (rms / 5500.0).toFloat().coerceIn(0.04f, 1f)
+            // Perceptual logarithmic audio scaling: normal speech (~50-350 RMS) gives 0.25 - 0.75 audioLevel
+            val normalizedLevel = if (rms > 12.0) {
+                (kotlin.math.ln((rms / 14.0).coerceAtLeast(1.0)) / kotlin.math.ln(45.0))
+                    .toFloat().coerceIn(0.05f, 1f)
+            } else {
+                0.04f
+            }
             onRmsLevel?.invoke(normalizedLevel)
 
-            // Adaptive noise floor tracking during non-speech
-            if (!isSpeechActive && rms < noiseFloorRms * 1.9) {
-                noiseFloorRms = (noiseFloorRms * 0.96 + rms * 0.04).coerceIn(85.0, 950.0)
+            // Dynamic ambient noise floor tracking (stays agile in quiet & moderate environments)
+            if (!isSpeechActive && rms < noiseFloorRms * 1.8) {
+                noiseFloorRms = (noiseFloorRms * 0.95 + rms * 0.05).coerceIn(12.0, 320.0)
             }
 
-            val voiceThreshold = (noiseFloorRms * 2.45).coerceIn(260.0, 1450.0)
-            val isVoiceFrame = rms >= voiceThreshold && peak >= 520
+            // High-sensitivity speech threshold: triggers on normal conversation and gentle voices
+            val voiceThreshold = (noiseFloorRms * 1.25 + 12.0).coerceIn(28.0, 220.0)
+            val isVoiceFrame = rms >= voiceThreshold || peak >= 100
             val now = System.currentTimeMillis()
 
             // Convert shorts to little-endian 16-bit PCM bytes for any attached pipe sink
@@ -259,7 +266,7 @@ class LiveCallAudioAnchor(
             if (isVoiceFrame) {
                 consecutiveVoiceFrames++
                 lastVoiceFrameAtMs = now
-                if (!isSpeechActive && consecutiveVoiceFrames >= 3) {
+                if (!isSpeechActive && consecutiveVoiceFrames >= 1) {
                     isSpeechActive = true
                     speechTriggeredAtMs = now
                     onVoiceActivityDetected?.invoke()
@@ -795,14 +802,15 @@ class AndroidSttEngine(
                     if ((error == SpeechRecognizer.ERROR_AUDIO || error == SpeechRecognizer.ERROR_CLIENT) &&
                         pipeModeSupported
                     ) {
-                        // Recreate recognizer cleanly and remain in VAD standby (AudioRecord stays live!)
+                        // Recreate recognizer with direct mic mode and resume listening immediately
+                        pipeModeSupported = false
                         createRecognizer()
+                        startRecognitionForSpeech()
                         return
                     }
 
                     // 3. Recoverable silence / no-match / busy errors:
-                    // Do NOT loop startListening() during silence! Simply return to VAD standby
-                    // while LiveCallAudioAnchor keeps the microphone continuously live.
+                    // Automatically re-arm recognition so Jarvis remains actively listening for the user's speech
                     if (isRecoverableSttError(error) ||
                         error == SpeechRecognizer.ERROR_NETWORK ||
                         error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT ||
@@ -813,9 +821,11 @@ class AndroidSttEngine(
                         ) {
                             createRecognizer()
                         }
-                        if (liveAnchor.isSpeechActive || !anchorOk) {
-                            mainHandler.postDelayed({ startRecognitionForSpeech() }, 60L)
-                        }
+                        mainHandler.postDelayed({
+                            if (!closed && !recognitionInFlight) {
+                                startRecognitionForSpeech()
+                            }
+                        }, 60L)
                         return
                     }
 
@@ -845,8 +855,14 @@ class AndroidSttEngine(
                         destroyRecognizer("Utterance completed", releaseHardwareCount = true)
                         emit(SttEvent.Final(text))
                         close()
+                    } else {
+                        // If empty result (silence timeout), immediately re-arm so the user can speak naturally
+                        mainHandler.postDelayed({
+                            if (!closed && !recognitionInFlight) {
+                                startRecognitionForSpeech()
+                            }
+                        }, 40L)
                     }
-                    // If empty result, stay quietly in VAD standby with LiveCallAudioAnchor continuously live.
                 }
 
                 override fun onPartialResults(partialResults: Bundle?) {
@@ -863,12 +879,8 @@ class AndroidSttEngine(
         }
 
         createRecognizer()
-        // If the user is already speaking right now (or if AudioRecord anchor couldn't open),
-        // start recognition immediately; otherwise remain in zero-flicker VAD standby while
-        // LiveCallAudioAnchor holds the microphone continuously live!
-        if (!anchorOk || liveAnchor.isSpeechActive) {
-            startRecognitionForSpeech()
-        }
+        // Start recognition IMMEDIATELY upon listen(): eliminates the need to shout or scream
+        startRecognitionForSpeech()
 
         awaitClose {
             closed = true

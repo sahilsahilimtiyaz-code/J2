@@ -867,15 +867,9 @@ private fun HomeHudHero(
                 )
             }
 
-            // Central 3D Brahma Morphing Wireframe Orb (tap to open Voice Overlay)
+            // Central 3D Brahma Morphing Wireframe Orb (touch physics + tap to open Voice Overlay)
             Box(
-                modifier = Modifier
-                    .size(268.dp)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = onOpenVoiceOverlay,
-                    ),
+                modifier = Modifier.size(268.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 ArcReactor(
@@ -883,6 +877,7 @@ private fun HomeHudHero(
                     modifier = Modifier.fillMaxSize(),
                     audioLevel = state.audioLevel,
                     toolActive = toolActive,
+                    onTap = onOpenVoiceOverlay,
                 )
             }
         }
@@ -1227,6 +1222,7 @@ private fun VoiceAssistantView(
             modifier = Modifier.size(272.dp),
             audioLevel = state.audioLevel,
             toolActive = toolActive,
+            onTap = onToggleMic,
         )
 
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
