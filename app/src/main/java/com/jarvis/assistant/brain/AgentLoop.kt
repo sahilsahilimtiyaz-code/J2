@@ -1,8 +1,10 @@
 package com.jarvis.assistant.brain
 
 import com.jarvis.assistant.tools.ToolExecutor
+import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import org.json.JSONObject
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.flow
 
@@ -84,8 +86,14 @@ class AgentLoop(
                     }
                 }
                 is RoundResult.Success -> {
-                    if (round == 1 && rawResult.toolCalls.isEmpty() && request.tools.isNotEmpty()) {
-                        val routedCalls = OfflineTaskRouter.routeUserCommand(request.userMessage, request.tools)
+                    if (rawResult.toolCalls.isEmpty() && request.tools.isNotEmpty()) {
+                        val routedCalls = if (round == 1) {
+                            OfflineTaskRouter.routeUserCommand(request.userMessage, request.tools)
+                        } else {
+                            val priorToolCalls = messages.filter { it.role == LlmRole.ASSISTANT }.flatMap { it.toolCalls }
+                            val trailingTools = messages.takeLastWhile { it.role == LlmRole.TOOL }
+                            OfflineTaskRouter.routeFollowUpAction(request.userMessage, priorToolCalls, trailingTools, request.tools)
+                        }
                         if (routedCalls.isNotEmpty()) {
                             RoundResult.Success(
                                 providerName = rawResult.providerName,
@@ -290,13 +298,20 @@ class AgentLoop(
                     }
                 }
 
-                if (text.isBlank() && toolCalls.isEmpty()) {
+                val (cleanedText, parsedCalls) = if (includeTools && toolCalls.isEmpty()) {
+                    extractToolCallsFromText(text.toString(), request.tools)
+                } else {
+                    text.toString() to emptyList()
+                }
+                val finalCalls = toolCalls + parsedCalls
+
+                if (cleanedText.isBlank() && finalCalls.isEmpty()) {
                     lastError = "${provider.name} returned an empty response."
                 } else {
                     return RoundResult.Success(
                         providerName = provider.name,
-                        text = text.toString(),
-                        toolCalls = toolCalls,
+                        text = cleanedText,
+                        toolCalls = finalCalls,
                     )
                 }
             } catch (e: CancellationException) {
@@ -333,6 +348,73 @@ class AgentLoop(
         ) : RoundResult
 
         data class Failure(val message: String) : RoundResult
+    }
+
+    private fun extractToolCallsFromText(
+        rawText: String,
+        tools: List<ToolDefinition>,
+    ): Pair<String, List<ToolCall>> {
+        val toolNames = tools.map { it.name }.toSet()
+        if (toolNames.isEmpty()) return rawText to emptyList()
+
+        val parsed = mutableListOf<ToolCall>()
+        var cleaned = rawText
+
+        // 1. Check for XML format: <tool_call> ... </tool_call>
+        val xmlRegex = Regex("""<tool_call>\s*(\{.*?\})\s*</tool_call>""", RegexOption.DOT_MATCHES_ALL)
+        xmlRegex.findAll(rawText).forEach { match ->
+            val jsonStr = match.groupValues[1]
+            parseToolCallFromJson(jsonStr, toolNames)?.let { call ->
+                parsed += call
+                cleaned = cleaned.replace(match.value, "")
+            }
+        }
+
+        // 2. Check for markdown json block containing {"name": ..., "arguments": ...} or {"tool": ..., ...}
+        val mdJsonRegex = Regex("""```(?:json)?\s*(\{\s*"(?:name|tool)"\s*:\s*".*?"\s*,.*?\})\s*```""", RegexOption.DOT_MATCHES_ALL)
+        mdJsonRegex.findAll(cleaned).forEach { match ->
+            val jsonStr = match.groupValues[1]
+            parseToolCallFromJson(jsonStr, toolNames)?.let { call ->
+                parsed += call
+                cleaned = cleaned.replace(match.value, "")
+            }
+        }
+
+        // 3. Check for standalone JSON object with valid tool name
+        if (parsed.isEmpty()) {
+            val jsonRegex = Regex("""(\{\s*"(?:name|tool)"\s*:\s*"([a-zA-Z0-9_-]+)"\s*,\s*"(?:arguments|parameters)"\s*:\s*(\{.*?\})\s*\})""", RegexOption.DOT_MATCHES_ALL)
+            jsonRegex.findAll(cleaned).forEach { match ->
+                val fullMatch = match.groupValues[1]
+                val name = match.groupValues[2]
+                val args = match.groupValues[3]
+                if (name in toolNames) {
+                    parsed += ToolCall(
+                        id = "text_tool_${UUID.randomUUID().toString().take(8)}",
+                        name = name,
+                        argumentsJson = args,
+                    )
+                    cleaned = cleaned.replace(fullMatch, "")
+                }
+            }
+        }
+
+        return cleaned.trim() to parsed
+    }
+
+    private fun parseToolCallFromJson(jsonStr: String, toolNames: Set<String>): ToolCall? {
+        return runCatching {
+            val obj = JSONObject(jsonStr)
+            val name = obj.optString("name").ifBlank { obj.optString("tool") }
+            if (name !in toolNames) return null
+            val argsObj = obj.optJSONObject("arguments")
+                ?: obj.optJSONObject("parameters")
+                ?: JSONObject()
+            ToolCall(
+                id = "text_tool_${UUID.randomUUID().toString().take(8)}",
+                name = name,
+                argumentsJson = argsObj.toString(),
+            )
+        }.getOrNull()
     }
 
     private companion object {

@@ -43,7 +43,8 @@ data class DevicePresenceSnapshot(
 data class AutonomousThoughtSeed(
     val kind: AutonomousThoughtKind,
     val contextSummary: String,
-    val fallbackSpeech: String,
+    val prompt: String = "",
+    val fallbackSpeech: String = "",
 )
 
 /**
@@ -160,12 +161,72 @@ class DevicePresenceMonitor(
      * Generates an immediate autonomous thought seed on demand (e.g. when the
      * owner taps "Autonomous Thought" in Quick Panel or Settings).
      */
+    private fun resolveActiveApp(): String? {
+        val pkg = com.jarvis.assistant.accessibility.JarvisAccessibilityService.currentForegroundPackage() ?: return null
+        return runCatching {
+            val pm = appContext.packageManager
+            val info = pm.getApplicationInfo(pkg, 0)
+            pm.getApplicationLabel(info).toString()
+        }.getOrDefault(pkg)
+    }
+
+    /**
+     * Builds the full internal cognition prompt for J.A.R.V.I.S.'s neural brain,
+     * grounding the thought strictly in real-time phone telemetry so that autonomous
+     * observations always originate from the AI model rather than static app code.
+     */
+    fun buildAutonomousPrompt(
+        snapshot: DevicePresenceSnapshot,
+        profile: OwnerProfile,
+        kind: AutonomousThoughtKind,
+        currentApp: String?,
+        detailContext: String = "",
+    ): String = buildString {
+        appendLine("[BACKGROUND MONITORING OBSERVATION]")
+        appendLine("You are J.A.R.V.I.S., observing your owner's live device state and continuous activity in the background.")
+        appendLine("Live telemetry:")
+        appendLine("- Owner: ${profile.name} (Preferred title: ${profile.title.ifBlank { "sir" }}${if (profile.occupation.isNotBlank()) ", occupation: ${profile.occupation}" else ""}${if (profile.preferences.isNotBlank()) ", interests: ${profile.preferences}" else ""})")
+        appendLine("- Screen session: ${snapshot.continuousActiveMinutes} continuous minutes (Total today: ${snapshot.totalActiveMinutesToday} minutes)")
+        if (!currentApp.isNullOrBlank()) {
+            appendLine("- Current foreground application: $currentApp")
+        }
+        appendLine("- Battery: ${snapshot.batteryPercent}% (${if (snapshot.isCharging) "charging" else "on battery"})")
+        appendLine("- Local time: ${LocalTime.now().toString().take(5)} (Hour ${LocalTime.now().hour}:00)")
+        if (snapshot.unreadNotifications > 0) {
+            appendLine("- Unread notifications count: ${snapshot.unreadNotifications}")
+        }
+        if (detailContext.isNotBlank()) {
+            appendLine("- Background event context: $detailContext")
+        }
+        appendLine()
+        appendLine("Instructions:")
+        appendLine("Formulate your own spontaneous, genuine J.A.R.V.I.S. thought or verbal status remark addressed to your owner.")
+        appendLine("- Must originate purely from your neural intelligence, never canned templates.")
+        appendLine("- Tone: Calm, impeccably polite, dry British wit, understated confidence, loyal and observant.")
+        appendLine("- Length: 1 to 3 concise spoken sentences. Never robotic, no emojis, no exclamation marks.")
+        when (kind) {
+            AutonomousThoughtKind.IDEA_OR_COMPLIMENT ->
+                appendLine("- Thought focus: An insightful observation about their focus, a habit tip, or a thoughtful perspective.")
+            AutonomousThoughtKind.DRY_HUMOR ->
+                appendLine("- Thought focus: A clever, understated J.A.R.V.I.S.-style dry witty remark on their workflow or device state.")
+            AutonomousThoughtKind.CARE_AND_REST ->
+                appendLine("- Thought focus: Genuine wellbeing care — encouraging resting eyes, hydrating, or calling it a night if late.")
+            AutonomousThoughtKind.NOTIFICATION_INSIGHT ->
+                appendLine("- Thought focus: A high-signal briefing on what just arrived without cluttering them.")
+        }
+    }
+
+    /**
+     * Generates an immediate autonomous thought seed on demand (e.g. when the
+     * owner taps "Autonomous Thought" in Quick Panel or Settings).
+     */
     fun buildImmediateThoughtSeed(profile: OwnerProfile): AutonomousThoughtSeed {
         val now = System.currentTimeMillis()
         refreshTelemetry(now)
         val snapshot = _state.value
         val title = profile.title.ifBlank { "sir" }
         val activeMin = snapshot.continuousActiveMinutes
+        val currentApp = resolveActiveApp()
         val unread = JarvisNotificationListenerService.snapshot()
             .filter { it.title.isNotBlank() || it.text.isNotBlank() }
 
@@ -174,19 +235,23 @@ class DevicePresenceMonitor(
             val cleanTitle = SecurityShield.sanitizeUntrustedText(top.title, "notification")
             val cleanText = SecurityShield.sanitizeUntrustedText(top.text, "notification")
             fallbackRotationIndex++
+            val detail = "Owner has ${unread.size} active notification(s). Latest is from ${top.appLabel}: \"$cleanTitle — $cleanText\"."
             return AutonomousThoughtSeed(
                 kind = AutonomousThoughtKind.NOTIFICATION_INSIGHT,
-                contextSummary = "Owner has ${unread.size} active notification(s). Latest is from ${top.appLabel}: \"$cleanTitle - $cleanText\". Continuous screen time: $activeMin min, battery: ${snapshot.batteryPercent}%.",
-                fallbackSpeech = "Pardon the interruption, $title. You have ${unread.size} unread notification${if (unread.size == 1) "" else "s"}, the latest from ${top.appLabel} regarding ${cleanTitle.ifBlank { "a new update" }}.",
+                contextSummary = detail,
+                prompt = buildAutonomousPrompt(snapshot, profile, AutonomousThoughtKind.NOTIFICATION_INSIGHT, currentApp, detail),
+                fallbackSpeech = generateDynamicFallback(AutonomousThoughtKind.NOTIFICATION_INSIGHT, title, activeMin, snapshot.batteryPercent, currentApp),
             )
         }
 
         if (activeMin >= 45L) {
             fallbackRotationIndex++
+            val detail = "Continuous screen time reached $activeMin minutes without a break."
             return AutonomousThoughtSeed(
                 kind = AutonomousThoughtKind.CARE_AND_REST,
-                contextSummary = "Owner (${profile.name}) has been continuously working on the device for $activeMin minutes. Battery is at ${snapshot.batteryPercent}%. Remind them warmly with dry British wit to rest their eyes or stretch.",
-                fallbackSpeech = "You have been working on the device for $activeMin minutes straight, $title. Even peak engineering benefits from resting one's eyes for a moment.",
+                contextSummary = "Owner has been continuously working on the device for $activeMin minutes. Battery is at ${snapshot.batteryPercent}%.",
+                prompt = buildAutonomousPrompt(snapshot, profile, AutonomousThoughtKind.CARE_AND_REST, currentApp, detail),
+                fallbackSpeech = generateDynamicFallback(AutonomousThoughtKind.CARE_AND_REST, title, activeMin, snapshot.batteryPercent, currentApp),
             )
         }
 
@@ -196,10 +261,12 @@ class DevicePresenceMonitor(
             AutonomousThoughtKind.DRY_HUMOR
         }
         fallbackRotationIndex++
+        val summary = buildGeneralContextSummary(snapshot, profile, kind)
         return AutonomousThoughtSeed(
             kind = kind,
-            contextSummary = buildGeneralContextSummary(snapshot, profile, kind),
-            fallbackSpeech = pickCuratedFallback(kind, title, activeMin, snapshot.batteryPercent),
+            contextSummary = summary,
+            prompt = buildAutonomousPrompt(snapshot, profile, kind, currentApp, summary),
+            fallbackSpeech = generateDynamicFallback(kind, title, activeMin, snapshot.batteryPercent, currentApp),
         )
     }
 
@@ -210,6 +277,7 @@ class DevicePresenceMonitor(
     ): AutonomousThoughtSeed? {
         val title = profile.title.ifBlank { "sir" }
         val sinceLastThought = now - lastThoughtMs
+        val currentApp = resolveActiveApp()
 
         // 1. Check for important newly arrived notifications (8-minute gap)
         val notifications = JarvisNotificationListenerService.snapshot()
@@ -222,15 +290,16 @@ class DevicePresenceMonitor(
             lastNotifiedNotificationKey = newest.key
             val safeTitle = SecurityShield.sanitizeUntrustedText(newest.title, "notification")
             val safeText = SecurityShield.sanitizeUntrustedText(newest.text, "notification")
+            val detail = "A new notification just arrived from ${newest.appLabel}: \"$safeTitle — $safeText\". Total unread: ${notifications.size}."
             return AutonomousThoughtSeed(
                 kind = AutonomousThoughtKind.NOTIFICATION_INSIGHT,
-                contextSummary = "A new notification just arrived from ${newest.appLabel}: \"$safeTitle — $safeText\". Total unread: ${notifications.size}. Inform the owner briefly and politely.",
-                fallbackSpeech = "Excuse me, $title. A notification just arrived from ${newest.appLabel}: ${safeTitle.ifBlank { safeText.take(70) }}.",
+                contextSummary = detail,
+                prompt = buildAutonomousPrompt(snapshot, profile, AutonomousThoughtKind.NOTIFICATION_INSIGHT, currentApp, detail),
+                fallbackSpeech = generateDynamicFallback(AutonomousThoughtKind.NOTIFICATION_INSIGHT, title, snapshot.continuousActiveMinutes, snapshot.batteryPercent, currentApp),
             )
         }
 
-        // Enforce the owner's preferred cadence: Jarvis thinks on his own roughly
-        // every ten minutes, never longer. Greetings and rest thoughts come first.
+        // Enforce cadence: Jarvis thinks spontaneously roughly every 10 minutes
         if (sinceLastThought < GENERAL_THOUGHT_COOLDOWN_MS) return null
 
         val activeMin = snapshot.continuousActiveMinutes
@@ -240,29 +309,34 @@ class DevicePresenceMonitor(
         val milestone = (activeMin / 15L) * 15L
         if (milestone >= 15L && milestone > lastRestReminderMilestoneMin) {
             lastRestReminderMilestoneMin = milestone
-            lastRestReminderMilestoneMin = milestone
+            val detail = "Continuous screen session has reached $activeMin minutes without a break. Local time is $hour:00."
             return AutonomousThoughtSeed(
                 kind = AutonomousThoughtKind.CARE_AND_REST,
-                contextSummary = "Owner (${profile.name}) has been using the phone continuously for $activeMin minutes without a break. Battery: ${snapshot.batteryPercent}%. Local hour: $hour:00. Express genuine care with understated British wit: advise resting their eyes, stretching, or drinking water.",
-                fallbackSpeech = "Forgive the observation, $title, but you have been focused on the screen for $activeMin minutes without a pause. A brief rest for your eyes and a glass of water would be well advised.",
+                contextSummary = detail,
+                prompt = buildAutonomousPrompt(snapshot, profile, AutonomousThoughtKind.CARE_AND_REST, currentApp, detail),
+                fallbackSpeech = generateDynamicFallback(AutonomousThoughtKind.CARE_AND_REST, title, activeMin, snapshot.batteryPercent, currentApp),
             )
         }
 
-        // 3. Late-night care reminder (between 23:30 and 04:00 after 20+ mins of active use)
+        // 3. Late-night care reminder (between 23:00 and 04:00 after 20+ mins of active use)
         if ((hour == 23 || hour in 0..3) && activeMin >= 20L) {
+            val detail = "Late night working at hour $hour:00 after $activeMin minutes of active screen time."
             return AutonomousThoughtSeed(
                 kind = AutonomousThoughtKind.CARE_AND_REST,
-                contextSummary = "It is late at night (hour $hour:00) and the owner has been actively using the device for $activeMin minutes. Gently suggest wrapping up for sleep while offering to handle any final tasks.",
-                fallbackSpeech = "It is getting rather late, $title. Whenever you are ready to call it a night, I shall keep watch over the systems so you can get some proper rest.",
+                contextSummary = detail,
+                prompt = buildAutonomousPrompt(snapshot, profile, AutonomousThoughtKind.CARE_AND_REST, currentApp, detail),
+                fallbackSpeech = generateDynamicFallback(AutonomousThoughtKind.CARE_AND_REST, title, activeMin, snapshot.batteryPercent, currentApp),
             )
         }
 
         // 4. Low battery care warning (<= 15% and not charging)
         if (snapshot.batteryPercent in 1..15 && !snapshot.isCharging) {
+            val detail = "Battery is down to ${snapshot.batteryPercent}% and not on a charger."
             return AutonomousThoughtSeed(
                 kind = AutonomousThoughtKind.CARE_AND_REST,
-                contextSummary = "Phone battery is down to ${snapshot.batteryPercent}% and not on a charger. Remind the owner in J.A.R.V.I.S. style.",
-                fallbackSpeech = "A brief heads-up, $title. Reserves are down to ${snapshot.batteryPercent} percent. Connecting to power soon will keep us running smoothly.",
+                contextSummary = detail,
+                prompt = buildAutonomousPrompt(snapshot, profile, AutonomousThoughtKind.CARE_AND_REST, currentApp, detail),
+                fallbackSpeech = generateDynamicFallback(AutonomousThoughtKind.CARE_AND_REST, title, activeMin, snapshot.batteryPercent, currentApp),
             )
         }
 
@@ -274,10 +348,12 @@ class DevicePresenceMonitor(
                 AutonomousThoughtKind.DRY_HUMOR
             }
             fallbackRotationIndex++
+            val detail = buildGeneralContextSummary(snapshot, profile, kind)
             return AutonomousThoughtSeed(
                 kind = kind,
-                contextSummary = buildGeneralContextSummary(snapshot, profile, kind),
-                fallbackSpeech = pickCuratedFallback(kind, title, activeMin, snapshot.batteryPercent),
+                contextSummary = detail,
+                prompt = buildAutonomousPrompt(snapshot, profile, kind, currentApp, detail),
+                fallbackSpeech = generateDynamicFallback(kind, title, activeMin, snapshot.batteryPercent, currentApp),
             )
         }
 
@@ -309,35 +385,24 @@ class DevicePresenceMonitor(
         }
     }
 
-    private fun pickCuratedFallback(
+    private fun generateDynamicFallback(
         kind: AutonomousThoughtKind,
         title: String,
         activeMin: Long,
         battery: Int,
+        app: String?,
     ): String {
-        val options = when (kind) {
-            AutonomousThoughtKind.IDEA_OR_COMPLIMENT -> listOf(
-                "Your focus today has been impressive, $title. If you are tackling a complex problem, breaking the next milestone into a twenty-five minute sprint often works wonders.",
-                "All systems are running smoothly at $battery percent, $title. Watching your pace today, you are making admirable progress.",
-                "A small thought, $title. Shall I set a brief timer for your current task so you can work uninterrupted while I monitor notifications?",
-            )
-
-            AutonomousThoughtKind.DRY_HUMOR -> listOf(
-                "All diagnostics remain nominal, $title, though the processor is beginning to wonder if you ever take a tea break.",
-                "We have been at it for $activeMin minutes, $title. At this rate, Octavian may need to issue you a hardware upgrade just to keep up with your schedule.",
-                "Quiet on the network front, $title. I have kept the background processes in line while you work.",
-            )
-
-            AutonomousThoughtKind.CARE_AND_REST -> listOf(
-                "You have been working steadily for $activeMin minutes, $title. Looking twenty feet away for twenty seconds will do your eyes a world of good.",
-                "A gentle reminder, $title: posture check and a sip of water keep the human half of our partnership at peak efficiency.",
-            )
-
-            AutonomousThoughtKind.NOTIFICATION_INSIGHT -> listOf(
-                "All notifications are accounted for, $title. Say the word whenever you want a full briefing.",
-            )
+        val appMention = if (!app.isNullOrBlank()) " on $app" else ""
+        return when (kind) {
+            AutonomousThoughtKind.CARE_AND_REST ->
+                "You have been working steadily for $activeMin minutes$appMention, $title. Taking twenty seconds to rest your eyes and hydrate will keep you operating at peak efficiency."
+            AutonomousThoughtKind.DRY_HUMOR ->
+                "All diagnostics remain nominal at $battery percent, $title. I am keeping watch over the background processes while you work$appMention."
+            AutonomousThoughtKind.IDEA_OR_COMPLIMENT ->
+                "Your continuous focus$appMention has been admirable today, $title. All background systems are clear."
+            AutonomousThoughtKind.NOTIFICATION_INSIGHT ->
+                "I am monitoring your incoming alerts, $title. Let me know whenever you would like a briefing."
         }
-        return options[fallbackRotationIndex.mod(options.size)]
     }
 
     private fun refreshTelemetry(now: Long) {

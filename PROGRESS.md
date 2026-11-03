@@ -427,3 +427,15 @@
   - Removed `"additionalProperties": false` from `ToolSchema.kt` and added `JsonNull` assistant content + compact 6-tool retry in `OpenAiCompatibleProvider.kt` to prevent HTTP 400/422 errors across Z.ai, Gemini, Mistral, and OpenRouter providers.
   - Updated `PersonaBuilder.kt` and `jarvis_prompt.md` so the LLM calls phone tools immediately on Turn 1 instead of asking `"Shall I...?"` in text.
   - Added Round 1 Deterministic Tool Guarantee in `AgentLoop.kt` via `OfflineTaskRouter.routeUserCommand()` so explicit phone commands (`"open YouTube"`, `"type justin on YouTube"`, `"play lofi"`, `"tap ..."`, etc.) always execute even if a cloud model omits tool calls or returns an error.
+
+## 2026-11-03 (Part 3) — Neural AI Brain Autonomous Thoughts & Offline Model Multi-Round Tool Parity
+
+- [x] **Autonomous Thoughts Originate Directly from AI Neural Brain (`DevicePresenceMonitor.kt`, `JarvisCore.kt`, `LocalAiModels.kt`):**
+  - Removed static quotes and canned fallback phrase arrays.
+  - `DevicePresenceMonitor` captures live phone telemetry: active foreground app and window package (via `JarvisAccessibilityService.currentForegroundPackage()`), continuous and daily screen minutes, battery percentage and charging state, unread notification summaries, and time-of-day circadian rhythm.
+  - Generates a rich `[BACKGROUND MONITORING OBSERVATION]` cognition prompt with tools passed to `AgentLoop` so both online and on-device offline models (`LocalLlmProvider.synthesizeAutonomousThought`) formulate authentic, spontaneous J.A.R.V.I.S. thoughts reasoned from live phone state.
+  - `JarvisCore.deliverHealthSuggestion` also routes screen health milestones through the AI brain so health suggestions are delivered with J.A.R.V.I.S.'s genuine personality and live context rather than hardcoded template strings.
+- [x] **Full Tool Calling Parity & Multi-Round Chaining for Offline Models (`OfflineTaskRouter.kt`, `LocalLlmProvider.kt`, `AgentLoop.kt`):**
+  - Expanded `OfflineTaskRouter.routeUserCommand` across the full tool suite: screen vision, snapshots, typing, tapping, coordinates, media, communications, alarms, timers, reminders, calendar, memory, diagnostics, storage, skills, notifications, and web research.
+  - Added `OfflineTaskRouter.routeFollowUpAction`: enables multi-round tool chaining on-device so compound commands such as `"open YouTube and type justin"` or `"open settings and turn on dark mode"` execute sequentially across rounds (`open_app` -> `type_on_screen` -> completion summary) without stopping prematurely.
+  - Upgraded `AgentLoop.streamRound` with `extractToolCallsFromText`: automatically parses tool calls emitted in `<tool_call>` XML tags, markdown JSON code blocks, or raw JSON from text streams across all providers, ensuring total parity between online and offline models.

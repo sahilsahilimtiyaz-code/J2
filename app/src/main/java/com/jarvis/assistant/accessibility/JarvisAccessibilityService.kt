@@ -501,6 +501,11 @@ class JarvisAccessibilityService : AccessibilityService() {
 
         fun serviceInstance(): JarvisAccessibilityService? = instance
 
+        /** Package name of the active foreground app reported by the accessibility framework. */
+        fun currentForegroundPackage(): String? =
+            instance?.rootInActiveWindow?.packageName?.toString()?.takeIf { it.isNotBlank() }
+                ?: instance?.lastEventPackage?.takeIf { it.isNotBlank() }
+
         fun controller(): ScreenController? = instance?.let { ScreenController(it) }
 
         fun isConnected(): Boolean = instance != null

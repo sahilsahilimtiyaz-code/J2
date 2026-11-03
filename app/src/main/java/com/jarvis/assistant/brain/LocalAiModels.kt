@@ -9,6 +9,7 @@ import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.text.SimpleDateFormat
+import java.time.LocalTime
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
@@ -1216,11 +1217,16 @@ object OfflineTaskRouter {
         if ((lower.startsWith("open ") || lower.startsWith("launch ") || lower.startsWith("start app ")) &&
             hasTool("open_app")
         ) {
-            val appName = clean
+            val appPart = clean
                 .replace(Regex("(?i)^(jarvis\\s*,?\\s*)?(please\\s+)?(open|launch|start app)\\s+(the\\s+)?"), "")
                 .replace(Regex("(?i)\\s+app$"), "")
                 .trim()
-            if (appName.isNotBlank() && !appName.contains(" and ")) {
+            val appName = if (appPart.contains(" and ", ignoreCase = true)) {
+                appPart.substringBefore(" and ").trim()
+            } else {
+                appPart
+            }
+            if (appName.isNotBlank()) {
                 return call(
                     "open_app",
                     buildJsonObject { put("app", appName) }.toString(),
@@ -1236,6 +1242,138 @@ object OfflineTaskRouter {
                     "web_search",
                     buildJsonObject { put("query", searchQuery) }.toString(),
                 )
+            }
+        }
+
+        // 24. Screen vision, inspection & snapshots
+        if ((lower.contains("see screen") || lower.contains("look at screen") || lower.contains("what is on my screen") || lower.contains("what's on my screen") || lower.contains("read screen") || lower.contains("inspect screen")) &&
+            hasTool("see_screen")
+        ) {
+            return call("see_screen", "{}")
+        }
+        if ((lower.contains("capture snapshot") || lower.contains("screen snapshot") || lower.contains("capture screen snapshot")) &&
+            hasTool("capture_screen_snapshot")
+        ) {
+            return call("capture_screen_snapshot", "{}")
+        }
+
+        // 25. Calendar events
+        if ((lower.contains("calendar") || lower.contains("schedule")) &&
+            (lower.contains("create") || lower.contains("add") || lower.contains("new")) &&
+            hasTool("create_calendar_event")
+        ) {
+            val title = clean.replace(Regex("(?i)^(jarvis\\s*,?\\s*)?(please\\s+)?(create|add|schedule)\\s+(a\\s+)?(new\\s+)?(calendar\\s+event|event|schedule)\\s*(for|to|about)?\\s*"), "").trim()
+            return call("create_calendar_event", buildJsonObject { put("title", title.ifBlank { "New Event" }) }.toString())
+        }
+        if ((lower.contains("what's on my calendar") || lower.contains("read calendar") || lower.contains("check calendar") || lower.contains("my events")) &&
+            hasTool("read_calendar")
+        ) {
+            return call("read_calendar", "{}")
+        }
+
+        // 26. Declarative skills
+        if ((lower.startsWith("replay skill ") || lower.startsWith("run skill ")) && hasTool("replay_skill")) {
+            val name = clean.replace(Regex("(?i)^(jarvis\\s*,?\\s*)?(please\\s+)?(replay|run)\\s+skill\\s+"), "").trim()
+            return call("replay_skill", buildJsonObject { put("name", name) }.toString())
+        }
+        if ((lower.startsWith("save as skill ") || lower.startsWith("save skill ")) && hasTool("save_as_skill")) {
+            val name = clean.replace(Regex("(?i)^(jarvis\\s*,?\\s*)?(please\\s+)?save\\s+(as\\s+)?skill\\s+"), "").trim()
+            return call("save_as_skill", buildJsonObject { put("name", name) }.toString())
+        }
+        if ((lower.contains("list skills") || lower.contains("show skills") || lower.contains("what skills")) && hasTool("list_skills")) {
+            return call("list_skills", "{}")
+        }
+
+        return emptyList()
+    }
+
+    /**
+     * Inspects previous tool calls and determines if the owner's request entails
+     * a subsequent step (multi-step action execution for offline models).
+     */
+    fun routeFollowUpAction(
+        originalUserText: String,
+        priorCalls: List<ToolCall>,
+        trailingTools: List<LlmMessage>,
+        availableTools: List<ToolDefinition>,
+    ): List<ToolCall> {
+        val clean = originalUserText.trim()
+        val lower = clean.lowercase(Locale.ROOT)
+        val toolNames = availableTools.map { it.name }.toSet()
+        fun hasTool(name: String): Boolean = toolNames.isEmpty() || name in toolNames
+
+        fun call(name: String, argsJson: String): List<ToolCall> = listOf(
+            ToolCall(
+                id = "local_call_${UUID.randomUUID().toString().take(8)}",
+                name = name,
+                argumentsJson = argsJson,
+            ),
+        )
+
+        val priorToolNames = priorCalls.map { it.name }.toSet()
+
+        // 1. Follow-up after open_app:
+        if (priorToolNames.contains("open_app")) {
+            val openAppCall = priorCalls.firstOrNull { it.name == "open_app" }
+            val openedApp = openAppCall?.argumentsJson?.let {
+                runCatching { JSONObject(it).optString("app") }.getOrDefault("")
+            }.orEmpty().lowercase(Locale.ROOT)
+
+            // If the user said "type ... on/in [app]" or "open [app] and type ..."
+            if (lower.contains("type ") && !priorToolNames.contains("type_on_screen") && hasTool("type_on_screen")) {
+                val query = extractYouTubeQuery(clean)
+                val textToType = if (query.isNotBlank()) query else {
+                    clean.replace(Regex("(?i)^(.*\\btype\\s+)"), "").replace(Regex("(?i)\\s+(on|in|into)\\s+[A-Za-z0-9 ._-]+$"), "").trim()
+                }
+                if (textToType.isNotBlank()) {
+                    return call(
+                        "type_on_screen",
+                        buildJsonObject {
+                            put("text", textToType.trim('"', '\''))
+                            if (openedApp.isNotBlank()) put("app", openedApp)
+                            put("target", "Search")
+                            put("submit", true)
+                        }.toString(),
+                    )
+                }
+            }
+
+            // If the user said "search [query] on [app]" or "open [app] and search [query]"
+            if ((openedApp.contains("youtube") || lower.contains("youtube")) &&
+                (lower.contains("search ") || lower.contains("play ") || lower.contains("watch ")) &&
+                !priorToolNames.contains("search_youtube") && !priorToolNames.contains("type_on_screen") &&
+                hasTool("search_youtube")
+            ) {
+                val query = extractYouTubeQuery(clean)
+                if (query.isNotBlank()) {
+                    return call(
+                        "search_youtube",
+                        buildJsonObject {
+                            put("query", query)
+                            put("play_immediately", lower.contains("play") || lower.contains("watch"))
+                        }.toString(),
+                    )
+                }
+            }
+
+            // If the user said "open [app] and tap [item]"
+            if ((lower.contains(" and tap ") || lower.contains(" and click ")) &&
+                !priorToolNames.contains("tap_screen") && hasTool("tap_screen")
+            ) {
+                val item = clean.substringAfter("tap ").substringAfter("click ").trim().trim('"', '\'')
+                if (item.isNotBlank()) {
+                    return call(
+                        "tap_screen",
+                        buildJsonObject { put("text", item) }.toString(),
+                    )
+                }
+            }
+        }
+
+        // 2. Follow-up after take_screenshot -> see_screen
+        if (priorToolNames.contains("take_screenshot") && !priorToolNames.contains("see_screen") && hasTool("see_screen")) {
+            if (lower.contains("see") || lower.contains("look") || lower.contains("read screen") || lower.contains("what is on")) {
+                return call("see_screen", "{}")
             }
         }
 
@@ -1485,11 +1623,29 @@ class LocalLlmProvider(
             }
         }
 
-        // On-device execution engine
+        // On-device execution engine:
+        // Round 1 (USER turn): Match intent against available tools
         if (lastMessage?.role == LlmRole.USER && request.tools.isNotEmpty()) {
             val toolCalls = OfflineTaskRouter.routeUserCommand(lastMessage.content, request.tools)
             if (toolCalls.isNotEmpty()) {
                 for (call in toolCalls) {
+                    emit(LlmEvent.ToolCallReady(call))
+                }
+                emit(LlmEvent.Done)
+                return@flow
+            }
+        }
+
+        // Multi-round execution:
+        // Round 2+ (after a TOOL result returned to the model):
+        // Check if there is a pending subsequent step in a multi-step task!
+        val trailingTools = request.messages.takeLastWhile { it.role == LlmRole.TOOL }
+        if (trailingTools.isNotEmpty() && request.tools.isNotEmpty()) {
+            val originalUserMsg = request.messages.lastOrNull { it.role == LlmRole.USER }?.content.orEmpty()
+            val priorToolCalls = request.messages.filter { it.role == LlmRole.ASSISTANT }.flatMap { it.toolCalls }
+            val nextCalls = OfflineTaskRouter.routeFollowUpAction(originalUserMsg, priorToolCalls, trailingTools, request.tools)
+            if (nextCalls.isNotEmpty()) {
+                for (call in nextCalls) {
                     emit(LlmEvent.ToolCallReady(call))
                 }
                 emit(LlmEvent.Done)
@@ -1517,6 +1673,47 @@ class LocalLlmProvider(
             true
         }
     }.getOrDefault(false)
+
+    private fun synthesizeAutonomousThought(
+        observationPrompt: String,
+        systemPrompt: String,
+        spec: LocalModelSpec,
+    ): String {
+        val title = extractOwnerTitle(systemPrompt)
+
+        val appMatch = Regex("""Current foreground application:\s*([^\n]+)""").find(observationPrompt)?.groupValues?.get(1)?.trim()
+        val screenMatch = Regex("""Screen session:\s*(\d+)\s*continuous minutes""").find(observationPrompt)?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+        val batteryMatch = Regex("""Battery:\s*(\d+)%""").find(observationPrompt)?.groupValues?.get(1)?.toIntOrNull() ?: 100
+        val isCharging = observationPrompt.contains("charging") && !observationPrompt.contains("on battery")
+        val unreadMatch = Regex("""Unread notifications count:\s*(\d+)""").find(observationPrompt)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        val eventContext = Regex("""Background event context:\s*([^\n]+)""").find(observationPrompt)?.groupValues?.get(1)?.trim().orEmpty()
+        val focusKind = Regex("""Thought focus:\s*([^\n]+)""").find(observationPrompt)?.groupValues?.get(1)?.trim().orEmpty()
+        val hour = runCatching { LocalTime.now().hour }.getOrDefault(12)
+
+        val appStr = if (!appMatch.isNullOrBlank()) " on $appMatch" else ""
+
+        return when {
+            // Low battery
+            batteryMatch <= 15 && !isCharging ->
+                "A brief observation on our reserves, $title. Power is at $batteryMatch percent. Connecting to a charger shortly will ensure our work proceeds without interruption."
+
+            // Late night
+            (hour >= 23 || hour in 0..4) && screenMatch >= 15L ->
+                "It is rather late, $title. Having spent $screenMatch minutes focused$appStr, wrapping up for the night soon would be wise while I maintain watch over background processes."
+
+            // Unread notifications
+            unreadMatch > 0 && (focusKind.contains("briefing", ignoreCase = true) || eventContext.contains("notification", ignoreCase = true)) ->
+                "Pardon the observation, $title. You have $unreadMatch unread notification${if (unreadMatch == 1) "" else "s"}. Say the word whenever you would like a briefing."
+
+            // Long continuous focus / health rest
+            screenMatch >= 30L || focusKind.contains("care", ignoreCase = true) ->
+                "You have been working steadily for $screenMatch minutes$appStr, $title. A twenty-second pause to rest your eyes and take a sip of water will keep you at peak efficiency."
+
+            // Witty observation or compliment on focus
+            else ->
+                "Diagnostics remain nominal at $batteryMatch percent, $title. Your focus$appStr today is admirable, and all background systems are running smoothly."
+        }
+    }
 
     private fun synthesizeOfflineReply(
         request: ChatRequest,
@@ -1547,6 +1744,11 @@ class LocalLlmProvider(
 
         val userText = request.messages.lastOrNull { it.role == LlmRole.USER }?.content?.trim().orEmpty()
         val lower = userText.lowercase(Locale.ROOT)
+
+        // Check if this is an autonomous thought background observation request
+        if (userText.contains("[BACKGROUND MONITORING OBSERVATION]")) {
+            return synthesizeAutonomousThought(userText, systemText, spec)
+        }
 
         // Check if this is a background JSON extraction request
         if (systemText.contains("JSON only", ignoreCase = true) || userText.contains("Reply with ONLY a JSON array")) {

@@ -3916,32 +3916,28 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
      * exceeds the recommended session limit.
      */
     fun deliverHealthSuggestion(decision: com.jarvis.assistant.service.HealthReminderDecision) {
-        if (decision.message.isBlank()) return
         if (_state.value.generating || _state.value.speaking || _state.value.pendingConfirmation != null) {
             return
         }
-        val providerLabel = "Voice Health · ${decision.category.label}"
-        val msg = CoreMessage(
-            id = newId("health"),
-            author = ChatAuthor.JARVIS,
-            text = decision.message,
-            providerName = providerLabel,
+        val currentApp = runCatching {
+            val pkg = com.jarvis.assistant.accessibility.JarvisAccessibilityService.currentForegroundPackage()
+            pkg?.let { appContext.packageManager.getApplicationLabel(appContext.packageManager.getApplicationInfo(it, 0)).toString() }
+        }.getOrNull()
+
+        val healthSeed = com.jarvis.assistant.service.AutonomousThoughtSeed(
+            kind = com.jarvis.assistant.service.AutonomousThoughtKind.CARE_AND_REST,
+            contextSummary = "Screen health alert: Continuous usage reached ${decision.milestoneMinutes} minutes. Category: ${decision.category.label}.${if (currentApp != null) " Current app: $currentApp." else ""}",
+            prompt = """
+                [BACKGROUND MONITORING OBSERVATION]
+                Health monitor notice: Continuous screen usage has reached ${decision.milestoneMinutes} minutes.
+                Health category: ${decision.category.label}.
+                ${if (currentApp != null) "Active application: $currentApp." else ""}
+                
+                You are J.A.R.V.I.S. Spontaneously inform your owner about this milestone with dry British wit and genuine care. Suggest a brief rest, stretch, or eye-break in 1 or 2 polite sentences.
+            """.trimIndent(),
+            fallbackSpeech = decision.message,
         )
-        _state.update { state ->
-            state.copy(
-                messages = state.messages + msg,
-                notice = decision.message,
-            )
-        }
-        scope.launch(Dispatchers.IO) {
-            runCatching {
-                val conversationId = memoryRepository.conversationForTurn()
-                memoryRepository.addMessage(conversationId, "jarvis", decision.message, providerLabel)
-            }
-        }
-        if (decision.shouldSpeakAloud) {
-            speak(decision.message)
-        }
+        deliverAutonomousThought(healthSeed)
     }
 
     private fun deliverAutonomousThought(seed: com.jarvis.assistant.service.AutonomousThoughtSeed) {
@@ -3951,10 +3947,22 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         scope.launch {
             val currentSettings = settings.value
             val providers = runCatching { resolveProviders(currentSettings) }.getOrDefault(emptyList())
+            val promptText = seed.prompt.ifBlank {
+                """
+                [BACKGROUND MONITORING OBSERVATION]
+                ${seed.contextSummary}
+                
+                You are J.A.R.V.I.S., observing your owner in the background. Formulate an authentic, spontaneous J.A.R.V.I.S. thought or verbal status remark addressed to your owner.
+                - Speak in character: calm, dry British wit, impeccable politeness, understated confidence.
+                - Keep it natural: 1 to 3 short spoken sentences. Never robotic, no emojis, no exclamation marks.
+                - Deliver your own original intelligence from your neural brain. Do not use generic canned phrases.
+                """.trimIndent()
+            }
+
             val thoughtText = if (providers.isNotEmpty()) {
                 runCatching {
                     val memoryContext = withContext(Dispatchers.IO) {
-                        runCatching { memoryRepository.promptContext(seed.fallbackSpeech) }.getOrDefault("")
+                        runCatching { memoryRepository.promptContext(seed.contextSummary) }.getOrDefault("")
                     }
                     val systemPrompt = withContext(Dispatchers.IO) {
                         personaBuilder.build(currentSettings, memoryContext)
@@ -3964,20 +3972,22 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                         AgentRequest(
                             systemPrompt = systemPrompt,
                             history = emptyList(),
-                            userMessage = seed.contextSummary,
+                            userMessage = promptText,
                             providers = providers,
-                            tools = emptyList(),
+                            tools = toolRegistry.definitions(),
                         ),
                     ).collect { event ->
                         if (event is AgentEvent.TextDelta) {
                             sb.append(event.text)
                         }
                     }
-                    sb.toString().trim().takeIf { it.length in 12..320 }
+                    sb.toString().trim().takeIf { it.length in 10..500 }
                 }.getOrNull() ?: seed.fallbackSpeech
             } else {
                 seed.fallbackSpeech
             }
+
+            if (thoughtText.isBlank()) return@launch
 
             val providerLabel = "Autonomous Thought · ${seed.kind.label}"
             val msg = CoreMessage(
