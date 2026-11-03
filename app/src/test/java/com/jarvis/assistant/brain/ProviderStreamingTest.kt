@@ -204,6 +204,84 @@ data: {"type":"message_stop"}""",
         }
     }
 
+    @Test
+    fun `zai glm 4 5 flash strips attached images so messages content stays text`() = runBlocking {
+        assertFalse(OpenAiCompatibleProvider.modelSupportsVision("https://api.z.ai/api/paas/v4", "glm-4.5-flash"))
+        assertTrue(OpenAiCompatibleProvider.modelSupportsVision("https://api.z.ai/api/paas/v4", "glm-4v-flash"))
+        assertTrue(OpenAiCompatibleProvider.modelSupportsVision("https://api.openai.com/v1", "gpt-4o"))
+
+        val captured = AtomicReference<String>()
+        withServer({ exchange ->
+            captured.set(readBody(exchange))
+            sendSse(
+                exchange,
+                listOf(
+                    """data: {"choices":[{"delta":{"content":"Typed justin."}}]}""",
+                    "data: [DONE]",
+                ),
+            )
+        }) { baseUrl ->
+            val provider = OpenAiCompatibleProvider(OkHttpClient())
+            val events = provider.stream(
+                ChatRequest(
+                    messages = listOf(LlmMessage.user("type justin on YouTube")),
+                    images = listOf(AttachedImage(bytes = byteArrayOf(1, 2, 3), caption = "Screenshot")),
+                ),
+                config(baseUrl, ProviderKind.OPENAI_COMPATIBLE, "glm-4.5-flash"),
+            ).toList()
+
+            assertEquals(
+                "Typed justin.",
+                events.filterIsInstance<LlmEvent.TextDelta>().joinToString("") { it.text },
+            )
+            assertFalse(events.any { it is LlmEvent.Error })
+            val payload = captured.get()
+            assertFalse("Payload must not contain image_url for glm-4.5-flash", payload.contains("image_url"))
+        }
+    }
+
+    @Test
+    fun `openai compatible retries without images when provider rejects messages content type`() = runBlocking {
+        val payloads = mutableListOf<String>()
+        withServer({ exchange ->
+            val body = readBody(exchange)
+            synchronized(payloads) { payloads += body }
+            if (body.contains("image_url")) {
+                sendJson(
+                    exchange,
+                    status = 400,
+                    body = """{"error":{"message":"messages.content.type is invalid, allowed values: ['text']"}}""",
+                )
+            } else {
+                sendSse(
+                    exchange,
+                    listOf(
+                        """data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_yt","type":"function","function":{"name":"get_current_time","arguments":"{}"}}]}}]}""",
+                        "data: [DONE]",
+                    ),
+                )
+            }
+        }) { baseUrl ->
+            val provider = OpenAiCompatibleProvider(OkHttpClient())
+            val events = provider.stream(
+                ChatRequest(
+                    messages = listOf(LlmMessage.user("type justin on YouTube")),
+                    tools = listOf(timeTool()),
+                    images = listOf(AttachedImage(bytes = byteArrayOf(1, 2, 3), caption = "Screenshot")),
+                ),
+                config(baseUrl, ProviderKind.OPENAI_COMPATIBLE, "gpt-4o-custom"),
+            ).toList()
+
+            assertEquals(2, payloads.size)
+            assertTrue(payloads[0].contains("image_url"))
+            assertFalse(payloads[1].contains("image_url"))
+            assertTrue("Tools must be preserved on image-stripped retry", payloads[1].contains("get_current_time"))
+            val call = events.filterIsInstance<LlmEvent.ToolCallReady>().single().call
+            assertEquals("get_current_time", call.name)
+            assertFalse(events.any { it is LlmEvent.Error })
+        }
+    }
+
     private fun config(baseUrl: String, kind: ProviderKind, model: String): ProviderConfig =
         ProviderConfig(
             id = "test",

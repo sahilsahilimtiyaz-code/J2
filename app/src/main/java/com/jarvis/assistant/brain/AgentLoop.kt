@@ -323,6 +323,11 @@ class AgentLoop(
         private fun looksLikeImageRejection(message: String): Boolean {
             val lower = message.lowercase()
             return listOf(
+                "messages.content",
+                "content.type",
+                "allowed values",
+                "['text']",
+                "[\"text\"]",
                 "image",
                 "vision",
                 "multimodal",
@@ -331,6 +336,8 @@ class AgentLoop(
                 "image_url",
                 "content parts",
                 "unsupported content",
+                "media_type",
+                "input_image",
             ).any { lower.contains(it) }
         }
     }

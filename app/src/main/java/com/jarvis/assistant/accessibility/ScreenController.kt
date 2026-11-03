@@ -933,26 +933,123 @@ class ScreenController(private val service: AccessibilityService) {
 
     /**
      * Types into the focused or first editable field and verifies that the text
-     * was accepted by the UI.
+     * was accepted by the UI. If no editable field is open yet on screen (for example
+     * on YouTube's Home screen where Search is a button/icon), automatically locates
+     * and taps the search bar or [targetHint] control first so the input field opens.
      */
-    suspend fun typeVerified(text: String): ScreenResult {
+    suspend fun typeVerified(
+        text: String,
+        targetHint: String = "",
+        submit: Boolean = false,
+    ): ScreenResult {
         if (text.isEmpty()) return ScreenResult(false, "There is nothing to type.", verified = false)
+
+        if (targetHint.isNotBlank()) {
+            val hasEditableAlready = withContext(Dispatchers.Main) {
+                val root = service.rootInActiveWindow ?: return@withContext false
+                walked = 0
+                findFirst(root) { it.isEditable && it.isFocused } != null
+            }
+            if (!hasEditableAlready) {
+                tapVerified(targetHint)
+                delay(450L)
+            }
+        }
+
         val before = withContext(Dispatchers.Main) { captureFingerprint() }
-        val immediate = withContext(Dispatchers.Main) { type(text) }
+        var immediate = withContext(Dispatchers.Main) { type(text) }
+
+        // If no editable field was on screen yet (e.g. YouTube Home feed where Search is an icon),
+        // automatically tap the Search button/bar and wait for the editable input to appear.
+        if (!immediate.success) {
+            val openedSearch = activateSearchOrInputTrigger(targetHint)
+            if (openedSearch) {
+                for (attempt in 0 until 8) {
+                    delay(200L)
+                    immediate = withContext(Dispatchers.Main) { type(text) }
+                    if (immediate.success) break
+                }
+            }
+        }
+
         if (!immediate.success) return immediate.copy(verified = false)
+
+        if (submit) {
+            delay(180L)
+            runCatching { jarvisService?.performImeAction() }
+        }
 
         delay(VERIFY_POLL_INTERVAL_MS)
         val after = withContext(Dispatchers.Main) { captureFingerprint() }
         val verification = StepVerificationEvaluator.evaluateTextEntry(before, after, text)
+        val submitSuffix = if (submit) " and submitted search" else ""
         return immediate.copy(
             message = if (verification.verified) {
-                "${immediate.message} (verified: ${verification.signal})"
+                "Typed \"$text\"$submitSuffix (verified: ${verification.signal})."
             } else {
-                immediate.message
+                "${immediate.message}$submitSuffix"
             },
             verified = verification.verified,
             verificationSignal = verification.signal,
         )
+    }
+
+    private suspend fun activateSearchOrInputTrigger(targetHint: String): Boolean {
+        val searchSpot = withContext(Dispatchers.Main) {
+            val root = service.rootInActiveWindow ?: return@withContext null
+            val hintNorm = normalize(targetHint)
+            val triggerIds = listOf(
+                "menu_item_search",
+                "search_button",
+                "search_box",
+                "search_bar",
+                "search_src_text",
+                "search_edit_text",
+                "action_bar_search",
+                "open_search",
+                "url_bar",
+                "find_search_field",
+                "my_search_bar",
+                "menuitem_search",
+            )
+            var foundNode: AccessibilityNodeInfo? = null
+            walked = 0
+            walk(root) { node ->
+                val viewId = node.viewIdResourceName.orEmpty().substringAfterLast('/').lowercase(Locale.ROOT)
+                val label = normalize(
+                    "${node.text?.toString().orEmpty()} ${node.contentDescription?.toString().orEmpty()}",
+                )
+                val matchesHint = hintNorm.isNotBlank() && (label == hintNorm || label.contains(hintNorm))
+                val matchesSearchId = triggerIds.any { viewId == it || viewId.contains(it) }
+                val matchesSearchLabel = label == "search" ||
+                    label.startsWith("search ") ||
+                    label.contains("search youtube") ||
+                    label.contains("ask meta ai or search")
+                if (matchesHint || matchesSearchId || matchesSearchLabel) {
+                    val b = Rect()
+                    runCatching { node.getBoundsInScreen(b) }
+                    if (b.width() > 0 && b.height() > 0) {
+                        foundNode = clickableTarget(node) ?: node
+                        return@walk false
+                    }
+                }
+                true
+            }
+            foundNode?.let { target ->
+                val bounds = Rect()
+                runCatching { target.getBoundsInScreen(bounds) }
+                val clicked = runCatching {
+                    target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                }.getOrDefault(false)
+                clicked to bounds
+            }
+        } ?: return false
+
+        val (clicked, bounds) = searchSpot
+        if (!clicked && bounds.width() > 0 && bounds.height() > 0) {
+            return jarvisService?.dispatchTapGesture(bounds.exactCenterX(), bounds.exactCenterY()) ?: false
+        }
+        return true
     }
 
     /** Types into the focused field, or the first editable field on screen. */
@@ -960,6 +1057,14 @@ class ScreenController(private val service: AccessibilityService) {
         if (text.isEmpty()) return ScreenResult(false, "There is nothing to type.", verified = false)
         val root = service.rootInActiveWindow
             ?: return ScreenResult(false, "I cannot see the screen yet.", verified = false)
+        val pkg = root.packageName?.toString().orEmpty()
+        if (pkg == service.packageName) {
+            return ScreenResult(
+                false,
+                "Jarvis is currently in the foreground. Open the target app first before typing on screen.",
+                verified = false,
+            )
+        }
         walked = 0
         val field = findFirst(root) { it.isEditable && it.isFocused }
             ?: run {
@@ -976,12 +1081,13 @@ class ScreenController(private val service: AccessibilityService) {
         }.getOrDefault(false)
         if (!ok) {
             runCatching { field.performAction(AccessibilityNodeInfo.ACTION_FOCUS) }
+            runCatching { field.performAction(AccessibilityNodeInfo.ACTION_CLICK) }
             val retry = runCatching {
                 field.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, arguments)
             }.getOrDefault(false)
             if (!retry) return ScreenResult(false, "That field refused the text.", verified = false)
         }
-        return ScreenResult(true, "Typed ${text.length} characters into the field.")
+        return ScreenResult(true, "Typed \"${text.take(60)}\" into the field.")
     }
 
     /**

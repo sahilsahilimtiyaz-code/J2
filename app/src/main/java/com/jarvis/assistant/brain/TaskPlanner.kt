@@ -100,14 +100,15 @@ object ToolContextBudgeter {
         "run_skill",
         "automate_screen",
         "see_screen",
-        "tap_on_screen",
+        "tap_screen",
+        "type_on_screen",
         "run_diagnostics",
     )
 
     private val DOMAIN_KEYWORDS: Map<String, Set<String>> = mapOf(
         "call_contact" to setOf("call", "phone", "dial", "ring"),
         "send_sms" to setOf("sms", "text", "message"),
-        "send_whatsapp" to setOf("whatsapp", "message", "chat", "text"),
+        "send_whatsapp_message" to setOf("whatsapp", "message", "chat", "text"),
         "send_whatsapp_voice_note" to setOf("whatsapp", "voice", "note", "audio"),
         "answer_whatsapp_call" to setOf("whatsapp", "answer", "call", "pickup"),
         "end_whatsapp_call" to setOf("whatsapp", "hang", "end", "call"),
@@ -119,7 +120,7 @@ object ToolContextBudgeter {
         "set_ringer_mode" to setOf("ringer", "vibrate", "silent", "sound", "mute"),
         "set_do_not_disturb" to setOf("dnd", "disturb", "focus", "silence", "quiet", "priority"),
         "set_screen_brightness" to setOf("brightness", "dim", "bright", "display", "screen"),
-        "media_control" to setOf("music", "play", "pause", "next", "skip", "previous", "stop", "track", "song"),
+        "control_media" to setOf("music", "play", "pause", "next", "skip", "previous", "stop", "track", "song"),
         "navigate_to" to setOf("navigate", "map", "directions", "route", "drive", "where", "trip"),
         "share_text" to setOf("share", "send", "export"),
         "open_settings_screen" to setOf("settings", "wifi", "bluetooth", "display", "battery", "accessibility"),
@@ -136,13 +137,15 @@ object ToolContextBudgeter {
         "save_skill" to setOf("skill", "routine", "macro", "save", "automate"),
         "list_skills" to setOf("skills", "routines", "macros", "list"),
         "delete_skill" to setOf("delete", "remove", "skill", "routine"),
-        "analyze_screen_vision" to setOf("screen", "vision", "ocr", "read", "analyze", "look"),
+        "analyze_screen" to setOf("screen", "vision", "ocr", "read", "analyze", "look"),
         "read_screen" to setOf("screen", "read", "what", "showing", "page"),
+        "capture_screen_snapshot" to setOf("snapshot", "screen", "elements", "ui", "tree"),
+        "execute_mobile_ui_action" to setOf("action", "tap", "type", "scroll", "swipe", "screen"),
         "tap_video_item" to setOf("video", "youtube", "play", "first", "second", "watch"),
         "tap_screen_coordinates" to setOf("tap", "click", "coordinate", "x", "y", "screen"),
-        "type_on_screen" to setOf("type", "write", "enter", "input", "search", "screen"),
+        "type_on_screen" to setOf("type", "write", "enter", "input", "search", "screen", "youtube"),
         "scroll_screen" to setOf("scroll", "down", "up", "swipe", "screen"),
-        "system_navigation" to setOf("back", "home", "recents", "notifications", "navigate"),
+        "press_system_key" to setOf("back", "home", "recents", "notifications", "navigate"),
     )
 
     fun selectToolsForTurn(

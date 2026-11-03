@@ -3,7 +3,10 @@ package com.jarvis.assistant.tools
 import android.content.Context
 import com.jarvis.assistant.accessibility.JarvisAccessibilityService
 import com.jarvis.assistant.brain.ToolDefinition
+import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 
 internal fun screenUnavailable(context: ToolContext): ToolResult? {
     if (!JarvisAccessibilityService.isEnabled(context.appContext)) {
@@ -284,12 +287,16 @@ class TypeOnScreenTool : Tool {
 
     override val definition: ToolDefinition = ToolDefinition(
         name = "type_on_screen",
-        description = "Type text into the focused field on the phone screen. This only fills the " +
-            "field; it never presses Send or Enter.",
+        description = "Type text into a search bar or input field on the phone screen. " +
+            "Optionally specify 'app' (e.g. 'YouTube') to open that app first, 'target' " +
+            "(e.g. 'Search') to tap the field/search icon first, and 'submit' to press Search/Enter after typing.",
         parameters = objectSchema(
             required = listOf("text"),
             properties = mapOf(
                 "text" to stringProperty("The exact text to type."),
+                "app" to stringProperty("Optional app name to open first if it is not already on screen (e.g. 'YouTube', 'Chrome')."),
+                "target" to stringProperty("Optional label of the search bar or field to tap before typing (e.g. 'Search')."),
+                "submit" to booleanProperty("Optional: true to press Search/Enter on the keyboard after typing. Defaults to false."),
             ),
         ),
     )
@@ -309,7 +316,40 @@ class TypeOnScreenTool : Tool {
         val text = arguments.argString("text")
             ?: return ToolResult(false, "Tell me what to type.")
         if (text.length > 2000) return ToolResult(false, "That is too long to type at once.")
-        val result = context.screen!!.type(text)
+
+        val appName = arguments.argString("app")?.trim().orEmpty()
+        val targetHint = arguments.argString("target")?.trim().orEmpty()
+        val submit = arguments.argBoolean("submit") ?: false
+
+        val controller = JarvisAccessibilityService.controller()
+        if (appName.isNotBlank()) {
+            val fgPkg = controller?.foregroundPackage().orEmpty()
+            val fgLabel = if (fgPkg.isNotBlank()) controller?.appLabel(fgPkg).orEmpty() else ""
+            val alreadyInApp = fgPkg.contains(appName, ignoreCase = true) ||
+                fgLabel.contains(appName, ignoreCase = true)
+            if (!alreadyInApp) {
+                val openRes = OpenAppTool().execute(
+                    buildJsonObject {
+                        put("app", JsonPrimitive(appName))
+                    },
+                    context,
+                )
+                if (!openRes.success) return openRes
+                delay(500L)
+            }
+        } else if (controller?.foregroundPackage() == context.appContext.packageName) {
+            // Wait briefly in case a previously launched app is still animating into the foreground
+            for (i in 0 until 6) {
+                delay(220L)
+                if (controller.foregroundPackage() != context.appContext.packageName) break
+            }
+        }
+
+        val result = if (controller != null) {
+            controller.typeVerified(text = text, targetHint = targetHint, submit = submit)
+        } else {
+            context.screen!!.type(text)
+        }
         return ToolResult(result.success, result.message)
     }
 }

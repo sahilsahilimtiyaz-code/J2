@@ -86,7 +86,20 @@ class OpenAppTool : Tool {
 
             runCatching { context.appContext.startActivity(launch) }
                 .fold(
-                    onSuccess = { ToolResult(true, "Opened ${best.label}.") },
+                    onSuccess = {
+                        if (com.jarvis.assistant.accessibility.JarvisAccessibilityService.isConnected()) {
+                            for (attempt in 0 until 12) {
+                                kotlinx.coroutines.delay(200L)
+                                val fg = com.jarvis.assistant.accessibility.JarvisAccessibilityService
+                                    .controller()?.foregroundPackage().orEmpty()
+                                if (fg == best.packageName) {
+                                    kotlinx.coroutines.delay(450L)
+                                    break
+                                }
+                            }
+                        }
+                        ToolResult(true, "Opened ${best.label}.")
+                    },
                     onFailure = { error ->
                         ToolResult(
                             false,

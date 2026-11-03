@@ -385,3 +385,16 @@
 - [x] **Phase 8 — Automated Verification (`OpenClawMobileUiEngineTest.kt`):**
   - Added 14 new JVM unit tests covering all required scenarios (96 total unit tests passing).
 
+## 2026-11-03 — Z.ai `glm-4.5-flash` Text-Only Model Fix & End-to-End YouTube Typing
+
+- [x] **Z.ai / OpenAI-Compatible Text-Only Model Compatibility (`OpenAiCompatibleProvider.kt`, `AgentLoop.kt`):**
+  - Fixed the `"Z.ai: The provider rejected the request: messages.content.type is invalid, allowed values: ['text']"` error when using `glm-4.5-flash` (or any other text-only model) on screen commands like `"type justin on YouTube"`.
+  - Added `OpenAiCompatibleProvider.modelSupportsVision(baseUrl, model)` so non-vision models (`glm-4.5-flash`, `glm-4-flash`, `glm-4.5`, `glm-z1*`, DeepSeek text models, Llama 3.1/3.3 text models, Qwen text models, etc.) never receive `{"type": "image_url"}` content array blocks and always keep `messages[].content` as plain `"text"` strings.
+  - Added automatic image-stripping retry in `OpenAiCompatibleProvider.stream()` (`shouldRetryWithoutImages`) and `AgentLoop.looksLikeImageRejection` whenever any provider returns HTTP 400/422 mentioning `messages.content`, `content.type`, `allowed values`, `['text']`, or `image_url`, preserving all tool declarations on retry.
+- [x] **End-to-End YouTube & App Typing (`ScreenTools.kt`, `ScreenController.kt`, `AppTools.kt`, `MediaTools.kt`):**
+  - Enhanced `type_on_screen` (`TypeOnScreenTool`) with optional `app` (e.g. `"YouTube"`), `target` (e.g. `"Search"`), and `submit` parameters so Jarvis automatically opens YouTube if not already in the foreground before typing.
+  - Enhanced `ScreenController.typeVerified` with `activateSearchOrInputTrigger`: when no `EditText` is open yet on YouTube's Home screen, Jarvis automatically finds and taps the YouTube Search button (`menu_item_search` / `Search`), waits for the search input field to open, types the text, and optionally submits it.
+  - Guarded `ScreenController.type` so Jarvis never accidentally types into its own foreground chat box while a target app is still launching, and updated `OpenAppTool` to wait for the launched app to reach the foreground.
+  - Enhanced `search_youtube` with `play_immediately: Boolean` (default `true`; when `false`, opens YouTube search results for the query without auto-playing a video).
+- [x] **Verification:** `gradle testDebugUnitTest assembleDebug` green (98 unit tests passing, including 2 new tests in `ProviderStreamingTest`), and `compile_applet` passed.
+

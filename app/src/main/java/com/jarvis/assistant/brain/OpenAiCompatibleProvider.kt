@@ -31,14 +31,24 @@ class OpenAiCompatibleProvider(private val client: OkHttpClient) : LlmProvider {
         val normalizedBaseUrl = normalizeBaseUrl(config.baseUrl)
         val normalizedModel = normalizeModelId(normalizedBaseUrl, config.model)
 
-        fun buildHttpRequest(includeTools: Boolean): Request {
+        var includeImages = !request.images.isNullOrEmpty() &&
+            modelSupportsVision(normalizedBaseUrl, normalizedModel)
+        var includeTools = request.tools.isNotEmpty()
+
+        fun buildHttpRequest(withTools: Boolean, withImages: Boolean): Request {
             val payload = buildJsonObject {
                 put("model", normalizedModel)
                 put("stream", true)
                 put("temperature", request.temperature)
                 put("max_tokens", request.maxTokens)
-                put("messages", openAiMessages(request.messages, request.images))
-                if (includeTools && request.tools.isNotEmpty()) {
+                put(
+                    "messages",
+                    openAiMessages(
+                        messages = request.messages,
+                        images = if (withImages) request.images else null,
+                    ),
+                )
+                if (withTools && request.tools.isNotEmpty()) {
                     put("tools", openAiTools(request.tools))
                     put("tool_choice", "auto")
                 }
@@ -62,22 +72,32 @@ class OpenAiCompatibleProvider(private val client: OkHttpClient) : LlmProvider {
                 .build()
         }
 
-        var activeCall = client.newCall(buildHttpRequest(includeTools = true))
+        var activeCall = client.newCall(buildHttpRequest(withTools = includeTools, withImages = includeImages))
         val cancelHandle = currentCoroutineContext().job.invokeOnCompletion { activeCall.cancel() }
 
         try {
             var response = activeCall.execute()
 
-            // If a free/reasoning model rejects the request because it does not support tools,
-            // automatically retry once without tools so chat still works seamlessly.
-            if (!response.isSuccessful && request.tools.isNotEmpty()) {
-                val firstCode = response.code
-                val firstErrorBody = response.use { it.body.string() }
-                if (shouldRetryWithoutTools(firstCode, firstErrorBody)) {
-                    activeCall = client.newCall(buildHttpRequest(includeTools = false))
+            // Automatic recovery loop:
+            // 1. If a text-only model (e.g. Z.ai glm-4.5-flash) rejects multimodal content
+            //    ("messages.content.type is invalid, allowed values: ['text']"), retry without images.
+            // 2. If a model rejects tool definitions, retry without tools.
+            var retries = 0
+            while (!response.isSuccessful && retries < 2) {
+                val statusCode = response.code
+                val errorBody = response.use { it.body.string() }
+                if (includeImages && shouldRetryWithoutImages(statusCode, errorBody)) {
+                    includeImages = false
+                    retries++
+                    activeCall = client.newCall(buildHttpRequest(withTools = includeTools, withImages = false))
+                    response = activeCall.execute()
+                } else if (includeTools && shouldRetryWithoutTools(statusCode, errorBody)) {
+                    includeTools = false
+                    retries++
+                    activeCall = client.newCall(buildHttpRequest(withTools = false, withImages = includeImages))
                     response = activeCall.execute()
                 } else {
-                    emit(LlmEvent.Error(providerErrorMessage(firstCode, firstErrorBody)))
+                    emit(LlmEvent.Error(providerErrorMessage(statusCode, errorBody)))
                     return@flow
                 }
             }
@@ -399,6 +419,25 @@ class OpenAiCompatibleProvider(private val client: OkHttpClient) : LlmProvider {
             lower.contains("unsupported")
     }
 
+    private fun shouldRetryWithoutImages(statusCode: Int, errorBody: String): Boolean {
+        if (statusCode !in listOf(400, 404, 413, 415, 422, 500)) return false
+        val lower = errorBody.lowercase()
+        return lower.contains("messages.content") ||
+            lower.contains("content.type") ||
+            lower.contains("allowed values") ||
+            lower.contains("['text']") ||
+            lower.contains("[\"text\"]") ||
+            lower.contains("image_url") ||
+            lower.contains("image") ||
+            lower.contains("vision") ||
+            lower.contains("multimodal") ||
+            lower.contains("multi-modal") ||
+            lower.contains("inline_data") ||
+            lower.contains("content parts") ||
+            lower.contains("unsupported content") ||
+            lower.contains("media_type")
+    }
+
     private class ToolCallAccumulator(val index: Int) {
         var id: String = ""
         var name: String = ""
@@ -408,6 +447,114 @@ class OpenAiCompatibleProvider(private val client: OkHttpClient) : LlmProvider {
     companion object {
         private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
         private const val USER_AGENT = "Jarvis/0.2 (Android)"
+
+        /**
+         * Determines whether the target OpenAI-compatible model supports `image_url`
+         * multimodal blocks in `messages[].content`.
+         *
+         * Text-only models (such as Z.ai `glm-4.5-flash`, `glm-4-flash`, `deepseek-chat`,
+         * `deepseek-reasoner`, `llama-3.3-70b`, `qwen-plus`, etc.) strictly validate
+         * `messages.content.type` and reject `image_url` with HTTP 400
+         * (`messages.content.type is invalid, allowed values: ['text']`).
+         */
+        fun modelSupportsVision(baseUrl: String, model: String): Boolean {
+            val lowerUrl = baseUrl.lowercase()
+            val lowerModel = model.trim().lowercase()
+            val shortModel = lowerModel.substringAfterLast('/')
+
+            // Explicit vision markers always indicate multimodal support
+            val visionTokens = listOf(
+                "vision",
+                "-vl",
+                "_vl",
+                "4v",
+                "4.1v",
+                "4.5v",
+                "4.6v",
+                "cogvlm",
+                "autoglm",
+                "pixtral",
+                "llava",
+                "molmo",
+                "internvl",
+                "minicpm-v",
+                "gpt-4o",
+                "gpt-4.1",
+                "gpt-4-turbo",
+                "chatgpt-4o",
+                "o1",
+                "o3",
+                "o4-mini",
+                "claude-3",
+                "claude-sonnet-4",
+                "claude-opus-4",
+                "gemini-",
+                "gemma-3",
+                "llama-3.2-11b",
+                "llama-3.2-90b",
+                "llama-4",
+                "kimi-vl",
+                "moonshot-v1-vision",
+                "grok-2-vision",
+            )
+            if (visionTokens.any { shortModel.contains(it) || lowerModel.contains(it) }) {
+                return true
+            }
+
+            // Z.ai / Zhipu BigModel: only GLM-*V / CogVLM / AutoGLM models accept image_url;
+            // all standard GLM text models (glm-4.5-flash, glm-4-flash, glm-4.5, glm-4-plus, glm-z1, etc.)
+            // only allowmessages.content.type in ['text'].
+            if (lowerUrl.contains("z.ai") ||
+                lowerUrl.contains("bigmodel.cn") ||
+                shortModel.startsWith("glm-") ||
+                shortModel.startsWith("codegeex") ||
+                shortModel.startsWith("charglm")
+            ) {
+                return false
+            }
+
+            // Known text-only model families across OpenRouter, DeepSeek, Groq, Cerebras, Together, etc.
+            val textOnlyPrefixes = listOf(
+                "deepseek-",
+                "qwen-turbo",
+                "qwen-plus",
+                "qwen-max",
+                "qwen2.5-7",
+                "qwen2.5-14",
+                "qwen2.5-32",
+                "qwen2.5-72",
+                "qwen2.5-coder",
+                "qwen3-",
+                "qwq",
+                "llama-3-",
+                "llama-3.1-",
+                "llama-3.3-",
+                "llama3-",
+                "llama3.1-",
+                "llama3.3-",
+                "mixtral-",
+                "mistral-",
+                "codestral",
+                "ministral",
+                "command-r",
+                "nemotron",
+                "yi-",
+                "gemma-7b",
+                "gemma2-",
+                "phi-3-",
+                "phi-4",
+            )
+            if (textOnlyPrefixes.any { shortModel.startsWith(it) }) {
+                return false
+            }
+
+            // Text-only inference gateways
+            if (lowerUrl.contains("cerebras.ai") || lowerUrl.contains("cohere.com")) {
+                return false
+            }
+
+            return true
+        }
 
         /**
          * Normalizes global provider base URLs so even shorthand entries like

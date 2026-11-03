@@ -31,13 +31,14 @@ class YouTubeSearchTool : Tool {
 
     override val definition: ToolDefinition = ToolDefinition(
         name = "search_youtube",
-        description = "Play a song or video on YouTube. Resolves the best matching result, opens " +
-            "the video player directly, verifies that playback started, and taps Play when the " +
-            "player opens paused. Use this for requests such as \"play Starboy\" or \"play lo-fi beats\".",
+        description = "Search or play a song or video on YouTube. By default (play_immediately=true), " +
+            "resolves the best matching result, opens the video player directly, and verifies playback. " +
+            "Set play_immediately=false when the owner only wants to search or type a query into YouTube without playing a video yet.",
         parameters = objectSchema(
             required = listOf("query"),
             properties = mapOf(
-                "query" to stringProperty("The song or video title/query to play on YouTube."),
+                "query" to stringProperty("The song, artist, or video query to search or play on YouTube."),
+                "play_immediately" to booleanProperty("True (default) to start playing the top video immediately; false to only open YouTube search results for the query."),
             ),
         ),
     )
@@ -58,10 +59,19 @@ class YouTubeSearchTool : Tool {
         if (query.isBlank()) {
             return ToolResult(false, "Tell me what song or video to play on YouTube.")
         }
+        val playImmediately = arguments.argBoolean("play_immediately") ?: true
 
         val appContext = context.appContext
         val youtubeInstalled = isPackageInstalled(appContext, YOUTUBE_PACKAGE)
         val controller = JarvisAccessibilityService.controller()
+
+        if (!playImmediately) {
+            if (youtubeInstalled && openYouTubeSearch(appContext, query)) {
+                return ToolResult(true, "Opened YouTube and searched for \"$query\".")
+            }
+            val url = "https://www.youtube.com/results?search_query=" + Uri.encode(query)
+            return openUrl(appContext, url, "Opened YouTube search results for \"$query\".")
+        }
 
         // 1. Resolve the top result so we can deep-link straight into the video
         //    player instead of stopping on a search results page.

@@ -158,15 +158,16 @@ class SeeScreenTool : Tool {
 
         val (width, height) = capture.widthPx to capture.heightPx
         val text = buildString {
-            appendLine("I captured a live screenshot of the $width x $height px screen. It is attached to my next message so I can see the pixels.")
+            appendLine("Live screen inspection captured ($width x $height px).")
             appendLine("Foreground package: ${capture.packageName.ifBlank { "unknown" }}")
             if (tree.isNotBlank()) {
-                appendLine("Screen labels (accessibility tree):")
+                appendLine("Screen elements & coordinates (accessibility tree):")
                 appendLine(tree.take(2_500))
             }
             appendLine(
-                "To act on what I see: tap_screen_coordinates with unit=percent, x/y in 0-100 " +
-                    "percent of screen width/height read directly from the screenshot.",
+                "To act on what is on screen: call tap_screen with an element label or #index, " +
+                    "call type_on_screen to type into a search bar or input field, or call " +
+                    "tap_screen_coordinates with unit=percent (0-100) or unit=pixels using the (x, y) coordinates above.",
             )
         }
         return ToolResult(true, text, image = capture.image)
