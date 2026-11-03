@@ -1,7 +1,13 @@
 # Android / Gradle
 .gradle/
+.kotlin/
 build/
 **/build/
+.build-outputs/
+*.apk
+*.aab
+*.ap_
+*.dex
 local.properties
 *.iml
 .idea/
@@ -24,5 +30,8 @@ captures/
 
 .tools/
 
-# Local build scratch (SDK/Gradle toolchain) and preview assets
+# Local build scratch (SDK/Gradle toolchain) and AI Studio chat media attachments
 artifacts/
+.aistudio/
+public/
+

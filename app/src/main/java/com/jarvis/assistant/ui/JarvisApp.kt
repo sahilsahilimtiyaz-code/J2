@@ -252,6 +252,7 @@ fun JarvisApp(vm: JarvisViewModel = viewModel()) {
                                 onBack = vm::closePermissions,
                                 onRefresh = vm::refreshPermissions,
                                 onToggleBackgroundListening = vm::toggleBackgroundListening,
+                                onSaveActionConfirmations = vm::saveActionConfirmationSettings,
                             )
                         }
                     }
@@ -283,6 +284,7 @@ fun JarvisApp(vm: JarvisViewModel = viewModel()) {
                     ConfirmationOverlay(
                         pending = state.pendingConfirmation,
                         onApprove = vm::approveConfirmation,
+                        onAlwaysAllow = vm::approveAndAlwaysAllowConfirmation,
                         onReject = vm::rejectConfirmation,
                     )
                 }
@@ -332,6 +334,7 @@ private fun QuickPanelEmptyDrag(
 private fun ConfirmationOverlay(
     pending: PendingConfirmation?,
     onApprove: () -> Unit,
+    onAlwaysAllow: () -> Unit = onApprove,
     onReject: () -> Unit,
 ) {
     var lastShown by remember { mutableStateOf<PendingConfirmation?>(null) }
@@ -403,6 +406,13 @@ private fun ConfirmationOverlay(
                             modifier = Modifier.weight(1f),
                         )
                     }
+                    Spacer(Modifier.height(8.dp))
+                    ConfirmationButton(
+                        label = "Always Allow (Don't Ask Again)",
+                        filled = false,
+                        onClick = onAlwaysAllow,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
             }
         }

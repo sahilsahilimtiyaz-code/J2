@@ -148,6 +148,19 @@ data class SafetySettings(
     val voiceNoteCooldownMinutes: Int = 10,
     /** Hard daily cap on automatic replies, per device. */
     val voiceNoteDailyLimit: Int = 12,
+    /**
+     * Master toggle: when true (default), Jarvis executes owner-requested phone
+     * actions immediately without blocking on a confirmation popup.
+     */
+    val alwaysAllowActions: Boolean = true,
+    /** When alwaysAllowActions is false, whether to show a confirmation popup before placing calls. */
+    val confirmCalls: Boolean = false,
+    /** When alwaysAllowActions is false, whether to show a confirmation popup before sending SMS/WhatsApp messages. */
+    val confirmMessages: Boolean = false,
+    /** When alwaysAllowActions is false, whether to show a confirmation popup before sensitive screen taps. */
+    val confirmScreenControl: Boolean = false,
+    /** When alwaysAllowActions is false, whether to show a confirmation popup before deleting memories/items. */
+    val confirmDeletions: Boolean = false,
 )
 
 @Serializable
@@ -185,6 +198,7 @@ data class AppSettings(
     val health: HealthSettings = HealthSettings(),
     val auth: AuthSession = AuthSession(),
     val localAi: LocalAiSettings = LocalAiSettings(),
+    val schemaMigrationVersion: Int = 1,
 ) {
     val defaultProvider: ProviderSettings?
         get() = providers.firstOrNull { it.id == defaultProviderId }

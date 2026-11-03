@@ -653,6 +653,28 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         return body.all { it in greetings } && body.any { it in core }
     }
 
+    private fun isAffirmativeConfirmation(text: String): Boolean {
+        val norm = text.lowercase(Locale.UK)
+            .replace(Regex("[^\\p{L}\\p{N} ]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        return norm in setOf(
+            "ok", "okay", "ok ok", "okay okay", "yes", "yeah", "yep", "yup",
+            "sure", "do it", "yes do it", "confirm", "confirmed", "proceed",
+            "go ahead", "allow", "approve", "yes please", "ok do it", "okay do it",
+        )
+    }
+
+    private fun isNegativeConfirmation(text: String): Boolean {
+        val norm = text.lowercase(Locale.UK)
+            .replace(Regex("[^\\p{L}\\p{N} ]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        return norm in setOf(
+            "no", "nope", "nah", "cancel", "do not", "dont", "don t", "reject", "never mind",
+        )
+    }
+
     // Conversation ------------------------------------------------------------
 
     fun send(text: String) {
@@ -664,6 +686,42 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             return
         }
 
+        // 1. If a confirmation dialog is currently waiting, handle spoken/typed "ok" / "yes" / "always allow" / "no"
+        if (_state.value.pendingConfirmation != null || confirmationDeferred != null) {
+            val lowerClean = clean.lowercase(Locale.UK).trim()
+            if (lowerClean.contains("always allow")) {
+                approveAndAlwaysAllowConfirmation()
+                return
+            }
+            if (isAffirmativeConfirmation(clean)) {
+                approveConfirmation()
+                return
+            }
+            if (isNegativeConfirmation(clean)) {
+                rejectConfirmation()
+                return
+            }
+        }
+
+        // 2. If the user says "ok", "ok ok", "yes", "do it", "go ahead" right after Jarvis asked a question,
+        //    automatically re-run the last actionable user request so the user never gets stuck saying "ok ok"!
+        val effectiveCommand = if (isAffirmativeConfirmation(clean)) {
+            val previousMessages = _state.value.messages
+            val lastAssistant = previousMessages.lastOrNull { it.author == ChatAuthor.JARVIS && !it.isError }
+            val lastActionableUser = previousMessages.lastOrNull {
+                it.author == ChatAuthor.USER &&
+                    !isAffirmativeConfirmation(it.text) &&
+                    !isGreetingOnly(it.text)
+            }
+            if (lastActionableUser != null && (lastAssistant == null || lastAssistant.text.contains("?") || lastAssistant.tools.isEmpty())) {
+                lastActionableUser.text
+            } else {
+                clean
+            }
+        } else {
+            clean
+        }
+
         // Immediately release any active microphone session before AI response generation
         // so microphone access NEVER continues during LLM generation or tool execution.
         releaseMicrophoneBeforeProcessing("Released microphone before AI response generation")
@@ -671,7 +729,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         // Greeting-only input ("hi", "good morning") is answered locally with a
         // fresh greeting and never reaches the model — the agent loop must never
         // turn a greeting into a command such as opening an app.
-        if (isGreetingOnly(clean)) {
+        if (isGreetingOnly(effectiveCommand)) {
             turnJob?.cancel()
             interruptSpeech()
             ttsBuffer.setLength(0)
@@ -739,7 +797,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             )
         }
 
-        turnJob = scope.launch { runTurn(clean, assistantId, current) }
+        turnJob = scope.launch { runTurn(effectiveCommand, assistantId, current) }
     }
 
     private suspend fun runTurn(userText: String, assistantId: String, current: AppSettings) {
@@ -1923,9 +1981,26 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
 
     // Gates -------------------------------------------------------------------
 
+    private fun shouldRequireConfirmation(title: String, detail: String): Boolean {
+        val safety = settings.value.safety
+        if (safety.alwaysAllowActions) return false
+        val combined = "$title $detail".lowercase(Locale.UK)
+        return when {
+            combined.contains("call") || combined.contains("dial") -> safety.confirmCalls
+            combined.contains("whatsapp") || combined.contains("sms") || combined.contains("message") || combined.contains("voice note") -> safety.confirmMessages
+            combined.contains("delete") || combined.contains("forget") || combined.contains("erase") -> safety.confirmDeletions
+            else -> safety.confirmScreenControl
+        }
+    }
+
     private suspend fun requestConfirmation(title: String, detail: String): Boolean {
+        // Check Always-Allow / per-category confirmation settings first so the owner
+        // never has to wait for a confirmation popup when Always Allow is enabled!
+        if (!shouldRequireConfirmation(title, detail)) {
+            return true
+        }
         if (!uiVisible) {
-            speak("$title I need you to open Jarvis to confirm that.")
+            speak("$title I need you to open Jarvis to confirm that, or enable Always Allow in Permissions.")
             return false
         }
         if (confirmationDeferred != null) return false
@@ -1952,6 +2027,33 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         val deferred = confirmationDeferred
         confirmationDeferred = null
         _state.update { it.copy(pendingConfirmation = null) }
+        deferred?.complete(true)
+    }
+
+    fun approveAndAlwaysAllowConfirmation() {
+        val deferred = confirmationDeferred
+        confirmationDeferred = null
+        _state.update {
+            it.copy(
+                pendingConfirmation = null,
+                notice = "Always Allow enabled. Jarvis will execute actions without waiting for confirmation.",
+            )
+        }
+        scope.launch {
+            runCatching {
+                settingsRepository.update { current ->
+                    current.copy(
+                        safety = current.safety.copy(
+                            alwaysAllowActions = true,
+                            confirmCalls = false,
+                            confirmMessages = false,
+                            confirmScreenControl = false,
+                            confirmDeletions = false,
+                        ),
+                    )
+                }
+            }
+        }
         deferred?.complete(true)
     }
 

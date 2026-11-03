@@ -387,6 +387,21 @@ fun SafetyCard(
     var callTurns by remember(safety.callAssistantMaxTurns) {
         mutableStateOf(safety.callAssistantMaxTurns.toString())
     }
+    var alwaysAllowActions by remember(safety.alwaysAllowActions) {
+        mutableStateOf(safety.alwaysAllowActions)
+    }
+    var confirmCalls by remember(safety.confirmCalls) {
+        mutableStateOf(safety.confirmCalls)
+    }
+    var confirmMessages by remember(safety.confirmMessages) {
+        mutableStateOf(safety.confirmMessages)
+    }
+    var confirmScreenControl by remember(safety.confirmScreenControl) {
+        mutableStateOf(safety.confirmScreenControl)
+    }
+    var confirmDeletions by remember(safety.confirmDeletions) {
+        mutableStateOf(safety.confirmDeletions)
+    }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -423,6 +438,114 @@ fun SafetyCard(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.tertiary,
                 )
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(
+                    checked = alwaysAllowActions,
+                    onCheckedChange = { checked ->
+                        alwaysAllowActions = checked
+                        if (checked) {
+                            confirmCalls = false
+                            confirmMessages = false
+                            confirmScreenControl = false
+                            confirmDeletions = false
+                        }
+                        viewModel.saveActionConfirmationSettings(
+                            alwaysAllowActions = checked,
+                            confirmCalls = confirmCalls,
+                            confirmMessages = confirmMessages,
+                            confirmScreenControl = confirmScreenControl,
+                            confirmDeletions = confirmDeletions,
+                        )
+                    },
+                )
+                Spacer(Modifier.width(8.dp))
+                Column {
+                    Text("Always Allow Actions (No Confirmation Wait)", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        "When enabled, Jarvis executes your commands immediately without stopping for a confirmation popup.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            if (!alwaysAllowActions) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(
+                        checked = !confirmCalls,
+                        onCheckedChange = { allow ->
+                            confirmCalls = !allow
+                            viewModel.saveActionConfirmationSettings(
+                                alwaysAllowActions = false,
+                                confirmCalls = confirmCalls,
+                                confirmMessages = confirmMessages,
+                                confirmScreenControl = confirmScreenControl,
+                                confirmDeletions = confirmDeletions,
+                            )
+                        },
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Column {
+                        Text("Always allow phone calls", style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            if (!confirmCalls) "Calls dial immediately without popup." else "Asks confirmation popup before dialing.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(
+                        checked = !confirmMessages,
+                        onCheckedChange = { allow ->
+                            confirmMessages = !allow
+                            viewModel.saveActionConfirmationSettings(
+                                alwaysAllowActions = false,
+                                confirmCalls = confirmCalls,
+                                confirmMessages = confirmMessages,
+                                confirmScreenControl = confirmScreenControl,
+                                confirmDeletions = confirmDeletions,
+                            )
+                        },
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Column {
+                        Text("Always allow SMS & WhatsApp messages", style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            if (!confirmMessages) "Messages send immediately without popup." else "Asks confirmation popup before sending.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(
+                        checked = !confirmScreenControl,
+                        onCheckedChange = { allow ->
+                            confirmScreenControl = !allow
+                            viewModel.saveActionConfirmationSettings(
+                                alwaysAllowActions = false,
+                                confirmCalls = confirmCalls,
+                                confirmMessages = confirmMessages,
+                                confirmScreenControl = confirmScreenControl,
+                                confirmDeletions = confirmDeletions,
+                            )
+                        },
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Column {
+                        Text("Always allow screen taps & typing", style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            if (!confirmScreenControl) "Screen actions run immediately without popup." else "Asks confirmation popup on sensitive taps.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
             }
 
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -482,7 +605,17 @@ fun SafetyCard(
             TextButton(
                 onClick = {
                     val turns = callTurns.toIntOrNull()?.coerceIn(2, 12) ?: 6
-                    viewModel.saveSafety(enabled, blocklist, callEnabled, turns)
+                    viewModel.saveSafety(
+                        screenControlEnabled = enabled,
+                        blocklistText = blocklist,
+                        callAssistantEnabled = callEnabled,
+                        callAssistantMaxTurns = turns,
+                        alwaysAllowActions = alwaysAllowActions,
+                        confirmCalls = confirmCalls,
+                        confirmMessages = confirmMessages,
+                        confirmScreenControl = confirmScreenControl,
+                        confirmDeletions = confirmDeletions,
+                    )
                 },
                 contentPadding = PaddingValues(horizontal = 4.dp),
             ) {

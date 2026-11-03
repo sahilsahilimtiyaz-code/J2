@@ -58,8 +58,49 @@ class AgentLoop(
         var round = 0
         while (round < MAX_TOOL_ROUNDS) {
             round++
-            val result = streamRound(messages, request, includeTools = true, images = pendingImage?.let { listOf(it) })
+            val rawResult = streamRound(messages, request, includeTools = true, images = pendingImage?.let { listOf(it) })
             pendingImage = null
+
+            // Deterministic Tool Guarantee on Round 1:
+            // 1. If all cloud providers failed with HTTP/rate-limit errors, check if OfflineTaskRouter
+            //    can execute the phone command directly so the owner never gets blocked by provider errors!
+            // 2. If the cloud model returned text without calling a tool (e.g. hallucinated "I did it" or
+            //    asked "Shall I proceed?") for an explicit phone action command, inject the matched tool call!
+            val result: RoundResult = when (rawResult) {
+                is RoundResult.Failure -> {
+                    if (round == 1 && request.tools.isNotEmpty()) {
+                        val rescuedCalls = OfflineTaskRouter.routeUserCommand(request.userMessage, request.tools)
+                        if (rescuedCalls.isNotEmpty()) {
+                            RoundResult.Success(
+                                providerName = "Jarvis Direct Engine",
+                                text = "",
+                                toolCalls = rescuedCalls,
+                            )
+                        } else {
+                            rawResult
+                        }
+                    } else {
+                        rawResult
+                    }
+                }
+                is RoundResult.Success -> {
+                    if (round == 1 && rawResult.toolCalls.isEmpty() && request.tools.isNotEmpty()) {
+                        val routedCalls = OfflineTaskRouter.routeUserCommand(request.userMessage, request.tools)
+                        if (routedCalls.isNotEmpty()) {
+                            RoundResult.Success(
+                                providerName = rawResult.providerName,
+                                text = "",
+                                toolCalls = routedCalls,
+                            )
+                        } else {
+                            rawResult
+                        }
+                    } else {
+                        rawResult
+                    }
+                }
+            }
+
             when (result) {
                 is RoundResult.Failure -> {
                     emit(AgentEvent.Error(result.message))

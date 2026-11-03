@@ -34,8 +34,12 @@ class OpenAiCompatibleProvider(private val client: OkHttpClient) : LlmProvider {
         var includeImages = !request.images.isNullOrEmpty() &&
             modelSupportsVision(normalizedBaseUrl, normalizedModel)
         var includeTools = request.tools.isNotEmpty()
+        var activeToolList = request.tools
 
-        fun buildHttpRequest(withTools: Boolean, withImages: Boolean): Request {
+        fun buildHttpRequest(
+            withTools: Boolean,
+            withImages: Boolean,
+        ): Request {
             val payload = buildJsonObject {
                 put("model", normalizedModel)
                 put("stream", true)
@@ -48,8 +52,8 @@ class OpenAiCompatibleProvider(private val client: OkHttpClient) : LlmProvider {
                         images = if (withImages) request.images else null,
                     ),
                 )
-                if (withTools && request.tools.isNotEmpty()) {
-                    put("tools", openAiTools(request.tools))
+                if (withTools && activeToolList.isNotEmpty()) {
+                    put("tools", openAiTools(activeToolList))
                     put("tool_choice", "auto")
                 }
             }
@@ -81,15 +85,23 @@ class OpenAiCompatibleProvider(private val client: OkHttpClient) : LlmProvider {
             // Automatic recovery loop:
             // 1. If a text-only model (e.g. Z.ai glm-4.5-flash) rejects multimodal content
             //    ("messages.content.type is invalid, allowed values: ['text']"), retry without images.
-            // 2. If a model rejects tool definitions, retry without tools.
+            // 2. If a model rejects a large tool array, retry with the top 6 prioritized tools first.
+            // 3. If a model does not support tool calling at all, retry without tools.
             var retries = 0
-            while (!response.isSuccessful && retries < 2) {
+            var triedCompactTools = false
+            while (!response.isSuccessful && retries < 3) {
                 val statusCode = response.code
                 val errorBody = response.use { it.body.string() }
                 if (includeImages && shouldRetryWithoutImages(statusCode, errorBody)) {
                     includeImages = false
                     retries++
                     activeCall = client.newCall(buildHttpRequest(withTools = includeTools, withImages = false))
+                    response = activeCall.execute()
+                } else if (includeTools && !triedCompactTools && activeToolList.size > 6 && shouldRetryWithoutTools(statusCode, errorBody)) {
+                    triedCompactTools = true
+                    activeToolList = request.tools.take(6)
+                    retries++
+                    activeCall = client.newCall(buildHttpRequest(withTools = true, withImages = includeImages))
                     response = activeCall.execute()
                 } else if (includeTools && shouldRetryWithoutTools(statusCode, errorBody)) {
                     includeTools = false
@@ -312,7 +324,11 @@ class OpenAiCompatibleProvider(private val client: OkHttpClient) : LlmProvider {
                         }
                         LlmRole.ASSISTANT -> {
                             put("role", "assistant")
-                            put("content", message.content)
+                            if (message.toolCalls.isNotEmpty() && message.content.isBlank()) {
+                                put("content", kotlinx.serialization.json.JsonNull)
+                            } else {
+                                put("content", message.content)
+                            }
                             if (message.toolCalls.isNotEmpty()) {
                                 put(
                                     "tool_calls",

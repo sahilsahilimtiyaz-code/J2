@@ -414,3 +414,16 @@
   - Restored `continuousListening = true` and `alwaysListening = true` by default with automatic migration `SLOT_MIC_LIVE_CALL_MODE_V2` in `SettingsRepository`.
 - [x] **7-State Microphone State Machine, Monitor UI & Unit Tests (`MicrophoneStateMachine.kt`, `SettingsExtras.kt`, `MicrophoneStateMachineTest.kt`):**
   - Verified all 11 unit test methods in `MicrophoneStateMachineTest` and full debug APK assembly (`gradle testDebugUnitTest assembleDebug`).
+
+## 2026-11-03 (Part 2) — VAD + `EXTRA_AUDIO_SOURCE` Pipe, Always-Allow Confirmations, Deterministic Tool Execution & Provider Error Fixes
+
+- [x] **Eliminated Background Mic ON/OFF Cycling via Continuous VAD + `EXTRA_AUDIO_SOURCE` Pipe (`SttEngine.kt`):**
+  - Removed `yieldWhileRecognizerActive` (`recorder.stop()`) and stopped calling `SpeechRecognizer.startListening()` during silence.
+  - `LiveCallAudioAnchor` now runs a single uninterrupted `AudioRecord` with `AcousticEchoCanceler` + `NoiseSuppressor`, a 750ms circular PCM pre-roll buffer, and adaptive VAD; when speech begins, it streams PCM into `SpeechRecognizer` via Android 13+ `RecognizerIntent.EXTRA_AUDIO_SOURCE` (`ParcelFileDescriptor.createPipe()`) so `SpeechRecognizer` never opens or closes the hardware microphone.
+- [x] **Action Confirmations & "Always Allow" Settings UI (`SettingsModels.kt`, `JarvisCore.kt`, `JarvisViewModel.kt`, `PermissionsScreen.kt`, `SettingsExtras.kt`, `JarvisApp.kt`):**
+  - Added `alwaysAllowActions = true` (default ON) and per-category confirmation toggles (`Phone Calls`, `SMS & WhatsApp Messages`, `Screen Control & Taps`, `Memory & Data Deletions`) in both the **Permissions** screen and **Settings → Security**.
+  - Added an **"Always Allow (Don't Ask Again)"** button to `ConfirmationOverlay` and spoken/typed `"ok"` / `"yes"` / `"do it"` / `"always allow"` handling in `JarvisCore.send()`.
+- [x] **Deterministic First-Turn Tool Execution & Provider Schema Compatibility (`PersonaBuilder.kt`, `jarvis_prompt.md`, `ToolSchema.kt`, `OpenAiCompatibleProvider.kt`, `LocalAiModels.kt`, `AgentLoop.kt`):**
+  - Removed `"additionalProperties": false` from `ToolSchema.kt` and added `JsonNull` assistant content + compact 6-tool retry in `OpenAiCompatibleProvider.kt` to prevent HTTP 400/422 errors across Z.ai, Gemini, Mistral, and OpenRouter providers.
+  - Updated `PersonaBuilder.kt` and `jarvis_prompt.md` so the LLM calls phone tools immediately on Turn 1 instead of asking `"Shall I...?"` in text.
+  - Added Round 1 Deterministic Tool Guarantee in `AgentLoop.kt` via `OfflineTaskRouter.routeUserCommand()` so explicit phone commands (`"open YouTube"`, `"type justin on YouTube"`, `"play lofi"`, `"tap ..."`, etc.) always execute even if a cloud model omits tool calls or returns an error.

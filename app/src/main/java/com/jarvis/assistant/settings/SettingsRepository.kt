@@ -271,8 +271,9 @@ class SettingsRepository(
             }
         }
 
-        val baseProviders = if (vault.getMetadata(SLOT_GLOBAL_FREE_PROVIDERS_SEEDED) != "v3") {
-            vault.putMetadata(SLOT_GLOBAL_FREE_PROVIDERS_SEEDED, "v3")
+        val needsV3Migration = base.schemaMigrationVersion < CURRENT_SCHEMA_MIGRATION_VERSION
+
+        val baseProviders = if (needsV3Migration) {
             val existingIds = base.providers.map { it.id.lowercase() }.toSet()
             val existingHosts = base.providers.map { it.baseUrl.lowercase() }.toSet()
             val additions = defaultProviderSettings().filter { def ->
@@ -284,17 +285,21 @@ class SettingsRepository(
         }
 
         val restoredProviders = baseProviders.map { p ->
-            if (p.encryptedApiKey.isNotBlank()) {
-                p
+            val migratedModel = if (
+                p.model.equals("google/gemini-2.0-flash-exp:free", ignoreCase = true) ||
+                p.model.equals("google/gemini-2.0-flash-thinking-exp:free", ignoreCase = true)
+            ) {
+                "meta-llama/llama-3.3-70b-instruct:free"
             } else {
-                val vaultKey = vault.getEncrypted(EncryptedKeystoreVault.slotForProvider(p.id))
-                if (vaultKey.isNotBlank()) p.copy(encryptedApiKey = vaultKey) else p
+                p.model
             }
-        }
-
-        val migrateLiveCallMode = vault.getMetadata(SLOT_MIC_LIVE_CALL_MODE_V2) != "true"
-        if (migrateLiveCallMode) {
-            vault.putMetadata(SLOT_MIC_LIVE_CALL_MODE_V2, "true")
+            val withModel = if (migratedModel != p.model) p.copy(model = migratedModel) else p
+            if (withModel.encryptedApiKey.isNotBlank()) {
+                withModel
+            } else {
+                val vaultKey = vault.getEncrypted(EncryptedKeystoreVault.slotForProvider(withModel.id))
+                if (vaultKey.isNotBlank()) withModel.copy(encryptedApiKey = vaultKey) else withModel
+            }
         }
 
         val restoredVoice = v.copy(
@@ -304,10 +309,22 @@ class SettingsRepository(
             voiceId = activeVid,
             fishVoiceId = fishVid,
             elevenLabsVoiceId = elevenVid,
-            continuousListening = if (migrateLiveCallMode) true else v.continuousListening,
-            alwaysListening = if (migrateLiveCallMode) true else v.alwaysListening,
+            continuousListening = if (needsV3Migration) true else v.continuousListening,
+            alwaysListening = if (needsV3Migration) true else v.alwaysListening,
             requireWakeWord = v.requireWakeWord,
         )
+
+        val restoredSafety = if (needsV3Migration) {
+            base.safety.copy(
+                alwaysAllowActions = true,
+                confirmCalls = false,
+                confirmMessages = false,
+                confirmScreenControl = false,
+                confirmDeletions = false,
+            )
+        } else {
+            base.safety
+        }
 
         // Ensure the synchronous Keystore Vault stays populated with any keys loaded from DataStore
         syncVault(restoredVoice, restoredProviders)
@@ -315,6 +332,8 @@ class SettingsRepository(
         return base.copy(
             providers = restoredProviders,
             voice = restoredVoice,
+            safety = restoredSafety,
+            schemaMigrationVersion = CURRENT_SCHEMA_MIGRATION_VERSION,
         )
     }
 
@@ -447,6 +466,7 @@ class SettingsRepository(
     )
 
     private companion object {
+        const val CURRENT_SCHEMA_MIGRATION_VERSION = 3
         const val SLOT_GLOBAL_FREE_PROVIDERS_SEEDED = "seeded_global_free_providers"
         const val SLOT_MIC_LIVE_CALL_MODE_V2 = "mic_live_call_mode_v2"
         val STATE_KEY = stringPreferencesKey("settings_v1")

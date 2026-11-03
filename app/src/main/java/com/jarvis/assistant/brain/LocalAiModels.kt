@@ -782,16 +782,20 @@ object OfflineTaskRouter {
             }
         }
 
-        // 4. YouTube search & play
-        if ((lower.contains("youtube") && (lower.contains("search") || lower.contains("play") || lower.contains("find") || lower.contains("watch") || lower.contains("put on"))) ||
-            (lower.startsWith("play ") && !lower.equals("play") && !lower.equals("play music") && !lower.equals("play song"))
+        // 4. YouTube search, type & play
+        if ((lower.contains("youtube") && (lower.contains("search") || lower.contains("play") || lower.contains("find") || lower.contains("watch") || lower.contains("put on") || lower.contains("type"))) ||
+            (lower.startsWith("play ") && !lower.equals("play") && !lower.equals("play music") && !lower.equals("play song") && !lower.contains("first video"))
         ) {
             if (hasTool("search_youtube")) {
                 val query = extractYouTubeQuery(clean)
+                val wantsPlay = lower.contains("play") || lower.contains("watch") || lower.contains("put on")
                 if (query.isNotBlank()) {
                     return call(
                         "search_youtube",
-                        buildJsonObject { put("query", query) }.toString(),
+                        buildJsonObject {
+                            put("query", query)
+                            put("play_immediately", wantsPlay)
+                        }.toString(),
                     )
                 }
             }
@@ -1131,7 +1135,7 @@ object OfflineTaskRouter {
             return call("get_current_time", "{}")
         }
 
-        // 21. Screen navigation & scrolling
+        // 21. Screen navigation, scrolling, typing & tapping
         if ((lower == "scroll down" || lower == "scroll up" || lower == "scroll left" || lower == "scroll right") &&
             hasTool("scroll_screen")
         ) {
@@ -1153,6 +1157,59 @@ object OfflineTaskRouter {
                 "press_system_key",
                 buildJsonObject { put("key", key) }.toString(),
             )
+        }
+        if ((lower.contains("first video") || lower.contains("second video") || lower.contains("third video")) &&
+            (lower.contains("play") || lower.contains("tap") || lower.contains("click") || lower.contains("open")) &&
+            hasTool("tap_video_item")
+        ) {
+            val idx = when {
+                lower.contains("second") -> 2
+                lower.contains("third") -> 3
+                else -> 1
+            }
+            return call(
+                "tap_video_item",
+                buildJsonObject { put("index", idx) }.toString(),
+            )
+        }
+        if (lower.startsWith("type ") && hasTool("type_on_screen")) {
+            val body = clean.replace(Regex("(?i)^(jarvis\\s*,?\\s*)?(please\\s+)?type\\s+"), "").trim()
+            val onAppMatch = Regex("(?i)^(.+?)\\s+(?:on|in|into)\\s+([A-Za-z0-9 ._-]+)$").find(body)
+            if (onAppMatch != null) {
+                val textToType = onAppMatch.groupValues[1].trim().trim('"', '\'')
+                val targetApp = onAppMatch.groupValues[2].trim()
+                if (textToType.isNotBlank()) {
+                    return call(
+                        "type_on_screen",
+                        buildJsonObject {
+                            put("text", textToType)
+                            put("app", targetApp)
+                            put("target", "Search")
+                            put("submit", true)
+                        }.toString(),
+                    )
+                }
+            } else if (body.isNotBlank()) {
+                return call(
+                    "type_on_screen",
+                    buildJsonObject {
+                        put("text", body.trim('"', '\''))
+                        put("submit", true)
+                    }.toString(),
+                )
+            }
+        }
+        if ((lower.startsWith("tap ") || lower.startsWith("click ")) && hasTool("tap_screen")) {
+            val targetLabel = clean
+                .replace(Regex("(?i)^(jarvis\\s*,?\\s*)?(please\\s+)?(tap|click)\\s+(on\\s+)?(the\\s+)?"), "")
+                .trim()
+                .trim('"', '\'')
+            if (targetLabel.isNotBlank()) {
+                return call(
+                    "tap_screen",
+                    buildJsonObject { put("text", targetLabel) }.toString(),
+                )
+            }
         }
 
         // 22. Open installed app (e.g. "open YouTube", "open WhatsApp", "launch Spotify")
@@ -1311,8 +1368,8 @@ object OfflineTaskRouter {
     private fun extractYouTubeQuery(raw: String): String {
         return raw
             .replace(Regex("(?i)^(jarvis\\s*,?\\s*)?(please\\s+)?"), "")
-            .replace(Regex("(?i)^(open\\s+youtube\\s+and\\s+)?(search\\s+youtube\\s+for|search\\s+for|search|play|watch|put\\s+on)\\s+"), "")
-            .replace(Regex("(?i)\\s+(on|in)\\s+youtube$"), "")
+            .replace(Regex("(?i)^(open\\s+youtube\\s+and\\s+)?(search\\s+youtube\\s+for|search\\s+for|search|type|play|watch|put\\s+on|find)\\s+"), "")
+            .replace(Regex("(?i)\\s+(on|in|into)\\s+youtube$"), "")
             .trim()
     }
 

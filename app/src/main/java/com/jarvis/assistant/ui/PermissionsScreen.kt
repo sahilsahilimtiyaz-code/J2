@@ -59,9 +59,17 @@ fun PermissionsScreen(
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onToggleBackgroundListening: () -> Unit,
+    onSaveActionConfirmations: (
+        alwaysAllowActions: Boolean,
+        confirmCalls: Boolean,
+        confirmMessages: Boolean,
+        confirmScreenControl: Boolean,
+        confirmDeletions: Boolean,
+    ) -> Unit = { _, _, _, _, _ -> },
 ) {
     val context = LocalContext.current
     val permissions = state.permissions
+    val safety = state.settings.safety
 
     val micLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
@@ -109,6 +117,111 @@ fun PermissionsScreen(
                             color = JarvisPalette.TextDim,
                         )
                         Spacer(Modifier.height(12.dp))
+                    }
+                }
+
+                item {
+                    GlassPanel(
+                        modifier = Modifier.fillMaxWidth(),
+                        accent = if (safety.alwaysAllowActions) JarvisPalette.Success else JarvisPalette.Cyan,
+                        corner = 18.dp,
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Action Confirmations & Always Allow",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = JarvisPalette.Ice,
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    text = if (safety.alwaysAllowActions) {
+                                        "ALWAYS ALLOW ACTIVE: Jarvis executes your commands immediately without stopping to ask for confirmation popups."
+                                    } else {
+                                        "Custom confirmation mode: choose which actions require a confirmation popup below."
+                                    },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = JarvisPalette.TextDim,
+                                )
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Switch(
+                                checked = safety.alwaysAllowActions,
+                                onCheckedChange = { enabled ->
+                                    onSaveActionConfirmations(
+                                        enabled,
+                                        if (enabled) false else safety.confirmCalls,
+                                        if (enabled) false else safety.confirmMessages,
+                                        if (enabled) false else safety.confirmScreenControl,
+                                        if (enabled) false else safety.confirmDeletions,
+                                    )
+                                },
+                            )
+                        }
+
+                        if (!safety.alwaysAllowActions) {
+                            Spacer(Modifier.height(10.dp))
+                            ConfirmationCategoryToggleRow(
+                                label = "Phone Calls",
+                                subtitle = if (!safety.confirmCalls) "Always Allow (No Popup)" else "Ask Confirmation Popup",
+                                alwaysAllow = !safety.confirmCalls,
+                                onToggleAlwaysAllow = { allow ->
+                                    onSaveActionConfirmations(
+                                        false,
+                                        !allow,
+                                        safety.confirmMessages,
+                                        safety.confirmScreenControl,
+                                        safety.confirmDeletions,
+                                    )
+                                },
+                            )
+                            ConfirmationCategoryToggleRow(
+                                label = "SMS & WhatsApp Messages",
+                                subtitle = if (!safety.confirmMessages) "Always Allow (No Popup)" else "Ask Confirmation Popup",
+                                alwaysAllow = !safety.confirmMessages,
+                                onToggleAlwaysAllow = { allow ->
+                                    onSaveActionConfirmations(
+                                        false,
+                                        safety.confirmCalls,
+                                        !allow,
+                                        safety.confirmScreenControl,
+                                        safety.confirmDeletions,
+                                    )
+                                },
+                            )
+                            ConfirmationCategoryToggleRow(
+                                label = "Screen Control & Taps",
+                                subtitle = if (!safety.confirmScreenControl) "Always Allow (No Popup)" else "Ask Confirmation Popup",
+                                alwaysAllow = !safety.confirmScreenControl,
+                                onToggleAlwaysAllow = { allow ->
+                                    onSaveActionConfirmations(
+                                        false,
+                                        safety.confirmCalls,
+                                        safety.confirmMessages,
+                                        !allow,
+                                        safety.confirmDeletions,
+                                    )
+                                },
+                            )
+                            ConfirmationCategoryToggleRow(
+                                label = "Memory & Data Deletions",
+                                subtitle = if (!safety.confirmDeletions) "Always Allow (No Popup)" else "Ask Confirmation Popup",
+                                alwaysAllow = !safety.confirmDeletions,
+                                onToggleAlwaysAllow = { allow ->
+                                    onSaveActionConfirmations(
+                                        false,
+                                        safety.confirmCalls,
+                                        safety.confirmMessages,
+                                        safety.confirmScreenControl,
+                                        !allow,
+                                    )
+                                },
+                            )
+                        }
                     }
                 }
 
@@ -362,6 +475,40 @@ private fun PermissionRow(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun ConfirmationCategoryToggleRow(
+    label: String,
+    subtitle: String,
+    alwaysAllow: Boolean,
+    onToggleAlwaysAllow: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = JarvisPalette.Ice,
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (alwaysAllow) JarvisPalette.Success else JarvisPalette.Amber,
+            )
+        }
+        Spacer(Modifier.width(10.dp))
+        Switch(
+            checked = alwaysAllow,
+            onCheckedChange = onToggleAlwaysAllow,
+        )
     }
 }
 

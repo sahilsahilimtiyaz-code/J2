@@ -6,13 +6,17 @@ import android.content.Intent
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.NoiseSuppressor
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.ParcelFileDescriptor
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import java.io.OutputStream
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
@@ -33,26 +37,33 @@ interface SttEngine {
 }
 
 /**
- * Keeps a continuous, call-like [AudioRecord] open in-process while Jarvis's
+ * Keeps a single continuous, call-like [AudioRecord] open in-process while Jarvis's
  * microphone is live so Android's `OP_RECORD_AUDIO` privacy indicator stays
- * steadily ON (like a live phone call) instead of cycling OFF and ON every few
- * seconds when [SpeechRecognizer] rolls over between silence windows or turns.
+ * steadily ON (like a live phone call) and NEVER cycles OFF and ON.
  *
- * Uses `setPrivacySensitive(false)` on Android 11+ (API 30+) so Android's
- * concurrent capture policy allows [SpeechRecognizer] (`VOICE_RECOGNITION`)
- * to capture simultaneously without contention. If a device's audio HAL ever
- * reports `ERROR_AUDIO` during concurrent capture, [yieldWhileRecognizerActive]
- * automatically switches to relay-baton handover within SystemUI's indicator
- * retention window.
+ * Architecture:
+ * - Holds one persistent 16kHz 16-bit mono [AudioRecord] continuously without ever
+ *   stopping during silence or between turns.
+ * - Maintains a 750ms circular PCM pre-roll buffer (12,000 samples / 24,000 bytes)
+ *   and runs adaptive Voice Activity Detection (VAD).
+ * - During silence, [SpeechRecognizer] is NOT started at all — eliminating the 4-second
+ *   `ERROR_SPEECH_TIMEOUT` rollover loop and `ERROR_AUDIO` HAL conflicts.
+ * - When the user speaks, streams the 750ms pre-roll + live PCM frames directly into
+ *   [SpeechRecognizer] via Android 13+ [RecognizerIntent.EXTRA_AUDIO_SOURCE] pipe so
+ *   [SpeechRecognizer] never opens or closes hardware `OP_RECORD_AUDIO`.
  */
 @SuppressLint("MissingPermission")
 class LiveCallAudioAnchor(
     private val stateMachine: MicrophoneStateMachine? = null,
 ) {
     private val lock = Any()
+    private val sinkLock = Any()
 
     @Volatile
     private var recorder: AudioRecord? = null
+
+    private var echoCanceler: AcousticEchoCanceler? = null
+    private var noiseSuppressor: NoiseSuppressor? = null
 
     @Volatile
     private var drainThread: Thread? = null
@@ -62,54 +73,45 @@ class LiveCallAudioAnchor(
         private set
 
     @Volatile
-    var pausedForRecognizerYield: Boolean = false
-        private set
-
-    @Volatile
-    var yieldWhileRecognizerActive: Boolean = false
-
-    @Volatile
     var onRmsLevel: ((Float) -> Unit)? = null
+
+    @Volatile
+    var onVoiceActivityDetected: (() -> Unit)? = null
+
+    @Volatile
+    var onVoiceSilenceReached: (() -> Unit)? = null
+
+    // 750ms circular pre-roll buffer at 16,000 Hz (12,000 shorts = 24,000 bytes)
+    private val preRollCapacityShorts = 12_000
+    private val preRollRing = ShortArray(preRollCapacityShorts)
+    private var preRollWritePos = 0
+    private var preRollFilled = 0
+
+    private var activePipeSink: OutputStream? = null
+
+    @Volatile
+    var isSpeechActive: Boolean = false
+        private set
 
     fun ensureLive(): Boolean {
         synchronized(lock) {
-            if (isLive && recorder?.state == AudioRecord.STATE_INITIALIZED) {
-                if (pausedForRecognizerYield) {
-                    pausedForRecognizerYield = false
-                    runCatching { recorder?.startRecording() }
-                    stateMachine?.onAudioRecordStateChanged("RECORDING (LIVE CALL)", true)
-                }
+            if (isLive &&
+                recorder?.state == AudioRecord.STATE_INITIALIZED &&
+                recorder?.recordingState == AudioRecord.RECORDSTATE_RECORDING
+            ) {
                 return true
             }
             stopInternalLocked(notifyStateMachine = false)
 
-            val sampleRate = 16000
+            val sampleRate = SAMPLE_RATE_HZ
             val channel = AudioFormat.CHANNEL_IN_MONO
             val encoding = AudioFormat.ENCODING_PCM_16BIT
             val minBuffer = AudioRecord.getMinBufferSize(sampleRate, channel, encoding)
             if (minBuffer <= 0) return false
-            val bufferSize = (minBuffer * 2).coerceAtLeast(sampleRate)
+            val bufferSize = (minBuffer * 3).coerceAtLeast(sampleRate * 2)
 
-            val created = runCatching {
-                val format = AudioFormat.Builder()
-                    .setEncoding(encoding)
-                    .setSampleRate(sampleRate)
-                    .setChannelMask(channel)
-                    .build()
-                val builder = AudioRecord.Builder()
-                    .setAudioSource(MediaRecorder.AudioSource.MIC)
-                    .setAudioFormat(format)
-                    .setBufferSizeInBytes(bufferSize)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    builder.setPrivacySensitive(false)
-                }
-                builder.build()
-            }.getOrNull() ?: return false
-
-            if (created.state != AudioRecord.STATE_INITIALIZED) {
-                runCatching { created.release() }
-                return false
-            }
+            val created = createBestAudioRecord(sampleRate, channel, encoding, bufferSize)
+                ?: return false
 
             val started = runCatching {
                 created.startRecording()
@@ -121,46 +123,19 @@ class LiveCallAudioAnchor(
                 return false
             }
 
+            attachAudioEffects(created.audioSessionId)
             recorder = created
             isLive = true
-            pausedForRecognizerYield = false
+            isSpeechActive = false
+            preRollWritePos = 0
+            preRollFilled = 0
             stateMachine?.onAudioRecordStateChanged("RECORDING (LIVE CALL)", true)
 
             val thread = Thread({
-                val buf = ShortArray(1024)
-                while (isLive && !Thread.currentThread().isInterrupted) {
-                    val activeRec = recorder ?: break
-                    if (pausedForRecognizerYield) {
-                        try {
-                            Thread.sleep(20L)
-                        } catch (_: InterruptedException) {
-                            break
-                        }
-                        continue
-                    }
-                    val read = runCatching { activeRec.read(buf, 0, buf.size) }.getOrDefault(-1)
-                    if (read > 0) {
-                        val callback = onRmsLevel
-                        if (callback != null) {
-                            var sum = 0.0
-                            for (i in 0 until read) {
-                                val s = buf[i].toDouble()
-                                sum += s * s
-                            }
-                            val rms = kotlin.math.sqrt(sum / read)
-                            val normalized = (rms / 6500.0).toFloat().coerceIn(0.04f, 1f)
-                            callback(normalized)
-                        }
-                    } else {
-                        try {
-                            Thread.sleep(20L)
-                        } catch (_: InterruptedException) {
-                            break
-                        }
-                    }
-                }
+                runCaptureLoop()
             }, "JarvisLiveCallMicAnchor").apply {
                 isDaemon = true
+                priority = Thread.MAX_PRIORITY - 1
                 start()
             }
             drainThread = thread
@@ -168,32 +143,191 @@ class LiveCallAudioAnchor(
         }
     }
 
-    /**
-     * Used only on devices whose HAL cannot share the mic simultaneously: pauses the
-     * anchor's active read after [SpeechRecognizer] has acquired `OP_RECORD_AUDIO`, and
-     * immediately resumes it via [resumeHoldBeforeRecognizerStop] before the recognizer stops.
-     */
-    fun yieldIfRequiredAfterRecognizerReady() {
-        if (!yieldWhileRecognizerActive) return
-        synchronized(lock) {
-            if (!isLive || pausedForRecognizerYield) return
-            pausedForRecognizerYield = true
-            runCatching { recorder?.stop() }
+    private fun createBestAudioRecord(
+        sampleRate: Int,
+        channel: Int,
+        encoding: Int,
+        bufferSize: Int,
+    ): AudioRecord? {
+        val sources = intArrayOf(
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            MediaRecorder.AudioSource.MIC,
+        )
+        for (source in sources) {
+            val candidate = runCatching {
+                val format = AudioFormat.Builder()
+                    .setEncoding(encoding)
+                    .setSampleRate(sampleRate)
+                    .setChannelMask(channel)
+                    .build()
+                val builder = AudioRecord.Builder()
+                    .setAudioSource(source)
+                    .setAudioFormat(format)
+                    .setBufferSizeInBytes(bufferSize)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    builder.setPrivacySensitive(false)
+                }
+                builder.build()
+            }.getOrNull()
+            if (candidate != null && candidate.state == AudioRecord.STATE_INITIALIZED) {
+                return candidate
+            }
+            runCatching { candidate?.release() }
+        }
+        return null
+    }
+
+    private fun attachAudioEffects(sessionId: Int) {
+        if (sessionId <= 0) return
+        runCatching {
+            if (AcousticEchoCanceler.isAvailable()) {
+                echoCanceler = AcousticEchoCanceler.create(sessionId)?.apply { enabled = true }
+            }
+        }
+        runCatching {
+            if (NoiseSuppressor.isAvailable()) {
+                noiseSuppressor = NoiseSuppressor.create(sessionId)?.apply { enabled = true }
+            }
         }
     }
 
-    fun resumeHoldBeforeRecognizerStop() {
-        synchronized(lock) {
-            if (!isLive) {
-                ensureLive()
-                return
+    private fun runCaptureLoop() {
+        val frameShorts = ShortArray(FRAME_SHORTS) // 320 shorts = 20ms @ 16kHz
+        val pcmBytes = ByteArray(FRAME_SHORTS * 2)
+        var noiseFloorRms = 140.0
+        var consecutiveVoiceFrames = 0
+        var lastVoiceFrameAtMs = 0L
+        var speechTriggeredAtMs = 0L
+
+        while (isLive && !Thread.currentThread().isInterrupted) {
+            val activeRec = recorder ?: break
+            val read = runCatching { activeRec.read(frameShorts, 0, frameShorts.size) }.getOrDefault(-1)
+            if (read <= 0) {
+                try {
+                    Thread.sleep(10L)
+                } catch (_: InterruptedException) {
+                    break
+                }
+                continue
             }
-            if (pausedForRecognizerYield) {
-                pausedForRecognizerYield = false
-                runCatching { recorder?.startRecording() }
-                stateMachine?.onAudioRecordStateChanged("RECORDING (LIVE CALL)", true)
+
+            var sumSq = 0.0
+            var peak = 0
+            for (i in 0 until read) {
+                val s = frameShorts[i].toInt()
+                val abs = kotlin.math.abs(s)
+                if (abs > peak) peak = abs
+                sumSq += (s * s).toDouble()
+            }
+            val rms = kotlin.math.sqrt(sumSq / read)
+            val normalizedLevel = (rms / 5500.0).toFloat().coerceIn(0.04f, 1f)
+            onRmsLevel?.invoke(normalizedLevel)
+
+            // Adaptive noise floor tracking during non-speech
+            if (!isSpeechActive && rms < noiseFloorRms * 1.9) {
+                noiseFloorRms = (noiseFloorRms * 0.96 + rms * 0.04).coerceIn(85.0, 950.0)
+            }
+
+            val voiceThreshold = (noiseFloorRms * 2.45).coerceIn(260.0, 1450.0)
+            val isVoiceFrame = rms >= voiceThreshold && peak >= 520
+            val now = System.currentTimeMillis()
+
+            // Convert shorts to little-endian 16-bit PCM bytes for any attached pipe sink
+            var sinkToWrite: OutputStream?
+            synchronized(sinkLock) {
+                appendPreRollLocked(frameShorts, read)
+                sinkToWrite = activePipeSink
+            }
+
+            if (sinkToWrite != null) {
+                var bIdx = 0
+                for (i in 0 until read) {
+                    val v = frameShorts[i].toInt()
+                    pcmBytes[bIdx++] = (v and 0xFF).toByte()
+                    pcmBytes[bIdx++] = ((v shr 8) and 0xFF).toByte()
+                }
+                val ok = runCatching {
+                    sinkToWrite.write(pcmBytes, 0, read * 2)
+                    true
+                }.getOrDefault(false)
+                if (!ok) {
+                    detachPipeSink()
+                }
+            }
+
+            if (isVoiceFrame) {
+                consecutiveVoiceFrames++
+                lastVoiceFrameAtMs = now
+                if (!isSpeechActive && consecutiveVoiceFrames >= 3) {
+                    isSpeechActive = true
+                    speechTriggeredAtMs = now
+                    onVoiceActivityDetected?.invoke()
+                }
+            } else {
+                consecutiveVoiceFrames = 0
+                if (isSpeechActive) {
+                    val silenceDurationMs = now - lastVoiceFrameAtMs
+                    val totalSpeechMs = now - speechTriggeredAtMs
+                    if (silenceDurationMs >= TRAILING_SILENCE_MS || totalSpeechMs >= MAX_UTTERANCE_MS) {
+                        isSpeechActive = false
+                        onVoiceSilenceReached?.invoke()
+                    }
+                }
             }
         }
+    }
+
+    private fun appendPreRollLocked(samples: ShortArray, count: Int) {
+        for (i in 0 until count) {
+            preRollRing[preRollWritePos] = samples[i]
+            preRollWritePos = (preRollWritePos + 1) % preRollCapacityShorts
+            if (preRollFilled < preRollCapacityShorts) {
+                preRollFilled++
+            }
+        }
+    }
+
+    /**
+     * Attaches an [OutputStream] (such as the write end of a `ParcelFileDescriptor.createPipe()`)
+     * and immediately flushes the 750ms circular pre-roll buffer into it so the beginning of
+     * the user's spoken phrase is never clipped.
+     */
+    fun attachPipeSinkWithPreRoll(sink: OutputStream) {
+        val preRollBytes: ByteArray
+        synchronized(sinkLock) {
+            runCatching { activePipeSink?.close() }
+            activePipeSink = sink
+            val count = preRollFilled
+            preRollBytes = ByteArray(count * 2)
+            val startIdx = if (count == preRollCapacityShorts) preRollWritePos else 0
+            var bIdx = 0
+            for (i in 0 until count) {
+                val sample = preRollRing[(startIdx + i) % preRollCapacityShorts].toInt()
+                preRollBytes[bIdx++] = (sample and 0xFF).toByte()
+                preRollBytes[bIdx++] = ((sample shr 8) and 0xFF).toByte()
+            }
+        }
+        if (preRollBytes.isNotEmpty()) {
+            runCatching {
+                sink.write(preRollBytes)
+                sink.flush()
+            }
+        }
+    }
+
+    fun detachPipeSink() {
+        var old: OutputStream?
+        synchronized(sinkLock) {
+            old = activePipeSink
+            activePipeSink = null
+        }
+        runCatching { old?.flush() }
+        runCatching { old?.close() }
+    }
+
+    fun resumeHoldBeforeRecognizerStop() {
+        ensureLive()
     }
 
     fun stopLive(reason: String = "Microphone stopped") {
@@ -204,10 +338,15 @@ class LiveCallAudioAnchor(
 
     private fun stopInternalLocked(notifyStateMachine: Boolean, reason: String? = null) {
         isLive = false
-        pausedForRecognizerYield = false
+        isSpeechActive = false
+        detachPipeSink()
         val thread = drainThread
         drainThread = null
         runCatching { thread?.interrupt() }
+        runCatching { echoCanceler?.release() }
+        echoCanceler = null
+        runCatching { noiseSuppressor?.release() }
+        noiseSuppressor = null
         val rec = recorder
         recorder = null
         if (rec != null) {
@@ -221,25 +360,30 @@ class LiveCallAudioAnchor(
             }
         }
     }
+
+    companion object {
+        const val SAMPLE_RATE_HZ = 16000
+        private const val FRAME_SHORTS = 320 // 20ms frame at 16kHz
+        private const val TRAILING_SILENCE_MS = 1_150L
+        private const val MAX_UTTERANCE_MS = 18_000L
+    }
 }
 
 /**
- * Continuous, call-like Android [SpeechRecognizer] engine backed by [LiveCallAudioAnchor].
+ * Uninterrupted live-call Android [SpeechRecognizer] engine backed by [LiveCallAudioAnchor].
  *
- * Why this exists:
- * Android's [SpeechRecognizer] times out after ~4-5 seconds of silence with
- * `ERROR_SPEECH_TIMEOUT` or `ERROR_NO_MATCH` and closes its internal audio input.
- * Without [LiveCallAudioAnchor] and in-place re-arming, Android's status-bar green
- * microphone indicator turns OFF for 2-3 seconds and then turns back ON in an endless
- * ON/OFF cycle.
- *
- * With [LiveCallAudioAnchor] + 20ms in-place re-arming:
- * 1. `OP_RECORD_AUDIO` stays continuously active like a live phone call while listening.
- * 2. Silence windows re-arm seamlessly on the main thread without closing the Flow or
- *    dropping the UI `listening` state.
- * 3. When Jarvis thinks/speaks in live mode, [pauseRecognitionKeepLiveAnchor] stops
- *    transcription (so Jarvis never hears himself) while keeping the live call mic
- *    anchor open so the OS mic indicator never blinks off and on.
+ * How this eliminates the status-bar microphone ON/OFF cycling completely:
+ * 1. [LiveCallAudioAnchor] keeps a single in-process [AudioRecord] open continuously
+ *    for the entire time Jarvis's mic is live. It NEVER calls `recorder.stop()` during
+ *    silence or between turns.
+ * 2. During silence, [SpeechRecognizer] is NOT running at all — only [LiveCallAudioAnchor]'s
+ *    in-process VAD monitors the audio stream and updates the UI voice orb RMS level.
+ * 3. The instant the user begins speaking, [LiveCallAudioAnchor] triggers VAD and
+ *    streams the 750ms pre-roll + live PCM audio into [SpeechRecognizer] through
+ *    [RecognizerIntent.EXTRA_AUDIO_SOURCE] (`ParcelFileDescriptor.createPipe()`).
+ *    Because [SpeechRecognizer] reads from the pipe instead of opening the hardware
+ *    microphone, there is zero hardware mic contention and zero `OP_RECORD_AUDIO`
+ *    start/stop cycling in Android's status bar.
  */
 @SuppressLint("MissingPermission")
 class AndroidSttEngine(
@@ -251,10 +395,13 @@ class AndroidSttEngine(
     val liveAnchor = LiveCallAudioAnchor(stateMachine)
 
     @Volatile
-    private var preferOnDevice: Boolean = true
+    private var preferOnDevice: Boolean = false
 
     @Volatile
     private var omitExplicitLanguage: Boolean = false
+
+    @Volatile
+    private var pipeModeSupported: Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
 
     @Volatile
     private var activeRecognizerRef: SpeechRecognizer? = null
@@ -264,17 +411,18 @@ class AndroidSttEngine(
 
     /**
      * Ensures the continuous live-call microphone anchor is holding `OP_RECORD_AUDIO`
-     * so the status-bar microphone indicator never flickers off between turns.
+     * so the status-bar microphone indicator stays steadily ON like a live call.
      */
     fun ensureLiveCallAnchor(): Boolean = liveAnchor.ensureLive()
 
     /**
      * Stops active speech recognition before LLM generation / TTS playback while
-     * optionally keeping the [LiveCallAudioAnchor] open so the microphone stays live
+     * keeping the [LiveCallAudioAnchor] open so the microphone stays live
      * like a phone call across conversation turns.
      */
     fun pauseRecognitionKeepLiveAnchor(reason: String = "Paused recognizer for Jarvis reply") {
-        liveAnchor.resumeHoldBeforeRecognizerStop()
+        liveAnchor.detachPipeSink()
+        liveAnchor.ensureLive()
         val cleanup = Runnable {
             val rec = activeRecognizerRef
             activeRecognizerRef = null
@@ -297,13 +445,14 @@ class AndroidSttEngine(
 
     /**
      * Immediately stops, cancels, and destroys any active [SpeechRecognizer] AND
-     * releases the [LiveCallAudioAnchor] so the microphone is 100% closed.
+     * optionally releases the [LiveCallAudioAnchor] so the microphone is 100% closed.
      */
     fun forceDestroyActive(reason: String = "Force stop", releaseLiveAnchor: Boolean = true) {
+        liveAnchor.detachPipeSink()
         if (releaseLiveAnchor) {
             liveAnchor.stopLive(reason)
         } else {
-            liveAnchor.resumeHoldBeforeRecognizerStop()
+            liveAnchor.ensureLive()
         }
         val cleanup = Runnable {
             val rec = activeRecognizerRef
@@ -336,27 +485,34 @@ class AndroidSttEngine(
             return@callbackFlow
         }
 
-        // Start the continuous live-call audio anchor immediately so OP_RECORD_AUDIO
-        // stays continuously active without ever cycling off and on between passes.
-        liveAnchor.ensureLive()
+        // 1. Ensure the single continuous AudioRecord is running and holding OP_RECORD_AUDIO.
+        val anchorOk = liveAnchor.ensureLive()
+        stateMachine?.onListeningReady()
 
         var recognizer: SpeechRecognizer? = null
+        var activeReadPipe: ParcelFileDescriptor? = null
         var closed = false
         var hardwareOpened = false
-        var recognizerReady = false
+        var recognitionInFlight = false
         var usingOnDevice = false
         var lastPartialText = ""
         var fallbackStage = 0
-        var consecutiveAudioErrors = 0
-        var startRecognitionPass: () -> Unit = {}
+        var startRecognitionForSpeech: () -> Unit = {}
         lateinit var makeListener: () -> RecognitionListener
 
         fun emit(event: SttEvent) {
             if (!closed) trySend(event)
         }
 
+        fun closeActivePipe() {
+            liveAnchor.detachPipeSink()
+            val rp = activeReadPipe
+            activeReadPipe = null
+            runCatching { rp?.close() }
+        }
+
         liveAnchor.onRmsLevel = { level ->
-            if (!closed && !recognizerReady) {
+            if (!closed) {
                 emit(SttEvent.Rms(level))
             }
         }
@@ -389,7 +545,7 @@ class AndroidSttEngine(
             }
         }
 
-        fun buildIntent(): Intent {
+        fun buildIntent(audioPipeReadFd: ParcelFileDescriptor?): Intent {
             val includeLanguage = !omitExplicitLanguage
             return Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(
@@ -405,14 +561,24 @@ class AndroidSttEngine(
                 putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
                 putExtra(RecognizerIntent.EXTRA_CONFIDENCE_SCORES, true)
                 putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
-                // Keep each recognition pass open longer so the recognizer rolls over
-                // less frequently while still finalizing promptly after spoken phrases.
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 12_000L)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1_800L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 8_000L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1_500L)
                 putExtra(
                     RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
-                    1_400L,
+                    1_200L,
                 )
+                if (audioPipeReadFd != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, audioPipeReadFd)
+                    putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
+                    putExtra(
+                        RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING,
+                        AudioFormat.ENCODING_PCM_16BIT,
+                    )
+                    putExtra(
+                        RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE,
+                        LiveCallAudioAnchor.SAMPLE_RATE_HZ,
+                    )
+                }
                 if (usingOnDevice && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
                 }
@@ -452,7 +618,8 @@ class AndroidSttEngine(
         }
 
         fun destroyRecognizer(releaseReason: String? = null, releaseHardwareCount: Boolean = true) {
-            recognizerReady = false
+            recognitionInFlight = false
+            closeActivePipe()
             val rec = recognizer
             recognizer = null
             if (activeRecognizerRef === rec) {
@@ -500,28 +667,9 @@ class AndroidSttEngine(
             return created
         }
 
-        val rearmRunnable = Runnable {
-            if (!closed) {
-                startRecognitionPass()
-            }
-        }
-
-        fun scheduleContinuousRearm(delayMs: Long = 20L, recreateRecognizer: Boolean = false) {
-            if (closed) return
-            recognizerReady = false
-            // Ensure the in-process AudioRecord anchor is actively holding OP_RECORD_AUDIO
-            // before the recognizer resets so Android never sees 0 active mic sessions.
-            liveAnchor.resumeHoldBeforeRecognizerStop()
-            mainHandler.removeCallbacks(rearmRunnable)
-            if (recreateRecognizer) {
-                createRecognizer()
-            }
-            mainHandler.postDelayed(rearmRunnable, delayMs)
-        }
-
-        startRecognitionPass = recognition@{
-            if (closed) return@recognition
-            liveAnchor.resumeHoldBeforeRecognizerStop()
+        startRecognitionForSpeech = recognition@{
+            if (closed || recognitionInFlight) return@recognition
+            liveAnchor.ensureLive()
             val rec = recognizer ?: createRecognizer()
             if (rec == null) {
                 stateMachine?.onRecognitionError(
@@ -532,54 +680,82 @@ class AndroidSttEngine(
                 close()
                 return@recognition
             }
+
+            closeActivePipe()
+            var readEnd: ParcelFileDescriptor? = null
+            if (pipeModeSupported && liveAnchor.isLive && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                val pipe = runCatching { ParcelFileDescriptor.createPipe() }.getOrNull()
+                if (pipe != null && pipe.size == 2) {
+                    readEnd = pipe[0]
+                    activeReadPipe = readEnd
+                    val writeStream = ParcelFileDescriptor.AutoCloseOutputStream(pipe[1])
+                    liveAnchor.attachPipeSinkWithPreRoll(writeStream)
+                }
+            }
+
             lastPartialText = ""
-            recognizerReady = false
-            val started = runCatching { rec.startListening(buildIntent()) }.isSuccess
+            recognitionInFlight = true
+            val started = runCatching { rec.startListening(buildIntent(readEnd)) }.isSuccess
             if (started) {
                 markHardwareOpened()
-                if (liveAnchor.yieldWhileRecognizerActive) {
-                    mainHandler.postDelayed({
-                        if (!closed && recognizerReady) {
-                            liveAnchor.yieldIfRequiredAfterRecognizerReady()
-                        }
-                    }, 120L)
-                }
             } else {
-                scheduleContinuousRearm(delayMs = 80L, recreateRecognizer = true)
+                recognitionInFlight = false
+                closeActivePipe()
+            }
+        }
+
+        // Hook up VAD callbacks on the continuous LiveCallAudioAnchor:
+        // SpeechRecognizer only starts when the user actually speaks!
+        liveAnchor.onVoiceActivityDetected = {
+            if (!closed && !recognitionInFlight) {
+                mainHandler.post {
+                    if (!closed && !recognitionInFlight) {
+                        startRecognitionForSpeech()
+                    }
+                }
+            }
+        }
+
+        liveAnchor.onVoiceSilenceReached = {
+            if (!closed) {
+                // Close the pipe so SpeechRecognizer sees EOF and immediately finalizes the transcript
+                liveAnchor.detachPipeSink()
+                mainHandler.post {
+                    if (!closed && recognitionInFlight) {
+                        runCatching { recognizer?.stopListening() }
+                    }
+                }
             }
         }
 
         makeListener = {
             object : RecognitionListener {
                 override fun onReadyForSpeech(params: Bundle?) {
-                    recognizerReady = true
-                    consecutiveAudioErrors = 0
                     markHardwareOpened()
                     stateMachine?.onListeningReady()
-                    liveAnchor.yieldIfRequiredAfterRecognizerReady()
                 }
 
                 override fun onBeginningOfSpeech() = Unit
 
                 override fun onRmsChanged(rmsdB: Float) {
-                    val normalized = ((rmsdB + 2f) / 12f).coerceIn(0.04f, 1f)
-                    emit(SttEvent.Rms(normalized))
+                    if (!liveAnchor.isLive) {
+                        val normalized = ((rmsdB + 2f) / 12f).coerceIn(0.04f, 1f)
+                        emit(SttEvent.Rms(normalized))
+                    }
                 }
 
                 override fun onBufferReceived(buffer: ByteArray?) = Unit
 
                 override fun onEndOfSpeech() {
-                    // Re-assert the in-process AudioRecord anchor BEFORE SpeechRecognizer
-                    // finishes closing its internal audio input so OP_RECORD_AUDIO never drops.
-                    liveAnchor.resumeHoldBeforeRecognizerStop()
-                    recognizerReady = false
+                    closeActivePipe()
                     emit(SttEvent.End)
                 }
 
                 override fun onError(error: Int) {
                     if (closed) return
-                    liveAnchor.resumeHoldBeforeRecognizerStop()
-                    recognizerReady = false
+                    recognitionInFlight = false
+                    closeActivePipe()
+                    liveAnchor.ensureLive()
 
                     // 1. Rescue words already spoken before a pause or silence cutoff.
                     val rescued = lastPartialText.trim()
@@ -594,8 +770,8 @@ class AndroidSttEngine(
                         return
                     }
 
-                    // 2. Automatic fallback from on-device recognizer to standard recognizer
-                    // if the offline language pack is missing on this phone.
+                    // 2. If a device's SpeechRecognizer rejects EXTRA_AUDIO_SOURCE with ERROR_CLIENT
+                    // or ERROR_AUDIO, or offline pack is missing, adapt and retry if speech is still active.
                     val languageProblem =
                         error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ||
                             error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE ||
@@ -609,49 +785,41 @@ class AndroidSttEngine(
                         } else {
                             omitExplicitLanguage = true
                         }
-                        scheduleContinuousRearm(delayMs = 20L, recreateRecognizer = true)
+                        createRecognizer()
+                        if (liveAnchor.isSpeechActive) {
+                            mainHandler.postDelayed({ startRecognitionForSpeech() }, 25L)
+                        }
                         return
                     }
 
-                    // 3. If the device's audio HAL reported ERROR_AUDIO while both
-                    // LiveCallAudioAnchor and SpeechRecognizer were open, switch the anchor
-                    // to relay-handover mode and immediately re-arm.
-                    if (error == SpeechRecognizer.ERROR_AUDIO) {
-                        consecutiveAudioErrors++
-                        if (!liveAnchor.yieldWhileRecognizerActive) {
-                            liveAnchor.yieldWhileRecognizerActive = true
-                        }
-                        if (consecutiveAudioErrors <= 6) {
-                            scheduleContinuousRearm(delayMs = 40L, recreateRecognizer = true)
-                            return
-                        }
+                    if ((error == SpeechRecognizer.ERROR_AUDIO || error == SpeechRecognizer.ERROR_CLIENT) &&
+                        pipeModeSupported
+                    ) {
+                        // Recreate recognizer cleanly and remain in VAD standby (AudioRecord stays live!)
+                        createRecognizer()
+                        return
                     }
 
-                    // 4. Keep the microphone continuously LIVE across silence windows and
-                    // transient recognizer rollovers (just like staying live on a call).
+                    // 3. Recoverable silence / no-match / busy errors:
+                    // Do NOT loop startListening() during silence! Simply return to VAD standby
+                    // while LiveCallAudioAnchor keeps the microphone continuously live.
                     if (isRecoverableSttError(error) ||
                         error == SpeechRecognizer.ERROR_NETWORK ||
                         error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT ||
                         error == SpeechRecognizer.ERROR_TOO_MANY_REQUESTS
                     ) {
-                        val needsRecreate = error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY ||
-                            error == SpeechRecognizer.ERROR_SERVER ||
-                            error == SpeechRecognizer.ERROR_AUDIO
-                        val rearmDelay = when (error) {
-                            SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
-                            SpeechRecognizer.ERROR_NO_MATCH,
-                            -> 15L
-                            SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> 90L
-                            else -> 35L
+                        if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY ||
+                            error == SpeechRecognizer.ERROR_SERVER
+                        ) {
+                            createRecognizer()
                         }
-                        scheduleContinuousRearm(
-                            delayMs = rearmDelay,
-                            recreateRecognizer = needsRecreate,
-                        )
+                        if (liveAnchor.isSpeechActive || !anchorOk) {
+                            mainHandler.postDelayed({ startRecognitionForSpeech() }, 60L)
+                        }
                         return
                     }
 
-                    // 5. Unrecoverable error (e.g., permission revoked)
+                    // 4. Unrecoverable error (e.g., permission revoked)
                     val msg = sttErrorMessage(error)
                     val stopReason = when (error) {
                         SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Microphone permission denied"
@@ -665,8 +833,9 @@ class AndroidSttEngine(
 
                 override fun onResults(results: Bundle?) {
                     if (closed) return
-                    liveAnchor.resumeHoldBeforeRecognizerStop()
-                    recognizerReady = false
+                    recognitionInFlight = false
+                    closeActivePipe()
+                    liveAnchor.ensureLive()
                     val text = pickBestCandidate(results).ifBlank { lastPartialText.trim() }
                     lastPartialText = ""
                     if (text.isNotBlank()) {
@@ -676,10 +845,8 @@ class AndroidSttEngine(
                         destroyRecognizer("Utterance completed", releaseHardwareCount = true)
                         emit(SttEvent.Final(text))
                         close()
-                    } else {
-                        // Empty result during silence: keep the mic live and immediately re-arm!
-                        scheduleContinuousRearm(delayMs = 15L, recreateRecognizer = false)
                     }
+                    // If empty result, stay quietly in VAD standby with LiveCallAudioAnchor continuously live.
                 }
 
                 override fun onPartialResults(partialResults: Bundle?) {
@@ -696,11 +863,19 @@ class AndroidSttEngine(
         }
 
         createRecognizer()
-        startRecognitionPass()
+        // If the user is already speaking right now (or if AudioRecord anchor couldn't open),
+        // start recognition immediately; otherwise remain in zero-flicker VAD standby while
+        // LiveCallAudioAnchor holds the microphone continuously live!
+        if (!anchorOk || liveAnchor.isSpeechActive) {
+            startRecognitionForSpeech()
+        }
 
         awaitClose {
             closed = true
             liveAnchor.onRmsLevel = null
+            liveAnchor.onVoiceActivityDetected = null
+            liveAnchor.onVoiceSilenceReached = null
+            closeActivePipe()
             mainHandler.removeCallbacksAndMessages(null)
             if (Looper.myLooper() == Looper.getMainLooper()) {
                 destroyRecognizer(releaseHardwareCount = true)
@@ -743,3 +918,4 @@ internal fun sttErrorMessage(code: Int): String = when (code) {
     SpeechRecognizer.ERROR_TOO_MANY_REQUESTS -> "Speech recognition is rate limiting. One moment."
     else -> "Speech recognition failed."
 }
+

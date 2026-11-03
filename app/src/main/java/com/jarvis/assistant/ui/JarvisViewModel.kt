@@ -398,6 +398,8 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
 
     fun approveConfirmation() = core.approveConfirmation()
 
+    fun approveAndAlwaysAllowConfirmation() = core.approveAndAlwaysAllowConfirmation()
+
     fun rejectConfirmation() = core.rejectConfirmation()
 
     fun onPermissionResult(granted: Boolean) {
@@ -640,6 +642,11 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
         blocklistText: String,
         callAssistantEnabled: Boolean = false,
         callAssistantMaxTurns: Int = 6,
+        alwaysAllowActions: Boolean = _ui.value.settings.safety.alwaysAllowActions,
+        confirmCalls: Boolean = _ui.value.settings.safety.confirmCalls,
+        confirmMessages: Boolean = _ui.value.settings.safety.confirmMessages,
+        confirmScreenControl: Boolean = _ui.value.settings.safety.confirmScreenControl,
+        confirmDeletions: Boolean = _ui.value.settings.safety.confirmDeletions,
     ) {
         val keywords = blocklistText
             .split(',', '\n')
@@ -657,12 +664,50 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
                             blocklistKeywords = keywords,
                             callAssistantEnabled = callAssistantEnabled,
                             callAssistantMaxTurns = turns,
+                            alwaysAllowActions = alwaysAllowActions,
+                            confirmCalls = confirmCalls,
+                            confirmMessages = confirmMessages,
+                            confirmScreenControl = confirmScreenControl,
+                            confirmDeletions = confirmDeletions,
                         ),
                     )
                 }
-                core.setNotice("Safety settings saved.")
+                core.setNotice("Safety & confirmation settings saved.")
             }.onFailure {
                 core.setError(it.message?.take(400) ?: "Could not save the safety settings.")
+            }
+        }
+    }
+
+    fun saveActionConfirmationSettings(
+        alwaysAllowActions: Boolean,
+        confirmCalls: Boolean = false,
+        confirmMessages: Boolean = false,
+        confirmScreenControl: Boolean = false,
+        confirmDeletions: Boolean = false,
+    ) {
+        viewModelScope.launch {
+            runCatching {
+                core.settingsRepository.update { current ->
+                    current.copy(
+                        safety = current.safety.copy(
+                            alwaysAllowActions = alwaysAllowActions,
+                            confirmCalls = confirmCalls,
+                            confirmMessages = confirmMessages,
+                            confirmScreenControl = confirmScreenControl,
+                            confirmDeletions = confirmDeletions,
+                        ),
+                    )
+                }
+                core.setNotice(
+                    if (alwaysAllowActions) {
+                        "Always Allow enabled — Jarvis will execute actions immediately without asking for confirmation."
+                    } else {
+                        "Action confirmation preferences updated."
+                    },
+                )
+            }.onFailure {
+                core.setError(it.message?.take(400) ?: "Could not save confirmation settings.")
             }
         }
     }

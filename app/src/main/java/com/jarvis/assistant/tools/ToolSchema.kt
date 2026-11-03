@@ -22,7 +22,6 @@ internal fun objectSchema(
             buildJsonArray { required.forEach { add(kotlinx.serialization.json.JsonPrimitive(it)) } },
         )
     }
-    put("additionalProperties", false)
 }
 
 internal fun objectSchema(
