@@ -322,6 +322,8 @@ fun defaultTools(): List<Tool> = listOf(
     TakePhotoTool(),
     // Screen control (Tier 3, requires the accessibility service)
     AutomateScreenTool(),
+    CaptureScreenSnapshotTool(),
+    ExecuteMobileUiActionTool(),
     ReadScreenTool(),
     TapScreenTool(),
     TapVideoItemTool(),
@@ -330,3 +332,4 @@ fun defaultTools(): List<Tool> = listOf(
     ScrollScreenTool(),
     SystemNavigationTool(),
 )
+

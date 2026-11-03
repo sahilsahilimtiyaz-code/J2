@@ -119,6 +119,24 @@ class SeeScreenTool : Tool {
         screenUnavailable(context)?.let { return it }
         val screen = context.screen ?: return ToolResult(false, "Screen access is not initialized.")
 
+        // Check VisionPrivacyGate against the live accessibility snapshot before capturing pixels
+        val liveService = JarvisAccessibilityService.serviceInstance()
+        if (liveService != null) {
+            val observed = com.jarvis.assistant.accessibility.JarvisScreenObserver.observe(
+                service = liveService,
+                appLabelResolver = { pkg -> JarvisAccessibilityService.controller()?.appLabel(pkg) ?: pkg },
+                forceRefresh = false,
+            )
+            val privacyDecision = com.jarvis.assistant.accessibility.VisionPrivacyGate.evaluateExternalVisionRequest(
+                userConsentedToVision = true,
+                modelSupportsVision = true,
+                screen = observed,
+            )
+            if (!privacyDecision.allowed) {
+                return ToolResult(false, privacyDecision.reason)
+            }
+        }
+
         val capture = screen.captureVision()
             ?: if (android.os.Build.VERSION.SDK_INT >= 30) {
                 return ToolResult(
@@ -154,3 +172,4 @@ class SeeScreenTool : Tool {
         return ToolResult(true, text, image = capture.image)
     }
 }
+

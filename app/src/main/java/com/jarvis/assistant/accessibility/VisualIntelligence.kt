@@ -230,7 +230,19 @@ object VisualAccessibilityReconciler {
             )
         }
 
-        // 6. Complete agreement: both accessibility and visual geometry are aligned
+        // 6. Check for higher-window or sibling overlay occlusion
+        val occlusion = HierarchyOcclusionDetector.detectOcclusion(matchedElement, screen)
+        if (occlusion.isOccluded) {
+            return ReconciliationResult(
+                status = ReconciliationStatus.MODAL_OCCLUDED,
+                resolvedElement = matchedElement,
+                safeToInteract = false,
+                explanation = occlusion.reason,
+                suggestedAction = "DISMISS_OVERLAY",
+            )
+        }
+
+        // 7. Complete agreement: both accessibility and visual geometry are aligned
         return ReconciliationResult(
             status = ReconciliationStatus.CONSISTENT,
             resolvedElement = matchedElement,
@@ -239,4 +251,276 @@ object VisualAccessibilityReconciler {
             suggestedAction = "PROCEED",
         )
     }
+
+    /**
+     * Computes a lightweight pixel difference between pre-action and post-action
+     * bitmaps (sampled on a coarse grid for Galaxy A54 efficiency) so custom Canvas,
+     * WebView, or video surfaces that do not emit accessibility events can still be
+     * verified visually.
+     */
+    fun computeBitmapDiff(
+        before: Bitmap?,
+        after: Bitmap?,
+        targetBounds: Rect? = null,
+    ): VisualScreenDiff {
+        if (before == null || after == null ||
+            before.width <= 0 || before.height <= 0 ||
+            after.width <= 0 || after.height <= 0
+        ) {
+            return VisualScreenDiff(
+                available = false,
+                overallChangeRatio = 0f,
+                targetRegionChangeRatio = 0f,
+                visualChanged = false,
+            )
+        }
+
+        val w = min(before.width, after.width)
+        val h = min(before.height, after.height)
+        val stepX = max(1, w / 36)
+        val stepY = max(1, h / 36)
+
+        var totalSamples = 0
+        var changedSamples = 0
+        var targetSamples = 0
+        var targetChanged = 0
+
+        for (y in 0 until h step stepY) {
+            for (x in 0 until w step stepX) {
+                val p1 = before.getPixel(x, y)
+                val p2 = after.getPixel(x, y)
+                val dr = abs(Color.red(p1) - Color.red(p2))
+                val dg = abs(Color.green(p1) - Color.green(p2))
+                val db = abs(Color.blue(p1) - Color.blue(p2))
+                val diff = (dr + dg + db) > 36
+
+                totalSamples++
+                if (diff) changedSamples++
+
+                if (targetBounds != null &&
+                    x in targetBounds.left..targetBounds.right &&
+                    y in targetBounds.top..targetBounds.bottom
+                ) {
+                    targetSamples++
+                    if (diff) targetChanged++
+                }
+            }
+        }
+
+        val overallRatio = if (totalSamples > 0) changedSamples.toFloat() / totalSamples.toFloat() else 0f
+        val regionRatio = if (targetSamples > 0) targetChanged.toFloat() / targetSamples.toFloat() else overallRatio
+        val changed = overallRatio >= 0.02f || regionRatio >= 0.08f
+
+        return VisualScreenDiff(
+            available = true,
+            overallChangeRatio = overallRatio,
+            targetRegionChangeRatio = regionRatio,
+            visualChanged = changed,
+        )
+    }
+
+    /**
+     * Matches a visual region (from OCR or a vision model bounding box) to the best
+     * corresponding [ObservedUiElement] in the accessibility hierarchy.
+     */
+    fun matchVisualRegionToAccessibility(
+        region: VisualTextRegion,
+        screen: ObservedScreenState,
+    ): ObservedUiElement? {
+        val normText = region.text.trim().lowercase(Locale.ROOT)
+        var bestElement: ObservedUiElement? = null
+        var bestScore = 0f
+
+        for (el in screen.elements) {
+            if (!el.visibleToUser) continue
+            val iou = computeIoU(
+                region.bounds.left, region.bounds.top, region.bounds.right, region.bounds.bottom,
+                el.left, el.top, el.right, el.bottom,
+            )
+            val containsCenter = region.bounds.centerX() in el.left..el.right &&
+                region.bounds.centerY() in el.top..el.bottom
+            val textMatch = normText.isNotBlank() &&
+                (el.primaryLabel.lowercase(Locale.ROOT).contains(normText) ||
+                    normText.contains(el.primaryLabel.lowercase(Locale.ROOT)))
+
+            var score = iou * 100f
+            if (containsCenter) score += 35f
+            if (textMatch) score += 50f
+
+            if (score > bestScore && score >= 25f) {
+                bestScore = score
+                bestElement = el
+            }
+        }
+        return bestElement
+    }
+
+    private fun computeIoU(
+        l1: Int, t1: Int, r1: Int, b1: Int,
+        l2: Int, t2: Int, r2: Int, b2: Int,
+    ): Float {
+        val interLeft = max(l1, l2)
+        val interTop = max(t1, t2)
+        val interRight = min(r1, r2)
+        val interBottom = min(b1, b2)
+        if (interRight <= interLeft || interBottom <= interTop) return 0f
+        val interArea = (interRight - interLeft).toFloat() * (interBottom - interTop).toFloat()
+        val area1 = max(1, (r1 - l1) * (b1 - t1)).toFloat()
+        val area2 = max(1, (r2 - l2) * (b2 - t2)).toFloat()
+        return interArea / (area1 + area2 - interArea).coerceAtLeast(1f)
+    }
 }
+
+/**
+ * Pixel-level difference summary between pre-action and post-action frames.
+ */
+data class VisualScreenDiff(
+    val available: Boolean,
+    val overallChangeRatio: Float,
+    val targetRegionChangeRatio: Float,
+    val visualChanged: Boolean,
+)
+
+/**
+ * Maps coordinates between downscaled screenshot space, normalized [0..100] percent
+ * or [0..1000] grid space, and physical Galaxy A54 display pixel space.
+ */
+object ScreenCoordinateMapper {
+
+    fun mapScreenshotPointToDisplay(
+        screenshotX: Int,
+        screenshotY: Int,
+        screenshotWidth: Int,
+        screenshotHeight: Int,
+        displayWidth: Int,
+        displayHeight: Int,
+    ): Pair<Int, Int>? {
+        if (screenshotWidth <= 0 || screenshotHeight <= 0 || displayWidth <= 0 || displayHeight <= 0) {
+            return null
+        }
+        if (screenshotX < 0 || screenshotY < 0 || screenshotX > screenshotWidth || screenshotY > screenshotHeight) {
+            return null
+        }
+        val pxX = ((screenshotX.toDouble() / screenshotWidth.toDouble()) * displayWidth).toInt()
+            .coerceIn(1, displayWidth - 1)
+        val pxY = ((screenshotY.toDouble() / screenshotHeight.toDouble()) * displayHeight).toInt()
+            .coerceIn(1, displayHeight - 1)
+        return pxX to pxY
+    }
+
+    fun mapPercentToDisplay(
+        percentX: Double,
+        percentY: Double,
+        displayWidth: Int,
+        displayHeight: Int,
+    ): Pair<Int, Int>? {
+        if (displayWidth <= 0 || displayHeight <= 0) return null
+        if (percentX < 0.0 || percentX > 100.0 || percentY < 0.0 || percentY > 100.0) return null
+        val pxX = ((percentX / 100.0) * displayWidth).toInt().coerceIn(1, displayWidth - 1)
+        val pxY = ((percentY / 100.0) * displayHeight).toInt().coerceIn(1, displayHeight - 1)
+        return pxX to pxY
+    }
+}
+
+data class OcclusionReport(
+    val isOccluded: Boolean,
+    val occludingSource: String = "",
+    val reason: String = "",
+)
+
+/**
+ * Detects when a target UI element is covered by a higher-layer window,
+ * keyboard, modal dialog, or overlapping overlay node.
+ */
+object HierarchyOcclusionDetector {
+
+    fun detectOcclusion(
+        target: ObservedUiElement,
+        screen: ObservedScreenState,
+    ): OcclusionReport {
+        val cx = target.centerX
+        val cy = target.centerY
+
+        // 1. Check higher-layer windows (e.g., system dialog or overlay window sitting above app window)
+        for (win in screen.windows) {
+            if (win.windowId != -1 && target.windowId != -1 && win.windowId != target.windowId) {
+                if (win.layer > target.windowLayer &&
+                    cx in win.boundsLeft..win.boundsRight &&
+                    cy in win.boundsTop..win.boundsBottom
+                ) {
+                    return OcclusionReport(
+                        isOccluded = true,
+                        occludingSource = "window:${win.windowType}:${win.title.ifBlank { win.packageName }}",
+                        reason = "Target '${target.primaryLabel}' is occluded by a higher-layer ${win.windowType} window ('${win.title.ifBlank { win.packageName }}').",
+                    )
+                }
+            }
+        }
+
+        // 2. Check soft keyboard occlusion
+        if (screen.keyboardVisible && !target.isInInputMethodWindow && screen.keyboardTopY in 1..cy) {
+            return OcclusionReport(
+                isOccluded = true,
+                occludingSource = "input_method_keyboard",
+                reason = "Target '${target.primaryLabel}' at y=$cy is covered by the visible keyboard (topY=${screen.keyboardTopY}).",
+            )
+        }
+
+        return OcclusionReport(isOccluded = false)
+    }
+}
+
+data class VisionConsentDecision(
+    val allowed: Boolean,
+    val reason: String,
+)
+
+/**
+ * Enforces privacy and user-consent rules before any screenshot is captured for
+ * or transmitted to an external vision-language model.
+ */
+object VisionPrivacyGate {
+
+    fun evaluateExternalVisionRequest(
+        userConsentedToVision: Boolean,
+        modelSupportsVision: Boolean,
+        screen: ObservedScreenState,
+        visual: VisualEvidence? = null,
+    ): VisionConsentDecision {
+        if (!userConsentedToVision) {
+            return VisionConsentDecision(
+                allowed = false,
+                reason = "User has not consented to sending screen captures to an external model.",
+            )
+        }
+        if (!modelSupportsVision) {
+            return VisionConsentDecision(
+                allowed = false,
+                reason = "The active AI model or tool configuration does not allow image inputs.",
+            )
+        }
+        if (screen.isSecureOrProtected) {
+            return VisionConsentDecision(
+                allowed = false,
+                reason = "Foreground package '${screen.packageName}' is a protected security surface; screenshot transmission is blocked.",
+            )
+        }
+        if (visual?.isSecureBlackout == true) {
+            return VisionConsentDecision(
+                allowed = false,
+                reason = "Screen is protected by Android FLAG_SECURE; screenshot transmission is blocked.",
+            )
+        }
+        if (screen.hasPasswordField()) {
+            return VisionConsentDecision(
+                allowed = false,
+                reason = "A password or PIN entry field is currently visible on screen; external screenshot transmission is blocked to protect your credentials.",
+            )
+        }
+        return VisionConsentDecision(
+            allowed = true,
+            reason = "Vision capture permitted.",
+        )
+    }
+}
+

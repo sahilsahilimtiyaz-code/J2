@@ -358,3 +358,30 @@
   - Seeded a separate, dedicated `"Morning Music"` routine for users who explicitly ask to play morning lo-fi beats.
 - [x] **Verification:** `gradle testDebugUnitTest` green (82 unit tests passing, including 3 new `SkillPersonaBriefingEngineTest` tests), `assembleDebug` green (46 MB APK), and `compile_applet` passed.
 
+## 2026-11-03 — OpenClaw-Inspired Mobile UI Intelligence Upgrade (Phases 1–8)
+
+- [x] **Phase 1 — Architectural Audit & Comparison:**
+  - Inspected `JarvisAccessibilityService`, `HumanTouchEngine`, `JarvisScreenObserver`, `JarvisUiElementMatcher`, `JarvisActionVerifier`, `JarvisRecoveryManager`, `VisualIntelligence`, `AutonomousPhoneOperator`, `SmartAppAdapters`, `ScreenTools`, `ScreenVisionTools`, `SecurityShield`, and existing tests against OpenClaw's mobile UI automation architecture (`openclaw/openclaw` PRs `#112232`, `#112241`, `#112255`) and `8crsk/openclaw-android`.
+  - Preserved all existing Jarvis capabilities without duplication.
+- [x] **Phase 2 — Snapshot-Based Screen Observation (`HumanTouchEngine.kt`):**
+  - Added `ObservedWindowInfo` (`windowId`, `windowType`, `title`, `packageName`, bounds, `isActive`, `isFocused`, `layer`).
+  - Upgraded `ObservedUiElement` with deterministic `elementRef` (`ref_e0`, `ref_e1`, ...), `parentRef`, `childRefs`, `windowId`, `windowLayer`, `password` flag (redacting visible password strings as `[REDACTED_PASSWORD_FIELD]`), and `supportedActions` (`CLICK`, `LONG_CLICK`, `SET_TEXT`, `SCROLL_FORWARD`, `SCROLL_BACKWARD`, `FOCUS`, `SELECT`, `IME_ENTER`).
+  - Upgraded `ObservedScreenState` with unique `snapshotId` (`snap_<version>_<timestamp>`), `screenVersion`, `windows`, `isSecureOrProtected`, `findByRef`, `hasPasswordField`, `structuralSignature`, and compact agent formatting (`formatSnapshotForAgent`).
+  - Upgraded `JarvisUiElementMatcher` to resolve `ref_eN` references directly and enforce disabled penalties.
+- [x] **Phase 3 — One-Action Execution Contract (`OpenClawMobileUiEngine.kt`, `ScreenTools.kt`, `ToolRegistry.kt`):**
+  - Implemented `MobileUiActionRequest` sealed hierarchy covering all 13 typed operations (`ActivateElement`, `EnterText`, `Scroll`, `Tap`, `Swipe`, `LongPress`, `DoubleTap`, `Drag`, `PinchAndZoom`, `Back`, `Home`, `Recents`, `Wait`).
+  - Implemented pre-execution validation in `MobileUiActionExecutor`: human takeover check, secure screen check (`SECURE_CONTENT`), foreground package check, snapshot freshness check (`TARGET_STALE`), semantic target resolution without silent arbitrary coordinate fallback (`TARGET_NOT_FOUND`), disabled check, bounds check, and higher-layer window/keyboard occlusion check.
+  - Registered `capture_screen_snapshot` (`CaptureScreenSnapshotTool`) and `execute_mobile_ui_action` (`ExecuteMobileUiActionTool`) in `ToolRegistry.kt`.
+- [x] **Phase 4 — Automatic Re-Observation & 8-State Verification (`OpenClawMobileUiEngine.kt`):**
+  - Implemented `UiActionOutcomeState` (`DISPATCHED`, `ACCEPTED_BUT_UNVERIFIED`, `VERIFIED_SUCCESS`, `FAILED`, `UNKNOWN`, `TARGET_STALE`, `TARGET_NOT_FOUND`, `SECURE_CONTENT`).
+  - Implemented `ScreenSnapshotComparator.compare(before, after, visualDiffRatio)` producing `ScreenSnapshotDiff`.
+  - Enforced false-success prevention: a gesture or accessibility action callback returning `true` when the post-action snapshot is unchanged returns `ACCEPTED_BUT_UNVERIFIED`, never `VERIFIED_SUCCESS`.
+- [x] **Phase 5 — Visual Intelligence Fallback (`VisualIntelligence.kt`, `ScreenVisionTools.kt`):**
+  - Added `ScreenCoordinateMapper` (`mapScreenshotPointToDisplay` and `mapPercentToDisplay`), `HierarchyOcclusionDetector` (higher-layer window and IME occlusion detection), `VisualAccessibilityReconciler.computeBitmapDiff`, `matchVisualRegionToAccessibility`, and `VisionPrivacyGate` (blocking screenshot transmission to external VLMs unless user consent is granted, model supports vision, and zero password/secure fields are present).
+- [x] **Phase 6 — Fail-Closed Safety (`OpenClawMobileUiEngine.kt`, `SecurityShield.kt`):**
+  - Implemented `FailClosedActionPolicy.classifyConsequentialAction` across 7 categories (`SEND_MESSAGE`, `PUBLISH_OR_SHARE`, `PAYMENT_OR_PURCHASE`, `DELETE_DATA`, `UNINSTALL_APP`, `CHANGE_ACCOUNT_SECURITY`, `GRANT_PERMISSION`), requiring explicit human confirmation and blocking duplicate consequential actions once dispatched.
+- [x] **Phase 7 — Galaxy A54 Performance Guards (`HumanTouchEngine.kt`):**
+  - Enforced `MAX_OBSERVED_NODES = 450`, `MAX_DEPTH = 18`, `MAX_TEXT_LENGTH = 140`, `OBSERVE_TIME_BUDGET_MS = 260L`, 90ms snapshot caching (`SNAPSHOT_CACHE_TTL_MS = 90L`), and zero retained `AccessibilityNodeInfo` objects.
+- [x] **Phase 8 — Automated Verification (`OpenClawMobileUiEngineTest.kt`):**
+  - Added 14 new JVM unit tests covering all required scenarios (96 total unit tests passing).
+

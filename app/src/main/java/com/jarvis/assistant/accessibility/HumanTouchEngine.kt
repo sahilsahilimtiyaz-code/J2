@@ -82,7 +82,25 @@ enum class UiElementRole {
 }
 
 /**
+ * Metadata for an active window observed via [AccessibilityWindowInfo].
+ */
+data class ObservedWindowInfo(
+    val windowId: Int,
+    val windowType: String,
+    val title: String,
+    val packageName: String,
+    val boundsLeft: Int,
+    val boundsTop: Int,
+    val boundsRight: Int,
+    val boundsBottom: Int,
+    val isActive: Boolean,
+    val isFocused: Boolean,
+    val layer: Int,
+)
+
+/**
  * Structured representation of a single node on the live Android screen.
+ * Pure value object — never retains an [AccessibilityNodeInfo] reference.
  */
 data class ObservedUiElement(
     val index: Int,
@@ -112,6 +130,19 @@ data class ObservedUiElement(
     val boundsTop: Int = bounds.top,
     val boundsRight: Int = bounds.right,
     val boundsBottom: Int = bounds.bottom,
+    val elementRef: String = "ref_e$index",
+    val parentRef: String? = null,
+    val childRefs: List<String> = emptyList(),
+    val windowId: Int = -1,
+    val windowLayer: Int = 0,
+    val password: Boolean = false,
+    val supportedActions: Set<String> = buildDefaultSupportedActions(
+        clickable = clickable,
+        longClickable = longClickable,
+        editable = editable,
+        scrollable = scrollable,
+        focusable = focusable,
+    ),
 ) {
     val left: Int
         get() = if (boundsLeft != 0 || boundsRight != 0) boundsLeft else bounds.left
@@ -127,6 +158,7 @@ data class ObservedUiElement(
 
     val primaryLabel: String
         get() = when {
+            password -> "[REDACTED_PASSWORD_FIELD]"
             text.isNotBlank() -> text
             contentDescription.isNotBlank() -> contentDescription
             hintText.isNotBlank() -> hintText
@@ -148,6 +180,9 @@ data class ObservedUiElement(
     val areaPx: Int
         get() = max(0, right - left) * max(0, bottom - top)
 
+    fun supportsAction(action: String): Boolean =
+        supportedActions.any { it.equals(action, ignoreCase = true) }
+
     fun hasValidTouchBounds(screenWidth: Int, screenHeight: Int): Boolean {
         val w = right - left
         val h = bottom - top
@@ -164,7 +199,7 @@ data class ObservedUiElement(
         val label = "$text $contentDescription $hintText".lowercase(Locale.ROOT)
         val h = bottom - top
         return when {
-            editable || cls.contains("edittext") || cls.contains("autocompletetextview") ->
+            editable || password || cls.contains("edittext") || cls.contains("autocompletetextview") ->
                 UiElementRole.TEXT_FIELD
             checkable || cls.contains("switch") || cls.contains("checkbox") ||
                 cls.contains("radiobutton") || cls.contains("togglebutton") ||
@@ -179,10 +214,33 @@ data class ObservedUiElement(
             else -> UiElementRole.ANY
         }
     }
+
+    companion object {
+        fun buildDefaultSupportedActions(
+            clickable: Boolean,
+            longClickable: Boolean,
+            editable: Boolean,
+            scrollable: Boolean,
+            focusable: Boolean,
+        ): Set<String> = buildSet {
+            if (clickable) add("ACTION_CLICK")
+            if (longClickable) add("ACTION_LONG_CLICK")
+            if (editable) {
+                add("ACTION_SET_TEXT")
+                add("ACTION_IME_ENTER")
+            }
+            if (scrollable) {
+                add("ACTION_SCROLL_FORWARD")
+                add("ACTION_SCROLL_BACKWARD")
+            }
+            if (focusable) add("ACTION_FOCUS")
+        }
+    }
 }
 
 /**
- * Complete structured observation of the active Android display.
+ * Complete structured observation of the active Android display with a unique
+ * [snapshotId] and stable element references.
  */
 data class ObservedScreenState(
     val packageName: String,
@@ -197,14 +255,83 @@ data class ObservedScreenState(
     val dismissCandidate: ObservedUiElement?,
     val elements: List<ObservedUiElement>,
     val timestampMs: Long = System.currentTimeMillis(),
+    val snapshotId: String = "snap_${timestampMs}_${packageName.hashCode().toUInt()}_${elements.size}",
+    val screenVersion: Long = 1L,
+    val windows: List<ObservedWindowInfo> = emptyList(),
+    val isSecureOrProtected: Boolean = SecurityShield.isProtectedSystemPackage(packageName),
 ) {
     fun summaryHeader(): String = buildString {
-        append("App: ").append(appLabel.ifBlank { packageName })
+        append("Snapshot: ").append(snapshotId)
+        append(" | App: ").append(appLabel.ifBlank { packageName })
         append(" (").append(packageName).append(")")
         if (windowTitle.isNotBlank()) append(" | Window: ").append(windowTitle)
         append(" | Screen: ").append(screenWidth).append("x").append(screenHeight)
-        if (keyboardVisible) append(" | Keyboard: VISIBLE")
+        append(" (rot=").append(rotation).append(")")
+        if (keyboardVisible) append(" | Keyboard: VISIBLE (topY=").append(keyboardTopY).append(")")
         if (!activeDialogTitle.isNullOrBlank()) append(" | Dialog: ").append(activeDialogTitle)
+        if (isSecureOrProtected) append(" | PROTECTED_SURFACE")
+    }
+
+    /**
+     * Resolves an element by its exact [ObservedUiElement.elementRef] (e.g. "ref_e3")
+     * or numeric index ("#3" or "3").
+     */
+    fun findByRef(refOrIndex: String): ObservedUiElement? {
+        val clean = refOrIndex.trim()
+        if (clean.isBlank()) return null
+        elements.firstOrNull { it.elementRef.equals(clean, ignoreCase = true) }?.let { return it }
+        val idx = clean.removePrefix("#").removePrefix("ref_e").toIntOrNull()
+        return if (idx != null) elements.firstOrNull { it.index == idx } else null
+    }
+
+    fun hasPasswordField(): Boolean = elements.any { it.password }
+
+    fun structuralSignature(): Int {
+        var h = packageName.hashCode()
+        h = 31 * h + windowTitle.hashCode()
+        h = 31 * h + (if (keyboardVisible) 1 else 0)
+        h = 31 * h + (activeDialogTitle?.hashCode() ?: 0)
+        for (el in elements.take(120)) {
+            h = 31 * h + el.elementRef.hashCode()
+            h = 31 * h + el.primaryLabel.hashCode()
+            h = 31 * h + (if (el.checked) 1 else 0)
+            h = 31 * h + (if (el.enabled) 2 else 0)
+        }
+        return h
+    }
+
+    /**
+     * Produces a compact, token-efficient OpenClaw-style snapshot string for LLM consumption.
+     */
+    fun formatSnapshotForAgent(maxElements: Int = 60): String = buildString {
+        appendLine(summaryHeader())
+        if (windows.isNotEmpty()) {
+            appendLine(
+                "Windows (${windows.size}): " + windows.joinToString(", ") {
+                    "${it.windowType}[id=${it.windowId},layer=${it.layer},active=${it.isActive}]"
+                },
+            )
+        }
+        appendLine("Elements (${elements.size} total, showing up to $maxElements):")
+        for (el in elements.take(maxElements)) {
+            val role = el.inferRole().name.lowercase(Locale.ROOT)
+            val stateFlags = buildList {
+                if (el.clickable) add("clickable")
+                if (el.editable) add("editable")
+                if (el.scrollable) add("scrollable")
+                if (el.checkable) add(if (el.checked) "checked" else "unchecked")
+                if (el.focused) add("focused")
+                if (!el.enabled) add("DISABLED")
+                if (el.password) add("PASSWORD")
+            }.joinToString(",")
+            val parentTag = el.parentRef?.let { " parent=$it" }.orEmpty()
+            appendLine(
+                "- [${el.elementRef}] role=$role label=\"${el.primaryLabel.take(80)}\" " +
+                    "id=${el.shortResourceId.ifBlank { "none" }} " +
+                    "bounds=[${el.left},${el.top},${el.right},${el.bottom}] " +
+                    "state=($stateFlags)$parentTag",
+            )
+        }
     }
 }
 
@@ -334,19 +461,24 @@ object JarvisUiElementMatcher {
             return ElementMatchResolution(null, emptyList(), false)
         }
 
-        // Direct #index lookup when user or planner specifies "#3" or "3"
-        val pureIndex = Regex("""^#?(\d{1,3})$""").find(raw)?.groupValues?.get(1)?.toIntOrNull()
-        if (pureIndex != null) {
-            val exactIndexNode = screen.elements.firstOrNull { it.index == pureIndex }
-            if (exactIndexNode != null) {
-                val candidate = ElementMatchCandidate(
-                    element = exactIndexNode,
-                    score = 160,
-                    confidence = 0.98f,
-                    matchedBy = listOf("exact_index:#$pureIndex"),
-                )
-                return ElementMatchResolution(candidate, emptyList(), false)
-            }
+        // Direct elementRef ("ref_e3") or #index ("#3", "3") lookup when user or planner specifies it
+        val refCandidate = if (raw.startsWith("ref_", ignoreCase = true) || Regex("""^#?\d{1,3}$""").matches(raw)) {
+            screen.findByRef(raw)
+        } else {
+            null
+        }
+        if (refCandidate != null) {
+            val candidate = ElementMatchCandidate(
+                element = refCandidate,
+                score = if (refCandidate.enabled) 160 else 45,
+                confidence = if (refCandidate.enabled) 0.98f else 0.35f,
+                matchedBy = buildList {
+                    add("exact_index:#${refCandidate.index}")
+                    add("exact_ref:${refCandidate.elementRef}")
+                    if (!refCandidate.enabled) add("disabled_penalty")
+                },
+            )
+            return ElementMatchResolution(candidate, emptyList(), false)
         }
 
         val needle = raw.lowercase(Locale.ROOT)
@@ -1142,18 +1274,39 @@ class InteractionContextMemory {
  */
 object JarvisScreenObserver {
 
-    private const val MAX_OBSERVED_NODES = 450
-    private const val OBSERVE_TIME_BUDGET_MS = 260L
+    const val MAX_OBSERVED_NODES = 450
+    const val MAX_DEPTH = 18
+    const val MAX_TEXT_LENGTH = 140
+    const val OBSERVE_TIME_BUDGET_MS = 260L
+    private const val SNAPSHOT_CACHE_TTL_MS = 90L
+
+    private val snapshotSequence = java.util.concurrent.atomic.AtomicLong(1L)
+
+    @Volatile
+    private var lastCachedSnapshot: ObservedScreenState? = null
 
     private val DISMISS_LABELS = setOf(
         "dismiss", "close", "cancel", "not now", "no thanks", "skip",
         "later", "got it", "ok", "okay", "deny", "don't allow",
     )
 
+    fun invalidateCache() {
+        lastCachedSnapshot = null
+    }
+
     fun observe(
         service: JarvisAccessibilityService,
         appLabelResolver: (String) -> String,
+        forceRefresh: Boolean = true,
     ): ObservedScreenState {
+        val now = System.currentTimeMillis()
+        if (!forceRefresh) {
+            val cached = lastCachedSnapshot
+            if (cached != null && (now - cached.timestampMs) <= SNAPSHOT_CACHE_TTL_MS) {
+                return cached
+            }
+        }
+
         val (screenW, screenH) = service.getScreenDimensions()
         val rotation = runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -1167,22 +1320,49 @@ object JarvisScreenObserver {
         var keyboardTopY = screenH
         var windowTitle = ""
         var foregroundPackage = ""
+        var activeWindowId = -1
+        var activeWindowLayer = 0
+        val observedWindows = mutableListOf<ObservedWindowInfo>()
 
         runCatching {
             val windows = service.windows
             for (window in windows) {
+                val rect = Rect()
+                runCatching { window.getBoundsInScreen(rect) }
+                val wType = when (window.type) {
+                    AccessibilityWindowInfo.TYPE_APPLICATION -> "APPLICATION"
+                    AccessibilityWindowInfo.TYPE_INPUT_METHOD -> "INPUT_METHOD"
+                    AccessibilityWindowInfo.TYPE_SYSTEM -> "SYSTEM"
+                    AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY -> "ACCESSIBILITY_OVERLAY"
+                    AccessibilityWindowInfo.TYPE_SPLIT_SCREEN_DIVIDER -> "SPLIT_SCREEN_DIVIDER"
+                    else -> "OTHER_${window.type}"
+                }
+                val wTitle = window.title?.toString()?.trim().orEmpty()
+                val wPkg = runCatching { window.root?.packageName?.toString().orEmpty() }.getOrDefault("")
+                observedWindows += ObservedWindowInfo(
+                    windowId = window.id,
+                    windowType = wType,
+                    title = wTitle.take(80),
+                    packageName = wPkg,
+                    boundsLeft = rect.left,
+                    boundsTop = rect.top,
+                    boundsRight = rect.right,
+                    boundsBottom = rect.bottom,
+                    isActive = window.isActive,
+                    isFocused = window.isFocused,
+                    layer = window.layer,
+                )
+
                 if (window.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD) {
                     keyboardVisible = true
-                    val rect = Rect()
-                    window.getBoundsInScreen(rect)
                     if (rect.top in 1 until keyboardTopY) {
                         keyboardTopY = rect.top
                     }
                 } else if (window.type == AccessibilityWindowInfo.TYPE_APPLICATION && window.isActive) {
-                    val t = window.title?.toString()?.trim().orEmpty()
-                    if (t.isNotBlank()) windowTitle = t
-                    val rootPkg = window.root?.packageName?.toString().orEmpty()
-                    if (rootPkg.isNotBlank()) foregroundPackage = rootPkg
+                    if (wTitle.isNotBlank()) windowTitle = wTitle
+                    if (wPkg.isNotBlank()) foregroundPackage = wPkg
+                    activeWindowId = window.id
+                    activeWindowLayer = window.layer
                 }
             }
         }
@@ -1192,17 +1372,58 @@ object JarvisScreenObserver {
             foregroundPackage = root?.packageName?.toString().orEmpty()
         }
         val appLabel = appLabelResolver(foregroundPackage)
+        val isProtectedPkg = SecurityShield.isProtectedSystemPackage(foregroundPackage)
 
-        val elements = mutableListOf<ObservedUiElement>()
+        val rawElements = mutableListOf<ObservedUiElement>()
+        val parentToChildren = mutableMapOf<String, MutableList<String>>()
         var nextIndex = 1
         var activeDialogTitle: String? = null
         val startNs = System.nanoTime()
 
+        fun extractSupportedActions(node: AccessibilityNodeInfo): Set<String> {
+            val actions = mutableSetOf<String>()
+            runCatching {
+                for (action in node.actionList) {
+                    when (action.id) {
+                        AccessibilityNodeInfo.ACTION_CLICK -> actions += "ACTION_CLICK"
+                        AccessibilityNodeInfo.ACTION_LONG_CLICK -> actions += "ACTION_LONG_CLICK"
+                        AccessibilityNodeInfo.ACTION_SET_TEXT -> actions += "ACTION_SET_TEXT"
+                        AccessibilityNodeInfo.ACTION_SCROLL_FORWARD -> actions += "ACTION_SCROLL_FORWARD"
+                        AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD -> actions += "ACTION_SCROLL_BACKWARD"
+                        AccessibilityNodeInfo.ACTION_FOCUS -> actions += "ACTION_FOCUS"
+                        AccessibilityNodeInfo.ACTION_CLEAR_FOCUS -> actions += "ACTION_CLEAR_FOCUS"
+                        AccessibilityNodeInfo.ACTION_SELECT -> actions += "ACTION_SELECT"
+                        AccessibilityNodeInfo.ACTION_COPY -> actions += "ACTION_COPY"
+                        AccessibilityNodeInfo.ACTION_PASTE -> actions += "ACTION_PASTE"
+                        else -> {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+                                action.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id
+                            ) {
+                                actions += "ACTION_IME_ENTER"
+                            }
+                        }
+                    }
+                }
+            }
+            if (actions.isEmpty()) {
+                return ObservedUiElement.buildDefaultSupportedActions(
+                    clickable = node.isClickable,
+                    longClickable = node.isLongClickable,
+                    editable = node.isEditable,
+                    scrollable = node.isScrollable,
+                    focusable = node.isFocusable,
+                )
+            }
+            return actions
+        }
+
         fun collectChildTextLabels(node: AccessibilityNodeInfo, depth: Int = 0): List<String> {
             if (depth > 3) return emptyList()
             val out = mutableListOf<String>()
-            for (i in 0 until node.childCount) {
-                val child = node.getChild(i) ?: continue
+            val count = node.childCount.coerceAtMost(24)
+            for (i in 0 until count) {
+                val child = runCatching { node.getChild(i) }.getOrNull() ?: continue
+                if (child.isPassword) continue
                 val t = child.text?.toString()?.trim().orEmpty()
                 val d = child.contentDescription?.toString()?.trim().orEmpty()
                 if (t.isNotBlank()) out += SecurityShield.sanitizeUntrustedText(t, "screen_child").take(60)
@@ -1214,13 +1435,19 @@ object JarvisScreenObserver {
             return out.distinct().take(4)
         }
 
-        fun walk(node: AccessibilityNodeInfo?, parentLabel: String, depth: Int) {
-            if (node == null || elements.size >= MAX_OBSERVED_NODES) return
+        fun walk(
+            node: AccessibilityNodeInfo?,
+            parentLabel: String,
+            parentRef: String?,
+            depth: Int,
+        ) {
+            if (node == null || depth > MAX_DEPTH || rawElements.size >= MAX_OBSERVED_NODES) return
             if ((System.nanoTime() - startNs) / 1_000_000L > OBSERVE_TIME_BUDGET_MS) return
 
             val cls = node.className?.toString().orEmpty()
-            val rawText = node.text?.toString()?.trim().orEmpty()
-            val rawDesc = node.contentDescription?.toString()?.trim().orEmpty()
+            val isPassword = node.isPassword
+            val rawText = if (isPassword) "" else node.text?.toString()?.trim().orEmpty()
+            val rawDesc = if (isPassword) "" else node.contentDescription?.toString()?.trim().orEmpty()
             val rawHint = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 node.hintText?.toString()?.trim().orEmpty()
             } else {
@@ -1230,12 +1457,12 @@ object JarvisScreenObserver {
             val pkg = node.packageName?.toString().orEmpty().ifBlank { foregroundPackage }
 
             val text = if (rawText.isNotBlank()) {
-                SecurityShield.sanitizeUntrustedText(rawText, "screen:$pkg").take(140)
+                SecurityShield.sanitizeUntrustedText(rawText, "screen:$pkg").take(MAX_TEXT_LENGTH)
             } else {
                 ""
             }
             val desc = if (rawDesc.isNotBlank()) {
-                SecurityShield.sanitizeUntrustedText(rawDesc, "screen_desc:$pkg").take(140)
+                SecurityShield.sanitizeUntrustedText(rawDesc, "screen_desc:$pkg").take(MAX_TEXT_LENGTH)
             } else {
                 ""
             }
@@ -1257,13 +1484,12 @@ object JarvisScreenObserver {
             val rect = Rect()
             runCatching { node.getBoundsInScreen(rect) }
 
-            val childLabels = if (text.isBlank() && desc.isBlank() && (node.isClickable || node.isCheckable)) {
+            val childLabels = if (!isPassword && text.isBlank() && desc.isBlank() && (node.isClickable || node.isCheckable)) {
                 collectChildTextLabels(node)
             } else {
                 emptyList()
             }
 
-            // Also inspect sibling switches/checkboxes inside settings rows
             val inheritedParentLabel = when {
                 text.isNotBlank() -> text
                 desc.isNotBlank() -> desc
@@ -1272,7 +1498,8 @@ object JarvisScreenObserver {
             }
 
             val isMeaningful = node.isVisibleToUser && (
-                text.isNotBlank() ||
+                isPassword ||
+                    text.isNotBlank() ||
                     desc.isNotBlank() ||
                     hint.isNotBlank() ||
                     resId.isNotBlank() ||
@@ -1283,9 +1510,17 @@ object JarvisScreenObserver {
                     childLabels.isNotEmpty()
                 )
 
+            var currentElementRef = parentRef
             if (isMeaningful) {
-                elements += ObservedUiElement(
-                    index = nextIndex++,
+                val idx = nextIndex++
+                val ref = "ref_e$idx"
+                currentElementRef = ref
+                if (parentRef != null) {
+                    parentToChildren.getOrPut(parentRef) { mutableListOf() }.add(ref)
+                }
+                val nodeWindowId = runCatching { node.windowId }.getOrDefault(activeWindowId)
+                rawElements += ObservedUiElement(
+                    index = idx,
                     resourceId = resId,
                     text = text,
                     contentDescription = desc,
@@ -1307,17 +1542,35 @@ object JarvisScreenObserver {
                     parentLabel = parentLabel,
                     childLabels = childLabels,
                     depth = depth,
+                    isInInputMethodWindow = false,
+                    boundsLeft = rect.left,
+                    boundsTop = rect.top,
+                    boundsRight = rect.right,
+                    boundsBottom = rect.bottom,
+                    elementRef = ref,
+                    parentRef = parentRef,
+                    windowId = nodeWindowId,
+                    windowLayer = activeWindowLayer,
+                    password = isPassword,
+                    supportedActions = extractSupportedActions(node),
                 )
             }
 
-            for (i in 0 until node.childCount) {
-                if (elements.size >= MAX_OBSERVED_NODES) break
-                walk(node.getChild(i), inheritedParentLabel, depth + 1)
+            val childCount = node.childCount.coerceAtMost(64)
+            for (i in 0 until childCount) {
+                if (rawElements.size >= MAX_OBSERVED_NODES) break
+                val child = runCatching { node.getChild(i) }.getOrNull() ?: continue
+                walk(child, inheritedParentLabel, currentElementRef, depth + 1)
             }
         }
 
-        if (root != null) {
-            walk(root, parentLabel = "", depth = 0)
+        if (root != null && !isProtectedPkg) {
+            walk(root, parentLabel = "", parentRef = null, depth = 0)
+        }
+
+        val elements = rawElements.map { el ->
+            val children = parentToChildren[el.elementRef]
+            if (!children.isNullOrEmpty()) el.copy(childRefs = children.toList()) else el
         }
 
         val dismissCandidate = elements.firstOrNull { el ->
@@ -1329,7 +1582,10 @@ object JarvisScreenObserver {
                 )
         }
 
-        return ObservedScreenState(
+        val seq = snapshotSequence.getAndIncrement()
+        val snapId = "snap_${seq}_${now}_${foregroundPackage.substringAfterLast('.').ifBlank { "root" }}"
+
+        val state = ObservedScreenState(
             packageName = foregroundPackage,
             appLabel = appLabel,
             windowTitle = windowTitle,
@@ -1341,6 +1597,13 @@ object JarvisScreenObserver {
             activeDialogTitle = activeDialogTitle,
             dismissCandidate = dismissCandidate,
             elements = elements,
+            timestampMs = now,
+            snapshotId = snapId,
+            screenVersion = seq,
+            windows = observedWindows,
+            isSecureOrProtected = isProtectedPkg,
         )
+        lastCachedSnapshot = state
+        return state
     }
 }

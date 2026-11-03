@@ -388,3 +388,219 @@ class SystemNavigationTool : Tool {
         return ToolResult(result.success, result.message)
     }
 }
+
+/**
+ * OpenClaw-style Structured Screen Snapshot Tool (Phase 2).
+ *
+ * Captures a bounded, structured accessibility snapshot with a unique `snapshotId`,
+ * window metadata, and stable `ref_eN` element references.
+ */
+class CaptureScreenSnapshotTool : Tool {
+
+    override val definition: ToolDefinition = ToolDefinition(
+        name = "capture_screen_snapshot",
+        description = "Capture a structured UI snapshot with a unique snapshotId, window metadata, " +
+            "and stable element references (e.g. ref_e1, ref_e2) for reliable one-action UI automation.",
+        parameters = objectSchema(
+            required = emptyList(),
+            properties = mapOf(
+                "max_elements" to integerProperty("Maximum number of elements to include (10-120). Defaults to 60."),
+            ),
+        ),
+    )
+
+    override val label = "Capture UI snapshot"
+    override val category = ToolCategory.DEVICE
+
+    override fun availability(context: Context): ToolAvailability =
+        if (JarvisAccessibilityService.isEnabled(context)) {
+            ToolAvailability("Accessibility on", true)
+        } else {
+            ToolAvailability("Needs accessibility", false)
+        }
+
+    override suspend fun execute(arguments: JsonObject, context: ToolContext): ToolResult {
+        screenUnavailable(context)?.let { return it }
+        val service = JarvisAccessibilityService.serviceInstance()
+            ?: return ToolResult(false, "Accessibility service is not connected.")
+        val maxElements = (arguments.argInt("max_elements") ?: 60).coerceIn(10, 120)
+        val snapshot = com.jarvis.assistant.accessibility.JarvisScreenObserver.observe(
+            service = service,
+            appLabelResolver = { pkg -> JarvisAccessibilityService.controller()?.appLabel(pkg) ?: pkg },
+            forceRefresh = true,
+        )
+        if (snapshot.isSecureOrProtected) {
+            return ToolResult(false, "Current screen (${snapshot.packageName}) is a protected security surface.")
+        }
+        return ToolResult(true, snapshot.formatSnapshotForAgent(maxElements))
+    }
+}
+
+/**
+ * OpenClaw-style Typed One-Action Execution Tool (Phases 3, 4, 6).
+ *
+ * Executes one verified UI action against a `snapshotId` and `elementRef`,
+ * automatically re-observing the screen and returning an honest 8-state verification outcome.
+ */
+class ExecuteMobileUiActionTool : Tool {
+
+    override val definition: ToolDefinition = ToolDefinition(
+        name = "execute_mobile_ui_action",
+        description = "Execute a single typed mobile UI action (activate_element, enter_text, scroll, " +
+            "tap, swipe, long_press, double_tap, drag, pinch_zoom, back, home, recents, wait) " +
+            "against a snapshotId and elementRef, with automatic re-observation and verification.",
+        parameters = objectSchema(
+            required = listOf("action"),
+            properties = mapOf(
+                "action" to stringProperty(
+                    "The UI action to execute.",
+                    enum = listOf(
+                        "activate_element", "enter_text", "scroll", "tap", "swipe",
+                        "long_press", "double_tap", "drag", "pinch_zoom",
+                        "back", "home", "recents", "wait",
+                    ),
+                ),
+                "snapshot_id" to stringProperty("The snapshotId from capture_screen_snapshot to validate freshness."),
+                "element_ref" to stringProperty("Stable element reference (e.g. 'ref_e3') from the snapshot."),
+                "semantic_query" to stringProperty("Optional semantic label or resourceId if element_ref is not used."),
+                "expected_package" to stringProperty("Optional expected foreground package name."),
+                "text" to stringProperty("Text to enter when action is 'enter_text'."),
+                "direction" to stringProperty("Scroll direction ('down', 'up', 'left', 'right')."),
+                "x" to integerProperty("Pixel X coordinate for tap/long_press/double_tap/swipe."),
+                "y" to integerProperty("Pixel Y coordinate for tap/long_press/double_tap/swipe."),
+                "end_x" to integerProperty("Destination pixel X for swipe/drag."),
+                "end_y" to integerProperty("Destination pixel Y for swipe/drag."),
+                "to_element_ref" to stringProperty("Destination elementRef for drag."),
+                "duration_ms" to integerProperty("Duration in milliseconds for long_press, swipe, drag, or wait."),
+                "zoom_in" to booleanProperty("True to zoom in, false to pinch out when action is 'pinch_zoom'."),
+            ),
+        ),
+    )
+
+    override val label = "Execute verified UI action"
+    override val category = ToolCategory.DEVICE
+
+    override fun availability(context: Context): ToolAvailability =
+        if (JarvisAccessibilityService.isEnabled(context)) {
+            ToolAvailability("Accessibility on", true)
+        } else {
+            ToolAvailability("Needs accessibility", false)
+        }
+
+    override suspend fun execute(arguments: JsonObject, context: ToolContext): ToolResult {
+        screenUnavailable(context)?.let { return it }
+        val actionName = arguments.argString("action")?.lowercase()?.trim().orEmpty()
+        val snapshotId = arguments.argString("snapshot_id")?.takeIf { it.isNotBlank() }
+        val elementRef = arguments.argString("element_ref")?.takeIf { it.isNotBlank() }
+        val semanticQuery = arguments.argString("semantic_query")?.takeIf { it.isNotBlank() }
+        val expectedPkg = arguments.argString("expected_package")?.takeIf { it.isNotBlank() }
+
+        val request: com.jarvis.assistant.accessibility.MobileUiActionRequest = when (actionName) {
+            "activate_element" -> com.jarvis.assistant.accessibility.MobileUiActionRequest.ActivateElement(
+                snapshotId = snapshotId,
+                elementRef = elementRef,
+                semanticQuery = semanticQuery,
+                expectedPackage = expectedPkg,
+            )
+            "enter_text" -> com.jarvis.assistant.accessibility.MobileUiActionRequest.EnterText(
+                snapshotId = snapshotId,
+                elementRef = elementRef,
+                semanticQuery = semanticQuery,
+                text = arguments.argString("text").orEmpty(),
+                expectedPackage = expectedPkg,
+            )
+            "scroll" -> com.jarvis.assistant.accessibility.MobileUiActionRequest.Scroll(
+                snapshotId = snapshotId,
+                containerRef = elementRef,
+                direction = arguments.argString("direction") ?: "down",
+                expectedPackage = expectedPkg,
+            )
+            "tap" -> com.jarvis.assistant.accessibility.MobileUiActionRequest.Tap(
+                snapshotId = snapshotId,
+                elementRef = elementRef,
+                x = arguments.argInt("x"),
+                y = arguments.argInt("y"),
+                expectedPackage = expectedPkg,
+            )
+            "swipe" -> com.jarvis.assistant.accessibility.MobileUiActionRequest.Swipe(
+                snapshotId = snapshotId,
+                startX = arguments.argInt("x") ?: 540,
+                startY = arguments.argInt("y") ?: 1500,
+                endX = arguments.argInt("end_x") ?: 540,
+                endY = arguments.argInt("end_y") ?: 600,
+                durationMs = (arguments.argInt("duration_ms") ?: 280).toLong(),
+                expectedPackage = expectedPkg,
+            )
+            "long_press" -> com.jarvis.assistant.accessibility.MobileUiActionRequest.LongPress(
+                snapshotId = snapshotId,
+                elementRef = elementRef,
+                semanticQuery = semanticQuery,
+                x = arguments.argInt("x"),
+                y = arguments.argInt("y"),
+                durationMs = (arguments.argInt("duration_ms") ?: 650).toLong(),
+                expectedPackage = expectedPkg,
+            )
+            "double_tap" -> com.jarvis.assistant.accessibility.MobileUiActionRequest.DoubleTap(
+                snapshotId = snapshotId,
+                elementRef = elementRef,
+                semanticQuery = semanticQuery,
+                x = arguments.argInt("x"),
+                y = arguments.argInt("y"),
+                expectedPackage = expectedPkg,
+            )
+            "drag" -> com.jarvis.assistant.accessibility.MobileUiActionRequest.Drag(
+                snapshotId = snapshotId,
+                fromElementRef = elementRef,
+                toElementRef = arguments.argString("to_element_ref")?.takeIf { it.isNotBlank() },
+                startX = arguments.argInt("x"),
+                startY = arguments.argInt("y"),
+                endX = arguments.argInt("end_x"),
+                endY = arguments.argInt("end_y"),
+                durationMs = (arguments.argInt("duration_ms") ?: 480).toLong(),
+                expectedPackage = expectedPkg,
+            )
+            "pinch_zoom" -> com.jarvis.assistant.accessibility.MobileUiActionRequest.PinchAndZoom(
+                snapshotId = snapshotId,
+                targetRef = elementRef,
+                centerX = arguments.argInt("x"),
+                centerY = arguments.argInt("y"),
+                zoomIn = arguments.argBoolean("zoom_in") ?: true,
+                expectedPackage = expectedPkg,
+            )
+            "back" -> com.jarvis.assistant.accessibility.MobileUiActionRequest.Back(
+                snapshotId = snapshotId,
+                expectedPackage = expectedPkg,
+            )
+            "home" -> com.jarvis.assistant.accessibility.MobileUiActionRequest.Home(
+                snapshotId = snapshotId,
+                expectedPackage = expectedPkg,
+            )
+            "recents" -> com.jarvis.assistant.accessibility.MobileUiActionRequest.Recents(
+                snapshotId = snapshotId,
+                expectedPackage = expectedPkg,
+            )
+            "wait" -> com.jarvis.assistant.accessibility.MobileUiActionRequest.Wait(
+                durationMs = (arguments.argInt("duration_ms") ?: 500).toLong(),
+                snapshotId = snapshotId,
+                expectedPackage = expectedPkg,
+            )
+            else -> return ToolResult(false, "Unsupported mobile UI action: '$actionName'.")
+        }
+
+        val executor = com.jarvis.assistant.accessibility.MobileUiActionExecutor(
+            approvalGate = { category, targetSummary ->
+                context.confirmation.confirm(
+                    title = "${category.label}: \"$targetSummary\"?",
+                    detail = "Confirm before Jarvis performs this high-consequence action on screen.",
+                )
+            },
+        )
+        val result = executor.execute(request)
+        val formatted = "[${result.outcome.name}] ${result.message} (before=${result.beforeSnapshotId}, after=${result.afterSnapshotId})"
+        return ToolResult(
+            success = result.outcome == com.jarvis.assistant.accessibility.UiActionOutcomeState.VERIFIED_SUCCESS,
+            content = formatted,
+        )
+    }
+}
+
