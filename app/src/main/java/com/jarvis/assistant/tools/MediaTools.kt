@@ -74,7 +74,7 @@ class YouTubeSearchTool : Tool {
                 return ToolResult(
                     true,
                     if (verified) {
-                        "Now playing \"$displayTitle\" on YouTube and playback is active. Inform the owner now."
+                        "Now playing \"$displayTitle\" on YouTube and playback is active."
                     } else {
                         "Opened \"$displayTitle\" on YouTube, but I could not confirm that audio started. If it is paused, tell me to tap play."
                     },
@@ -85,7 +85,7 @@ class YouTubeSearchTool : Tool {
                 return openUrl(
                     appContext,
                     watchUrl,
-                    "Opened \"$displayTitle\" on YouTube in the browser. Inform the owner now.",
+                    "Opened \"$displayTitle\" on YouTube in the browser.",
                 )
             }
         }
@@ -100,7 +100,7 @@ class YouTubeSearchTool : Tool {
                     if (result.verified) {
                         return ToolResult(
                             true,
-                            "Played the top result for \"$query\" on YouTube (${result.verificationSignal}). Inform the owner now.",
+                            "Played the top result for \"$query\" on YouTube (${result.verificationSignal}).",
                         )
                     }
                     if (attempt == 2 && result.success) {

@@ -346,3 +346,15 @@
   - Outlines supported workflows, launch intents, known view selectors, dynamic selector fallbacks, screen-state recognition, and known restrictions.
 - [x] **Verification:** `gradle testDebugUnitTest` green across all 79 unit tests (including all 11 `VisualIntelligenceAndAutonomousPlanTest` tests), `assembleDebug` green (46 MB APK), and `compile_applet` passed.
 
+## 2026-11-03 — Morning Routine Persona Synthesis & Unwanted YouTube Playback Fix
+
+- [x] **Skill Persona Briefing Engine (`SkillPersonaBriefingEngine.kt`, `JarvisCore.kt`):**
+  - Replaced the recitation of raw developer debug logs (`"Skill 'Morning Routine' completed all 3 steps successfully. Step 1 (get_device_status): Battery 76%... Inform the owner now."`) with a calm, dignified, natural J.A.R.V.I.S. spoken briefing.
+  - Formats battery %, network connection, weather, unread notification highlights (e.g. Instagram, WhatsApp), and calendar schedule into 2–3 elegant spoken sentences addressing the owner as "sir" (or their configured title).
+  - Strips all internal directives (`"Inform the owner now."`), tool names, step numbers, and hardware debug logs (`25°C`, memory/disk bytes) from spoken speech and transcripts.
+- [x] **Morning Routine YouTube Hijack Elimination (`SkillRepository.kt`):**
+  - Removed intrusive `search_youtube` from the seeded `"Morning Routine"` skill (`"start my day"` trigger) and replaced it with `read_calendar_events` and `get_current_time`.
+  - Added an in-place migration in `seedDefaultsIfEmpty()` that automatically repairs existing database entries, preventing `"start my day"` from opening YouTube or blasting music unexpectedly.
+  - Seeded a separate, dedicated `"Morning Music"` routine for users who explicitly ask to play morning lo-fi beats.
+- [x] **Verification:** `gradle testDebugUnitTest` green (82 unit tests passing, including 3 new `SkillPersonaBriefingEngineTest` tests), `assembleDebug` green (46 MB APK), and `compile_applet` passed.
+

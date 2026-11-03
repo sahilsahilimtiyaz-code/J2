@@ -138,15 +138,20 @@ class SkillRepository(
     suspend fun seedDefaultsIfEmpty() = withContext(Dispatchers.IO) {
         val existing = dao.skills()
         if (existing.isNotEmpty()) {
-            // Repair any legacy seeded skills that referenced deprecated tool names or lacked descriptions
+            // Repair any legacy seeded skills that referenced deprecated tool names or intrusive YouTube auto-play
             for (entity in existing) {
-                val repairedStepsJson = entity.stepsJson
+                var repairedStepsJson = entity.stepsJson
                     .replace("\"read_battery_status\"", "\"get_device_status\"")
                     .replace("\"read_time\"", "\"get_current_time\"")
+
+                // If Morning Routine contains search_youtube, replace with calendar events so "start my day" doesn't hijack screen to YouTube
+                if (entity.name.equals("Morning Routine", ignoreCase = true) && repairedStepsJson.contains("search_youtube")) {
+                    repairedStepsJson = """[{"toolName":"get_current_time","arguments":{},"description":"Check current time"},{"toolName":"get_device_status","arguments":{},"description":"Check battery and connectivity"},{"toolName":"read_calendar_events","arguments":{},"description":"Review today's schedule"},{"toolName":"read_notifications","arguments":{},"description":"Brief on unread alerts"}]"""
+                }
+
                 val repairedDesc = when {
-                    entity.description.isNotBlank() -> entity.description
                     entity.name.equals("Morning Routine", ignoreCase = true) ->
-                        "Checks battery & connectivity, unread notifications, and plays morning lo-fi."
+                        "Checks time, battery, unread notifications, and today's schedule."
                     entity.name.equals("Device Diagnostics", ignoreCase = true) ->
                         "Comprehensive check of device battery, time, and hardware health."
                     else -> entity.description
@@ -165,11 +170,21 @@ class SkillRepository(
 
         saveSkill(
             name = "Morning Routine",
-            description = "Checks battery & connectivity, unread notifications, and plays morning lo-fi.",
-            triggers = listOf("morning routine", "start my day", "good morning jarvis routine"),
+            description = "Checks time, battery, unread notifications, and today's schedule.",
+            triggers = listOf("morning routine", "start my day", "good morning jarvis routine", "morning briefing"),
             steps = listOf(
+                SkillStep(toolName = "get_current_time", description = "Check current time"),
                 SkillStep(toolName = "get_device_status", description = "Check battery and connectivity"),
+                SkillStep(toolName = "read_calendar_events", description = "Review today's schedule"),
                 SkillStep(toolName = "read_notifications", description = "Brief on unread alerts"),
+            ),
+        )
+
+        saveSkill(
+            name = "Morning Music",
+            description = "Plays calming morning lo-fi beats on YouTube.",
+            triggers = listOf("morning music", "play morning beats", "morning lo-fi", "start morning music"),
+            steps = listOf(
                 SkillStep(
                     toolName = "search_youtube",
                     arguments = mapOf("query" to "morning lo-fi beats"),

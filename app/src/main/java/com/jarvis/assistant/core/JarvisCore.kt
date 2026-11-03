@@ -38,6 +38,7 @@ import com.jarvis.assistant.memory.MemoryExtractionWorker
 import com.jarvis.assistant.memory.MemoryExtractor
 import com.jarvis.assistant.memory.MemoryRepository
 import com.jarvis.assistant.memory.MemoryType
+import com.jarvis.assistant.memory.SkillPersonaBriefingEngine
 import com.jarvis.assistant.persona.GreetingEngine
 import com.jarvis.assistant.persona.PersonaBuilder
 import com.jarvis.assistant.service.JarvisNotificationListenerService
@@ -665,17 +666,23 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                 val execResult = withContext(Dispatchers.IO) {
                     skillRepository.executeSkill(matchingSkill, toolRegistry)
                 }
-                val summary = execResult.summary
+                val ownerTitle = current.profile.title.ifBlank { "sir" }
+                val briefing = SkillPersonaBriefingEngine.generateSpokenBriefing(
+                    skillName = matchingSkill.name,
+                    stepResults = execResult.stepResults,
+                    ownerTitle = ownerTitle,
+                    success = execResult.success,
+                )
                 _state.update { state ->
                     state.copy(
                         messages = state.messages.map { msg ->
-                            if (msg.id == assistantId) msg.copy(text = summary, streaming = false) else msg
+                            if (msg.id == assistantId) msg.copy(text = briefing, streaming = false) else msg
                         },
                         toolActivity = null,
                         generating = false,
                     )
                 }
-                ttsBuffer.append(summary)
+                ttsBuffer.append(briefing)
                 completeTurn(assistantId, conversationId)
                 return
             }
