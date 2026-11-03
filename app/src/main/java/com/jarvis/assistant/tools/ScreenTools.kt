@@ -644,3 +644,27 @@ class ExecuteMobileUiActionTool : Tool {
     }
 }
 
+class DumpScreenTool : Tool {
+
+    override val definition: ToolDefinition = ToolDefinition(
+        name = "dump_screen",
+        description = "Dump a compact snapshot of all visible actionable nodes on the phone screen with their temporary references (#1, #2...), view IDs, labels and bounds. Also prints to logcat with tag JARVIS_ACT so failing screens can be diagnosed.",
+        parameters = objectSchema(required = emptyList(), properties = emptyMap()),
+    )
+
+    override val label = "Dump screen (snapshot)"
+    override val category = ToolCategory.DEVICE
+
+    override fun availability(context: Context): ToolAvailability =
+        if (JarvisAccessibilityService.isEnabled(context)) {
+            ToolAvailability("Accessibility on", true)
+        } else {
+            ToolAvailability("Needs accessibility", false)
+        }
+
+    override suspend fun execute(arguments: JsonObject, context: ToolContext): ToolResult {
+        screenUnavailable(context)?.let { return it }
+        return ActionRouter.routeDumpScreen(context.appContext)
+    }
+}
+

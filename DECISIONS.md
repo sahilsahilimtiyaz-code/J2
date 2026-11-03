@@ -540,3 +540,30 @@
   - Pre-allocated projection buffers and trig arrays to ensure 60fps locked performance on Samsung Galaxy A54 with zero per-frame heap allocations.
   - Removed `clip(CircleShape)` container in `HomeScreen.kt` so the 3D orbital rings and cosmic star-dust float seamlessly into the deep dark space without being artificially clipped.
   - Verified 100% compilation with `compile_applet` and all unit tests passing with `gradle testDebugUnitTest`.
+
+## 2026-11-03 (Part 5) — 3-Tier Action Router, ContactResolver, and Deterministic App Automation
+
+- **Root Cause Analysis of Prior Automation Failures:**
+  - *Bug 1 ("Message Azhar on WhatsApp")*: Previously attempted coordinate guessing or falling back to WhatsApp's internal search UI, which easily failed for names or required the user to dictate raw numbers. Deep-linking to `https://wa.me/<digits>?text=<urlencoded>` targeting package `com.whatsapp` (fallback `com.whatsapp.w4b`) opens the exact conversation with the message pre-filled. Tier 2 then only needs to click the Send button via `AppSkillsRegistry` selector rules.
+  - *Bug 2 ("Search lo-fi on YouTube")*: Previously issued `Intent.ACTION_VIEW` with `https://www.youtube.com/results?search_query=...`, which Samsung One UI / YouTube opens to the home feed. Follow-up coordinate guessing hit the bottom navigation bar (`com.google.android.youtube:id/pivot_bar`), tapping the Shorts tab. Directly using `Intent(Intent.ACTION_SEARCH).setPackage("com.google.android.youtube").putExtra(SearchManager.QUERY, query).putExtra("query", query)` opens YouTube directly on search results with zero tapping.
+
+- **3-Tier Action Architecture (`ActionRouter.kt`):**
+  - **Tier 1 (Intents & Deep Links - Zero-Tapping First):**
+    - `ContactResolver`: Spoken name -> number resolution. Case-insensitive token + fuzzy Levenshtein match, STT phonetic variations, honorific suffix stripping ("bhai", "ji", "bro", "sir", "sahab", "anna"), prefers contacts with a WhatsApp account (`ContactsContract.Data` query for `vnd.android.cursor.item/vnd.com.whatsapp.profile`), normalizes phone numbers via Google `libphonenumber` using device region (default India `+91` / `"IN"`). Handles 0 matches (informs user) and 2+ ambiguous matches (asks user which one; never guesses).
+    - WhatsApp intent: `https://wa.me/<digits>?text=<urlencoded>` targeting package `com.whatsapp` (fallback `com.whatsapp.w4b`), followed by Tier 2 to press Send.
+    - YouTube search intent: `Intent(Intent.ACTION_SEARCH)` with package `com.google.android.youtube` and extra `SearchManager.QUERY` / `"query"` (fallback `https://www.youtube.com/results?search_query=<q>`). Zero coordinate tapping; never touches Shorts.
+    - `AppRegistry`: Centralized intent builders for Maps, Dialer, SMS, Alarms/Timers, Settings screens (e.g. Wi-Fi), Music search, and Browser search. Added `<queries>` to `AndroidManifest.xml` for all target packages.
+  - **Tier 2 (Accessibility-Tree Executor):**
+    - Service configuration in `jarvis_accessibility_service.xml` verified (`canRetrieveWindowContent`, `flagReportViewIds`, `flagRetrieveInteractiveWindows`, `flagIncludeNotImportantViews`, `canPerformGestures`, `canTakeScreenshot`).
+    - `snapshotActionableNodes()` in `ScreenController`: generates compact visible node snapshots with temporary references (`#1`, `#2`, `#3...`), package, text, contentDescription, viewId, class, capabilities (clickable/editable/scrollable), and bounds. Masks password fields (`node.isPassword`).
+    - LLM planner picks a `#tempRef`, never coordinates. Action execution order: `ACTION_CLICK` (climbing up the parent chain to find the nearest clickable node), `ACTION_SET_TEXT`, `ACTION_IME_ENTER`, scroll actions; physical gesture `dispatchTapGesture` at node center is strictly a last resort.
+    - `AppSkillsRegistry` in `AppAutomationSkills.kt`: selector priority `viewId` > exact `contentDescription` > exact `text` > `role`, with explicit `AvoidRule` for YouTube (`pivot_bar`, "Shorts") unless user explicitly requested shorts.
+    - Event-based window state waiting with timeout (`awaitWindowState()`).
+    - Step post-condition tracking (`expectedPostCondition`) and loop detection (tracking seen UI tree signatures across max 15 steps).
+  - **Tier 3 (Multimodal Vision Fallback):**
+    - Invoked ONLY when accessibility tree is empty (games, Flutter without accessibility, custom GL/canvas views).
+    - Uses `takeScreenshot()` bitmap for multimodal LLM planning. Never acts on blank or secure (`FLAG_SECURE`) screens.
+  - **Safety & Observability:**
+    - Spoken read-back and confirmation before send, call, pay, delete, install. Never types into password fields. Voice "stop" and visible UI Stop button cancel the task.
+    - Every action logged to logcat with tag `JARVIS_ACT`.
+    - Added `"dump_screen"` tool to dump visible node snapshots with `#refs` and bounds.

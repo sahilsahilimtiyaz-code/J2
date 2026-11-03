@@ -250,67 +250,26 @@ class SendWhatsAppTool : Tool {
             return ToolResult(false, "Provide both the recipient and the WhatsApp message text.")
         }
 
-        val approved = context.confirmation.confirm(
-            title = "Send WhatsApp to $recipient?",
-            detail = "“$message”",
-        )
-        if (!approved) {
-            return ToolResult(false, "The owner declined sending the WhatsApp message.")
-        }
-
-        val digitsOnly = recipient.filter { it.isDigit() }
-            .takeIf { it.length >= 7 && recipient.none(Char::isLetter) }
-        val resolvedName: String
-        val resolvedNumber: String?
-        if (digitsOnly != null) {
-            resolvedName = recipient
-            resolvedNumber = digitsOnly
-        } else {
-            val match = if (context.permissions.isGranted(android.Manifest.permission.READ_CONTACTS)) {
-                runCatching { resolveTarget(context, recipient) }.getOrNull()
-            } else {
-                null
-            }
-            resolvedName = match?.name ?: recipient
-            resolvedNumber = match?.number
-        }
-
-        val result = withContext(Dispatchers.IO) {
-            val controller = JarvisAccessibilityService.controller()
-            if (controller != null) {
-                if (digitsOnly != null && resolvedNumber != null) {
-                    AppAutomation.sendToNumber(
-                        controller = controller,
-                        phoneDigits = resolvedNumber,
-                        displayName = resolvedName,
-                        message = message,
-                    )
-                } else {
-                    val byName = AppAutomation.sendToContactByName(
-                        controller = controller,
-                        contactName = recipient,
-                        message = message,
-                    )
-                    if (byName.success || resolvedNumber == null) {
-                        byName
-                    } else {
-                        AppAutomation.sendToNumber(
-                            controller = controller,
-                            phoneDigits = resolvedNumber,
-                            displayName = resolvedName,
-                            message = message,
-                        )
-                    }
-                }
-            } else {
-                ScreenResult(
+        // Request runtime contacts permission if not yet granted
+        if (!context.permissions.isGranted(android.Manifest.permission.READ_CONTACTS)) {
+            val granted = context.permissions.ensure(
+                android.Manifest.permission.READ_CONTACTS,
+                "Jarvis needs contacts access to resolve \"$recipient\" to a phone number.",
+            )
+            if (!granted) {
+                return ToolResult(
                     false,
-                    "Screen control is off, so I can only prepare the message, not send it.",
-                    verified = false,
+                    "Contacts permission is required to find \"$recipient\". Please grant contacts permission in Settings.",
                 )
             }
         }
-        return ToolResult(result.success, result.message)
+
+        return ActionRouter.routeWhatsAppMessage(
+            context = context.appContext,
+            confirmation = context.confirmation,
+            recipient = recipient,
+            message = message,
+        )
     }
 }
 

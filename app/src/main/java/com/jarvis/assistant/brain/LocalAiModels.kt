@@ -1491,16 +1491,39 @@ object OfflineTaskRouter {
 
     private fun extractRecipientAndMessage(raw: String, isWhatsApp: Boolean): Pair<String, String>? {
         val clean = raw.replace(Regex("(?i)^(jarvis\\s*,?\\s*)?(please\\s+)?"), "").trim()
-        val pattern = if (isWhatsApp) {
-            Regex("""(?i)(?:to)\s+([A-Za-z0-9+_.\- ]+?)(?:\s+on\s+whatsapp)?\s+(?:saying|that|:|-)\s+(.+)$""")
-        } else {
-            Regex("""(?i)(?:to|text)\s+([A-Za-z0-9+_.\- ]+?)\s+(?:saying|that|:|-)\s+(.+)$""")
+
+        // Match with colon: e.g. "message Azhar on WhatsApp: hi" or "message 9876543210: hello"
+        val colonMatch = Regex("""(?i)^(?:send\s+(?:a\s+)?message\s+(?:to\s+)?|message\s+|text\s+|whatsapp\s+)?([A-Za-z0-9+_.\- ]+?)(?:\s+on\s+whatsapp)?\s*:\s*(.+)$""").find(clean)
+        if (colonMatch != null) {
+            val target = colonMatch.groupValues[1]
+                .replace(Regex("(?i)^(?:to|message|text|whatsapp)\\s+"), "")
+                .replace(Regex("(?i)\\s+on\\s+whatsapp$"), "")
+                .trim()
+            val msg = colonMatch.groupValues[2].trim()
+            if (target.isNotBlank() && msg.isNotBlank()) return target to msg
         }
-        val m = pattern.find(clean) ?: return null
-        val target = m.groupValues[1].replace(Regex("(?i)\\s+on\\s+whatsapp$"), "").trim()
-        val msg = m.groupValues[2].trim()
-        if (target.isBlank() || msg.isBlank()) return null
-        return target to msg
+
+        val pattern = if (isWhatsApp) {
+            Regex("""(?i)(?:to|message|text|whatsapp)\s+([A-Za-z0-9+_.\- ]+?)(?:\s+on\s+whatsapp)?\s+(?:saying|that|:|-)\s+(.+)$""")
+        } else {
+            Regex("""(?i)(?:to|text|message)\s+([A-Za-z0-9+_.\- ]+?)\s+(?:saying|that|:|-)\s+(.+)$""")
+        }
+        val m = pattern.find(clean)
+        if (m != null) {
+            val target = m.groupValues[1].replace(Regex("(?i)\\s+on\\s+whatsapp$"), "").trim()
+            val msg = m.groupValues[2].trim()
+            if (target.isNotBlank() && msg.isNotBlank()) return target to msg
+        }
+
+        // Catch "message Azhar on WhatsApp hello"
+        val onWaMatch = Regex("""(?i)^(?:message|text|send\s+(?:a\s+)?message\s+to)\s+([A-Za-z0-9+_.\- ]+?)\s+on\s+whatsapp\s+(.+)$""").find(clean)
+        if (onWaMatch != null) {
+            val target = onWaMatch.groupValues[1].trim()
+            val msg = onWaMatch.groupValues[2].trim()
+            if (target.isNotBlank() && msg.isNotBlank()) return target to msg
+        }
+
+        return null
     }
 
     private fun extractYouTubeQuery(raw: String): String {

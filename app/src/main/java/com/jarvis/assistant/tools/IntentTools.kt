@@ -205,29 +205,6 @@ class OpenSettingsScreenTool : Tool {
         val screen = arguments.argString("screen")?.lowercase()?.replace(' ', '_')
             ?: return ToolResult(false, "Tell me which settings screen to open.")
 
-        val (action, label) = when (screen) {
-            "wifi", "wi_fi" -> Settings.ACTION_WIFI_SETTINGS to "Wi-Fi"
-            "bluetooth" -> Settings.ACTION_BLUETOOTH_SETTINGS to "Bluetooth"
-            "sound", "volume" -> Settings.ACTION_SOUND_SETTINGS to "Sound"
-            "display", "screen", "dark_mode" -> Settings.ACTION_DISPLAY_SETTINGS to "Display"
-            "battery" -> Settings.ACTION_BATTERY_SAVER_SETTINGS to "Battery"
-            "apps", "applications" -> Settings.ACTION_APPLICATION_SETTINGS to "Apps"
-            "accessibility" -> Settings.ACTION_ACCESSIBILITY_SETTINGS to "Accessibility"
-            "location", "gps" -> Settings.ACTION_LOCATION_SOURCE_SETTINGS to "Location"
-            "do_not_disturb", "dnd" ->
-                Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS to "Do Not Disturb access"
-            "notification_access" ->
-                Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS to "Notification access"
-            "developer" -> Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS to "Developer options"
-            else -> Settings.ACTION_SETTINGS to "Settings"
-        }
-
-        val intent = Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        return runCatching { context.appContext.startActivity(intent) }.fold(
-            onSuccess = { ToolResult(true, "Opened $label settings.") },
-            onFailure = { error ->
-                ToolResult(false, "Android would not open $label settings: ${error.message}.")
-            },
-        )
+        return ActionRouter.routeSettingsScreen(context.appContext, screen)
     }
 }

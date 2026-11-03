@@ -451,3 +451,39 @@
   - Added ambient 3D cosmic background star-dust particles.
   - Unclipped the Home screen hero orb container in `HomeScreen.kt` so orbital rings and star-dust float seamlessly in space without being cut off.
   - Zero-allocation 60fps locked performance on Samsung Galaxy A54; passed full `compile_applet` and all unit tests in `gradle testDebugUnitTest`.
+
+## 2026-11-03 (Part 5) — 3-Tier Action Router, ContactResolver, Tier 1 Deep Links & Bug Fixes for WhatsApp and YouTube
+
+- [x] **Bug Fix 1: "Message Azhar on WhatsApp" (`ContactResolver.kt`, `AppRegistry.kt`, `ActionRouter.kt`, `SystemMissionTools.kt`):**
+  - **Root Cause:** WhatsApp automation previously attempted to type into WhatsApp's internal search bar via coordinate tapping, which failed for contact names or required raw digits.
+  - **Solution:** Implemented `ContactResolver` which queries `ContactsContract` with runtime `READ_CONTACTS` handling, tokenizes spoken names, strips Indian/informal honorifics ("bhai", "bhaiya", "ji", "bro", "sir", "sahab", "anna", "dada", "yaar"), performs phonetic and Levenshtein fuzzy matching, prioritizes contacts with a WhatsApp account (`vnd.android.cursor.item/vnd.com.whatsapp.profile`), and normalizes phone numbers via Google `libphonenumber` using device region (default India `+91` / `"IN"`).
+  - Explicitly handles 0 matches (informs user) and 2+ ambiguous matches (lists candidates and asks owner which one; never guesses).
+  - Safety rule enforced: asks explicit spoken/dialog confirmation before sending.
+  - Launches Tier 1 direct deep link `https://wa.me/<digits>?text=<urlencoded>` targeting package `com.whatsapp` (fallback `com.whatsapp.w4b`), which opens the exact chat with pre-filled text instantly without UI search lists.
+  - Tier 2 accessibility tree executor then locates the Send button via `AppSkillsRegistry` (`com.whatsapp:id/send`, exact contentDescription "Send") and clicks it via `ACTION_CLICK` (or IME action).
+- [x] **Bug Fix 2: "Search lo-fi on YouTube" (`AppRegistry.kt`, `MediaTools.kt`, `ActionRouter.kt`, `AppAutomationSkills.kt`):**
+  - **Root Cause:** YouTube search previously opened a web URL view intent which landed on YouTube's home feed, followed by coordinate guessing that hit the bottom-navigation "Shorts" tab (`com.google.android.youtube:id/pivot_bar`).
+  - **Solution:** Implemented Tier 1 native YouTube search: `Intent(Intent.ACTION_SEARCH).setPackage("com.google.android.youtube").putExtra(SearchManager.QUERY, query).putExtra("query", query)` (with web URL fallback). Directly lands YouTube on the query's search results page without any screen tapping.
+  - In Tier 2 UI automation, configured explicit `AvoidRule` in `AppSkillsRegistry` banning interactions with `com.google.android.youtube:id/pivot_bar` or nodes containing "Shorts" unless the user explicitly requested them.
+- [x] **Tier 1 App Registry & Manifest `<queries>` (`AppRegistry.kt`, `AndroidManifest.xml`):**
+  - Added dedicated data-driven `AppRegistry` for Maps (`geo:`, Google Maps), dialer (`ACTION_DIAL`, `tel:`), SMS (`ACTION_SENDTO`, `smsto:`), alarms & timers (`AlarmClock`), settings screens (`Settings.ACTION_WIFI_SETTINGS`, Bluetooth, Sound, Display, Battery, Apps, Accessibility, Location, Developer options), music search (`INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH`), and browser search (`ACTION_WEB_SEARCH`).
+  - Added explicit `<package>` entries to `AndroidManifest.xml` `<queries>` element for all targeted packages (`com.whatsapp`, `com.whatsapp.w4b`, `com.google.android.youtube`, `com.google.android.apps.maps`, `com.google.android.dialer`, `com.samsung.android.dialer`, `com.google.android.apps.messaging`, `com.samsung.android.messaging`, `com.android.chrome`, `com.google.android.deskclock`, `com.sec.android.app.clockpackage`, `com.spotify.music`).
+- [x] **Tier 2 Accessibility-Tree Executor & Screen Snapshotting (`ScreenController.kt`, `ActionableNodeSnapshot.kt`, `JarvisCore.kt`, `AppAutomationSkills.kt`):**
+  - Verified service configuration in `jarvis_accessibility_service.xml` (`canRetrieveWindowContent`, `flagReportViewIds`, `flagRetrieveInteractiveWindows`, `flagIncludeNotImportantViews`, `canPerformGestures`, `canTakeScreenshot`).
+  - Added `snapshotActionableNodes()`: creates a compact snapshot of all visible actionable nodes with temporary numeric references (`#1`, `#2`, `#3...`), package, text, contentDescription, viewId, class, clickable/editable/scrollable capabilities, and bounds.
+  - LLM planner picks a `#tempRef`, never raw coordinates.
+  - `executeRefAction()` executes actions in strict order: `ACTION_CLICK` (climbing up the parent chain to find the nearest clickable node), `ACTION_SET_TEXT`, `ACTION_IME_ENTER`, scroll actions; physical gesture `dispatchTapGesture` at node bounds center is used ONLY as last resort.
+  - Added event-based window state waiting (`awaitWindowState()` with timeout) instead of fixed sleeps.
+  - Added step post-condition tracking (`expectedPostCondition`) and loop detection (tracking seen UI tree signature hashes, aborting if repeated 3 times without progress).
+  - Strict safety: refuses to interact with or type into secure password fields (`node.isPassword`).
+- [x] **Tier 3 Multimodal Vision Fallback (`JarvisCore.kt`, `ScreenVisionCapture`):**
+  - Invoked ONLY when accessibility tree is empty (`actionableNodes.isEmpty()`, such as games, Flutter without accessibility, or custom OpenGL/canvas views).
+  - `AccessibilityService.takeScreenshot()` captures pixels for multimodal LLM planning.
+  - Strictly refuses and fails gracefully on blank or secure (`FLAG_SECURE`) screens.
+- [x] **Screen Dump Diagnostic Tool (`DumpScreenTool`, `ScreenTools.kt`, `ToolRegistry.kt`):**
+  - Added `"dump_screen"` tool to `ToolRegistry`: outputs the complete snapshot of visible actionable nodes with `#refs`, logging every line to Android logcat with tag `JARVIS_ACT`.
+- [x] **Testing & Verification (`ActionRouterAndContactResolverTest.kt`):**
+  - Created unit tests verifying contact name tokenization, Indian honorific suffix stripping, fuzzy match scoring, WhatsApp account prioritization bonus, Google libphonenumber E.164 normalization, YouTube avoid rules for Shorts, and AppRegistry settings intents.
+  - All 124 unit tests passed via `gradle testDebugUnitTest` in 6s.
+  - Full debug APK built and packaged via `gradle assembleDebug` in 2s.
+

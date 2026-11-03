@@ -116,6 +116,13 @@ interface ScreenAccess {
 
     /** Real display dimensions in pixels (width to height), or null when unknown. */
     fun screenDimensions(): Pair<Int, Int>? = null
+
+    /** Dumps a formatted string of visible actionable nodes with #refs and logs to logcat under JARVIS_ACT. */
+    suspend fun dumpScreen(): String = ""
+
+    /** Executes an action on a node identified by temporary ref (#1, #2, etc.). */
+    suspend fun executeRefAction(tempRef: String, actionType: String, textArgument: String? = null, userGoal: String = ""): ScreenResult =
+        ScreenResult(false, "Ref execution not supported on this surface.", verified = false)
 }
 
 /**

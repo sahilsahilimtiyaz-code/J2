@@ -331,5 +331,6 @@ fun defaultTools(): List<Tool> = listOf(
     TypeOnScreenTool(),
     ScrollScreenTool(),
     SystemNavigationTool(),
+    DumpScreenTool(),
 )
 

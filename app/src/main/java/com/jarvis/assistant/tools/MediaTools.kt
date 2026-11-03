@@ -66,11 +66,7 @@ class YouTubeSearchTool : Tool {
         val controller = JarvisAccessibilityService.controller()
 
         if (!playImmediately) {
-            if (youtubeInstalled && openYouTubeSearch(appContext, query)) {
-                return ToolResult(true, "Opened YouTube and searched for \"$query\".")
-            }
-            val url = "https://www.youtube.com/results?search_query=" + Uri.encode(query)
-            return openUrl(appContext, url, "Opened YouTube search results for \"$query\".")
+            return ActionRouter.routeYouTubeSearch(appContext, query)
         }
 
         // 1. Resolve the top result so we can deep-link straight into the video
@@ -151,18 +147,11 @@ class YouTubeSearchTool : Tool {
     }
 
     private fun openYouTubeSearch(context: Context, query: String): Boolean {
+        val intent = AppRegistry.createYouTubeSearchIntent(context, query)
+        if (runCatching { context.startActivity(intent) }.isSuccess) return true
         val resultsUrl = "https://www.youtube.com/results?search_query=" + Uri.encode(query)
-        val candidates = listOf(
-            Intent(Intent.ACTION_VIEW, Uri.parse(resultsUrl)).setPackage(YOUTUBE_PACKAGE),
-            Intent(Intent.ACTION_SEARCH).setPackage(YOUTUBE_PACKAGE)
-                .putExtra(SearchManager.QUERY, query),
-            Intent(Intent.ACTION_VIEW, Uri.parse(resultsUrl)),
-        )
-        for (intent in candidates) {
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            if (runCatching { context.startActivity(intent) }.isSuccess) return true
-        }
-        return false
+        val fallback = Intent(Intent.ACTION_VIEW, Uri.parse(resultsUrl)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return runCatching { context.startActivity(fallback) }.isSuccess
     }
 
     /**

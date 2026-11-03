@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.view.accessibility.AccessibilityNodeInfo
 import com.jarvis.assistant.security.SecurityShield
 import java.util.Locale
+import android.util.Log
 import com.jarvis.assistant.tools.ScreenResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -170,6 +171,222 @@ class ScreenController(private val service: AccessibilityService) {
         val pm = service.packageManager
         pm.getApplicationLabel(pm.getApplicationInfo(packageName, 0)).toString()
     }.getOrDefault(packageName)
+
+    private val currentActionableNodes = mutableMapOf<String, AccessibilityNodeInfo>()
+
+    /**
+     * Snapshot of visible actionable nodes with stable temporary references (#1, #2, etc.).
+     * Adheres to safety rules: masks password values, excludes out-of-screen bounds.
+     */
+    fun snapshotActionableNodes(): List<ActionableNodeSnapshot> {
+        val root = service.rootInActiveWindow ?: return emptyList()
+        currentActionableNodes.clear()
+        val list = mutableListOf<ActionableNodeSnapshot>()
+        var refCounter = 1
+        walked = 0
+
+        val (screenWidth, screenHeight) = jarvisService?.getScreenDimensions() ?: (1080 to 2340)
+
+        walk(root) { node ->
+            val bounds = Rect()
+            runCatching { node.getBoundsInScreen(bounds) }
+            val isVisible = bounds.width() > 0 && bounds.height() > 0 &&
+                bounds.bottom >= 0 && bounds.top <= screenHeight &&
+                bounds.right >= 0 && bounds.left <= screenWidth
+
+            val text = node.text?.toString()?.trim().orEmpty()
+            val desc = node.contentDescription?.toString()?.trim().orEmpty()
+            val viewId = node.viewIdResourceName.orEmpty()
+            val className = node.className?.toString().orEmpty()
+
+            val isActionable = node.isClickable || node.isEditable || node.isScrollable ||
+                text.isNotBlank() || desc.isNotBlank()
+
+            if (isVisible && isActionable) {
+                val ref = "#$refCounter"
+                currentActionableNodes[ref] = node
+                currentActionableNodes[refCounter.toString()] = node
+                refCounter++
+
+                list += ActionableNodeSnapshot(
+                    tempRef = ref,
+                    packageName = node.packageName?.toString().orEmpty(),
+                    text = if (node.isPassword) "[password]" else text,
+                    contentDescription = desc,
+                    viewId = viewId,
+                    className = className,
+                    isClickable = node.isClickable,
+                    isEditable = node.isEditable,
+                    isScrollable = node.isScrollable,
+                    bounds = bounds,
+                )
+            }
+            list.size < 120
+        }
+        return list
+    }
+
+    /**
+     * Dumps the current screen snapshot with temporary references and logs to logcat under tag JARVIS_ACT.
+     */
+    fun dumpScreen(): String {
+        val root = service.rootInActiveWindow
+        val pkg = root?.packageName?.toString().orEmpty()
+        val label = appLabel(pkg)
+        val nodes = snapshotActionableNodes()
+        val builder = StringBuilder()
+        val header = "[JARVIS_ACT] Screen Snapshot for $label ($pkg) — ${nodes.size} actionable nodes:"
+        builder.appendLine(header)
+        Log.i("JARVIS_ACT", header)
+        for (node in nodes) {
+            val line = node.toCompactString()
+            builder.appendLine(line)
+            Log.i("JARVIS_ACT", line)
+        }
+        return builder.toString().trimEnd()
+    }
+
+    /**
+     * Executes an action on a specific node by its temporary reference (#1, #2, etc.).
+     * Strictly enforces safety rules:
+     * - Never types into or reveals password fields
+     * - Climbs parent chain to clickable ancestor if node is not directly marked clickable
+     * - Falls back to gesture tap at node center ONLY as last resort
+     * - Enforces per-app avoid rules (e.g. YouTube bottom nav Shorts tab)
+     */
+    suspend fun executeRefAction(
+        tempRef: String,
+        actionType: String,
+        textArgument: String? = null,
+        userGoal: String = "",
+    ): ScreenResult {
+        val cleanRef = if (tempRef.startsWith("#")) tempRef else "#$tempRef"
+        val node = currentActionableNodes[cleanRef]
+            ?: return ScreenResult(false, "Node $tempRef is no longer visible on screen.", verified = false)
+
+        val pkg = node.packageName?.toString().orEmpty()
+        val skill = AppSkillsRegistry.getSkill(pkg)
+
+        if (node.isPassword) {
+            Log.w("JARVIS_ACT", "executeRefAction: Refusing action on secure password node $tempRef")
+            return ScreenResult(false, "Jarvis will never read or type into secure password fields.", verified = false)
+        }
+
+        val bounds = Rect().also { node.getBoundsInScreen(it) }
+        val nodeSnapshot = ActionableNodeSnapshot(
+            tempRef = cleanRef,
+            packageName = pkg,
+            text = node.text?.toString().orEmpty(),
+            contentDescription = node.contentDescription?.toString().orEmpty(),
+            viewId = node.viewIdResourceName.orEmpty(),
+            className = node.className?.toString().orEmpty(),
+            isClickable = node.isClickable,
+            isEditable = node.isEditable,
+            isScrollable = node.isScrollable,
+            bounds = bounds,
+        )
+
+        if (skill != null) {
+            for (avoid in skill.avoidRules) {
+                if (avoid.shouldAvoid(nodeSnapshot, userGoal)) {
+                    Log.w("JARVIS_ACT", "executeRefAction: Avoid rule triggered for node $cleanRef: ${avoid.reason}")
+                    return ScreenResult(false, "Action on $cleanRef was prevented by app safety rule: ${avoid.reason}", verified = false)
+                }
+            }
+        }
+
+        val before = captureFingerprint()
+
+        when (actionType.lowercase(Locale.ROOT)) {
+            "click", "tap" -> {
+                Log.d("JARVIS_ACT", "executeRefAction: Clicking $cleanRef (${nodeSnapshot.viewId})")
+                val target = clickableTarget(node) ?: node
+                var clicked = runCatching {
+                    target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                }.getOrDefault(false)
+
+                if (!clicked && bounds.width() > 0 && bounds.height() > 0) {
+                    Log.d("JARVIS_ACT", "executeRefAction: ACTION_CLICK returned false, using center gesture tap as last resort (${bounds.centerX()}, ${bounds.centerY()})")
+                    clicked = jarvisService?.dispatchTapGesture(bounds.exactCenterX(), bounds.exactCenterY()) ?: false
+                }
+                val outcome = pollForClickVerification(before, nodeSnapshot.text.ifBlank { nodeSnapshot.contentDescription })
+                return ScreenResult(
+                    success = clicked || outcome.verified,
+                    message = "Tapped $cleanRef (verified: ${outcome.signal})",
+                    verified = outcome.verified,
+                    verificationSignal = outcome.signal,
+                )
+            }
+
+            "set_text", "type" -> {
+                val text = textArgument.orEmpty()
+                Log.d("JARVIS_ACT", "executeRefAction: Setting text on $cleanRef: \"$text\"")
+                val args = Bundle().apply {
+                    putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+                }
+                var ok = runCatching {
+                    node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                }.getOrDefault(false)
+                if (!ok) {
+                    runCatching { node.performAction(AccessibilityNodeInfo.ACTION_FOCUS) }
+                    runCatching { node.performAction(AccessibilityNodeInfo.ACTION_CLICK) }
+                    ok = runCatching {
+                        node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                    }.getOrDefault(false)
+                }
+                val after = captureFingerprint()
+                val outcome = StepVerificationEvaluator.evaluateTextEntry(before, after, text)
+                return ScreenResult(
+                    success = ok || outcome.verified,
+                    message = "Typed \"$text\" into $cleanRef",
+                    verified = outcome.verified,
+                    verificationSignal = outcome.signal,
+                )
+            }
+
+            "ime_enter", "submit", "enter" -> {
+                Log.d("JARVIS_ACT", "executeRefAction: Executing IME action on $cleanRef")
+                val ok = jarvisService?.performImeAction() ?: false
+                return ScreenResult(ok, if (ok) "Submitted search/enter on $cleanRef" else "Could not perform IME submit", verified = ok)
+            }
+
+            "scroll_down", "scroll_forward" -> {
+                val ok = runCatching { node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) }.getOrDefault(false)
+                if (!ok) return scrollDirectionVerified("down")
+                return ScreenResult(true, "Scrolled down", verified = true)
+            }
+
+            "scroll_up", "scroll_backward" -> {
+                val ok = runCatching { node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) }.getOrDefault(false)
+                if (!ok) return scrollDirectionVerified("up")
+                return ScreenResult(true, "Scrolled up", verified = true)
+            }
+
+            else -> {
+                return ScreenResult(false, "Unknown action \"$actionType\" on $cleanRef", verified = false)
+            }
+        }
+    }
+
+    /**
+     * Waits for a window-state change or expected package to reach foreground, with timeout.
+     */
+    suspend fun awaitWindowState(expectedPackage: String? = null, timeoutMs: Long = 2500L): Boolean {
+        val startTime = System.currentTimeMillis()
+        val startSeq = jarvisService?.eventTelemetry()?.lastWindowChangeSeq ?: 0L
+        while (System.currentTimeMillis() - startTime < timeoutMs) {
+            val currentPkg = foregroundPackage()
+            val currentSeq = jarvisService?.eventTelemetry()?.lastWindowChangeSeq ?: 0L
+            if (expectedPackage != null && currentPkg == expectedPackage) {
+                return true
+            }
+            if (expectedPackage == null && currentSeq > startSeq) {
+                return true
+            }
+            delay(50L)
+        }
+        return false
+    }
 
     /**
      * Returns the human-readable text/contentDescription of the accessibility node
