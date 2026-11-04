@@ -124,10 +124,10 @@ fun JarvisApp(vm: JarvisViewModel = viewModel()) {
                 state.onboardingComplete &&
                 state.tab != JarvisTab.HOME,
         ) {
-            if (state.tab == JarvisTab.PERMISSIONS) {
-                vm.closePermissions()
-            } else {
-                vm.closeSettings()
+            when (state.tab) {
+                JarvisTab.PERMISSIONS -> vm.closePermissions()
+                JarvisTab.DIAGNOSTICS -> vm.closeDiagnostics()
+                else -> vm.closeSettings()
             }
         }
 
@@ -256,6 +256,19 @@ fun JarvisApp(vm: JarvisViewModel = viewModel()) {
                                 onToggleBackgroundListening = vm::toggleBackgroundListening,
                                 onSaveActionConfirmations = vm::saveActionConfirmationSettings,
                             )
+
+                            JarvisTab.DIAGNOSTICS -> {
+                                val core = vm.coreInstance()
+                                val killSwitch by core.proactiveCallEngine.killSwitchActive.collectAsStateWithLifecycle()
+                                FeasibilityDiagnosticsScreen(
+                                    probeEngine = core.feasibilityProbeEngine,
+                                    receptionistEngine = core.callReceptionistEngine,
+                                    messagingEngine = core.socialMessagingEngine,
+                                    killSwitchActive = killSwitch,
+                                    onToggleKillSwitch = core::setProactiveKillSwitch,
+                                    onBack = vm::closeDiagnostics,
+                                )
+                            }
                         }
                     }
 

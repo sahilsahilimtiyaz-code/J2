@@ -571,3 +571,81 @@ class EndWhatsAppCallTool : Tool {
         return ToolResult(result.success, result.message)
     }
 }
+
+/**
+ * Multi-app Social Voice Note Tool (`send_social_voice_note`):
+ * Sends a voice message in Jarvis's configured voice across WhatsApp, Instagram,
+ * Telegram, Messenger, or SMS using data-driven [com.jarvis.assistant.service.SocialAppProfileRegistry]
+ * selectors, hold-to-record / slide-to-lock gestures, and post-step verification.
+ */
+class SendSocialVoiceNoteTool : Tool {
+
+    override val definition: ToolDefinition = ToolDefinition(
+        name = "send_social_voice_note",
+        description = "Send a voice message in Jarvis's voice across social media apps: " +
+            "WhatsApp, Instagram, Telegram, Messenger, or SMS. Uses the app's SocialAppProfile " +
+            "to open the recipient's chat, hold/lock the voice-note microphone, play Jarvis's " +
+            "voice note, and press Send (after owner confirmation).",
+        parameters = objectSchema(
+            required = listOf("app", "recipient", "message"),
+            properties = mapOf(
+                "app" to stringProperty(
+                    "Target social app: 'whatsapp', 'instagram', 'telegram', 'messenger', or 'sms'.",
+                ),
+                "recipient" to stringProperty(
+                    "Contact name, username, handle, or phone number (or 'last' to reply to the latest notification from that app).",
+                ),
+                "message" to stringProperty(
+                    "Spoken text for Jarvis to deliver in the voice note (1-3 short sentences).",
+                ),
+            ),
+        ),
+    )
+
+    override val label = "Send social voice note (WhatsApp / Instagram / Telegram)"
+    override val category = ToolCategory.CONTACTS
+
+    override fun availability(context: Context): ToolAvailability {
+        val connected = JarvisAccessibilityService.isConnected()
+        return ToolAvailability(
+            label = if (connected) "Ready" else "Needs screen control",
+            ready = connected,
+        )
+    }
+
+    override suspend fun execute(arguments: JsonObject, context: ToolContext): ToolResult {
+        val rawApp = arguments.argString("app")?.trim().orEmpty().ifBlank { "whatsapp" }
+        val rawRecipient = arguments.argString("recipient")?.trim().orEmpty()
+        val rawMessage = arguments.argString("message")?.trim().orEmpty().take(700)
+        if (rawRecipient.isBlank() || rawMessage.isBlank()) {
+            return ToolResult(false, "Provide the social app, recipient, and voice message text.")
+        }
+
+        val profile = com.jarvis.assistant.service.SocialAppProfileRegistry.findByPackageOrName(rawApp)
+            ?: return ToolResult(
+                false,
+                "Unsupported social app '$rawApp'. Supported apps: WhatsApp, Instagram, Telegram, Messenger, SMS.",
+            )
+
+        val core = runCatching {
+            com.jarvis.assistant.core.JarvisCore.get(context.appContext)
+        }.getOrNull() ?: return ToolResult(false, "Jarvis is not initialised yet.")
+
+        val approved = context.confirmation.confirm(
+            title = "Send ${profile.displayName} voice message to $rawRecipient?",
+            detail = "Voice note: \u201c${rawMessage.take(300)}\u201d\n\n" +
+                "Jarvis will render this in his voice and record/send it in ${profile.displayName}.",
+        )
+        if (!approved) {
+            return ToolResult(false, "The owner declined the ${profile.displayName} voice message.")
+        }
+
+        val result = core.sendSocialVoiceNoteNow(
+            appQuery = profile.appId,
+            recipient = rawRecipient,
+            message = rawMessage,
+        )
+        return ToolResult(result.success, result.message)
+    }
+}
+

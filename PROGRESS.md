@@ -537,4 +537,31 @@
   - **Preserved Immediate Conversational & Tool Context:** Enriched `JarvisCore.historyForPrompt()` with `[Executed tools: ...]` annotations so follow-up commands know which app/action just ran.
   - **Compacted Hero When Chatting:** `HomeHudHero` in `HomeScreen.kt` automatically switches to compact mode when `state.messages.size > 1`, giving chat bubbles 70%+ of the screen.
 
+## 2026-11-04 (Part 2) — Phase 0 Feasibility Probes (`P1`–`P6`), Call Receptionist, Multi-App Social Messaging & Voice Notes, and 4-Rung Perception Ladder
+
+- [x] **Phase 0 Feasibility Probe Engine & Hidden Diagnostics Lab (`FeasibilityProbeEngine.kt`, `FeasibilityDiagnosticsScreen.kt`):**
+  - Built interactive step-by-step Diagnostics Lab accessible via 5-tap gesture on the `J.A.R.V.I.S.` header in Settings, via **Settings → System / Security → Phase 0 Probes Lab**, or via `run phase 0 probes` in chat.
+  - **P1 Device:** Captures Android version/SDK, OEM, `AdvancedProtectionManager` status, AccessibilityService, NotificationListenerService, and sideloaded Restricted Settings state.
+  - **P2 Notifications:** Extended `JarvisNotificationListenerService` with `NotificationProbeTelemetry` to log `package`, `category`, `actionTitles`, and `RemoteInput` keys (`inline_reply`), plus Rung-1 `sendInlineReply` and `triggerNotificationAction`.
+  - **P3 Screens:** Dumps the accessibility node tree for WhatsApp/social incoming-call, in-call, chat, and search screens and tests `AccessibilityService.takeScreenshot()` to detect blank or `FLAG_SECURE`-blocked screens.
+  - **P4 Audio In:** Executes inside `JarvisAccessibilityService` to test `AudioRecord` capture across `VOICE_RECOGNITION`, `MIC`, `VOICE_COMMUNICATION`, and `UNPROCESSED` during active WhatsApp and cellular calls (speakerphone ON/OFF), registers `AudioRecordingCallback` to log `isClientSilenced`, peak, and RMS levels, and records owner observation.
+  - **P5 Audio Out:** Plays a 660 Hz test tone and TTS sentence across `USAGE_MEDIA`, `USAGE_VOICE_COMMUNICATION`, and `USAGE_ASSISTANCE_ACCESSIBILITY`, logs active output routes, and prompts the owner to confirm whether the caller heard Jarvis over loudspeaker (`PASS` / `PARTIAL` / `FAIL`).
+  - **P6 Control:** Tests answering/ending WhatsApp calls (notification action vs accessibility click), speakerphone toggling, and cellular `TelecomManager` (`acceptRingingCall` / `endCall` with `ANSWER_PHONE_CALLS`).
+  - **Shareable Evidence Report & Path A/B/C Recommendation:** Persists and exports `/files/probe_reports/jarvis_phase0_probe_report.md` and `.json` via `FileProvider`, and keeps Path B (on-device consumer app call audio) locked until P4 and P5 both record `PASS` on the physical phone, defaulting safely to Path C (Decline-and-Message + Call Screening).
+- [x] **Part 1 — Call Receptionist Engine (`CallReceptionistEngine` in `CallReceptionistAndMessagingEngine.kt`):**
+  - Discloses AI assistant identity on line 1 (`"Hi, this is Jarvis, [Name]'s AI assistant. [He/She/They] can't take the call right now. How can I help?"`), never claims to be human, confirms AI if asked, stays `<= 20` words per turn, asks one question at a time to collect caller name, organization, reason, urgency, deadline, and callback number/time, reads key details back once, and closes politely (`"I'll pass this on. Thanks for calling."`).
+  - Strictly refuses OTPs/verification codes, location, schedule, financial info, and payment/contract commitments.
+  - Detects spam/robocalls (polite fast exit), VIPs/emergencies (immediate owner alert), voicemail/IVR/bot loops (hangs up), and silence (reprompts once, then offers to text).
+  - Feeds completed call `Event` into `ProactiveIncidentCallEngine` and records every call in `ActionLedger`.
+  - Supports modes `OFF`, `SCREEN_UNKNOWN`, `ANSWER_WHEN_BUSY`, `ANSWER_ALL`, plus allowlist, blocklist, VIP list, Path C Decline-and-Message (`"Jarvis here, [Name]'s assistant. What do you need?"`), and all 5 Simulated Caller Acceptance Scenarios (`simulate caller 1..5`).
+- [x] **Part 2 — Multi-App Social Messaging & Cross-App Voice Notes (`SocialMessagingEngine`, `SocialAppProfileRegistry`, `SendSocialVoiceNoteTool`):**
+  - Data-driven `SocialAppProfileRegistry` covering WhatsApp, WhatsApp Business, Instagram, Telegram, Facebook Messenger, and SMS.
+  - Default `DRAFT` mode creates pending reply drafts and never sends without explicit owner approval (`approveAndSendDraft`).
+  - `AUTO` mode replies via Notification `RemoteInput` first (UI fallback second) only to allowlisted contacts, discloses `[Jarvis AI Assistant]` on the first reply in a thread, blocks non-allowlisted groups, rate-limits per contact, and strictly ignores bank/OTP/UPI/payment messages.
+  - Added `SendSocialVoiceNoteTool` (`send_social_voice_note`) and `JarvisCore.sendSocialVoiceNoteNow` so Jarvis can send voice messages across WhatsApp, Instagram, Telegram, Messenger, and SMS.
+- [x] **Part 3 — 4-Rung Perception Ladder (`PerceptionLadderEngine.kt`):**
+  - Rung 1 (Notification `RemoteInput` / intents / deep links) → Rung 2 (Accessibility tree `viewId` / `text` / `contentDescription` / `bounds` with disambiguation) → Rung 3 (`SetOfMarkAnnotator` numbered bounding boxes `#1`, `#2`... on downscaled screenshot + node list) → Rung 4 (`verifyStepAndRecover` post-step verification that presses Back, invalidates `SelectorCache`, and retries with the next rung on mismatch).
+  - Enforces banking/UPI/password app blocklist and RED-tier confirmation on pay/send money/delete/purchase buttons.
+
+
 

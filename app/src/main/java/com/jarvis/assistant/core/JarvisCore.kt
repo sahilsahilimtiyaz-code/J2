@@ -447,17 +447,74 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         registerWatcher(com.jarvis.assistant.service.DeviceOperationsHealthWatcher())
     }
 
+    val feasibilityProbeEngine = com.jarvis.assistant.service.FeasibilityProbeEngine(
+        context = appContext,
+        onSpeakTestSentence = { text -> speak(text) },
+    )
+
+    val selectorCache = com.jarvis.assistant.accessibility.SelectorCache()
+
+    val perceptionLadderEngine = com.jarvis.assistant.accessibility.PerceptionLadderEngine(
+        selectorCache = selectorCache,
+    )
+
+    val callReceptionistEngine = com.jarvis.assistant.service.CallReceptionistEngine(
+        proactiveCallEngine = proactiveCallEngine,
+        onSendDeclineAndMessage = { callerNumber, packageName, messageText ->
+            val (inlineSent, inlineMsg) = com.jarvis.assistant.service.JarvisNotificationListenerService.sendInlineReply(
+                keyOrSenderQuery = callerNumber,
+                replyText = messageText,
+                packageFilter = packageName,
+            )
+            if (inlineSent) {
+                true to inlineMsg
+            } else if (callerNumber.isNotBlank()) {
+                val smsSent = runCatching {
+                    val smsManager = appContext.getSystemService(android.telephony.SmsManager::class.java)
+                    smsManager?.sendTextMessage(callerNumber, null, messageText, null, null)
+                    smsManager != null
+                }.getOrDefault(false)
+                smsSent to (if (smsSent) "Sent SMS to $callerNumber" else "Failed to send SMS to $callerNumber")
+            } else {
+                false to "No inline reply action or phone number available"
+            }
+        },
+    )
+
+    val socialMessagingEngine = com.jarvis.assistant.service.SocialMessagingEngine(
+        proactiveCallEngine = proactiveCallEngine,
+        inlineReplySender = { keyOrSender, replyText, packageName ->
+            com.jarvis.assistant.service.JarvisNotificationListenerService.sendInlineReply(
+                keyOrSenderQuery = keyOrSender,
+                replyText = replyText,
+                packageFilter = packageName,
+            )
+        },
+        uiFallbackSender = { sender, replyText, packageName ->
+            val controller = JarvisAccessibilityService.controller()
+            if (controller != null && (packageName == "com.whatsapp" || packageName == "com.whatsapp.w4b")) {
+                val res = kotlinx.coroutines.runBlocking {
+                    com.jarvis.assistant.tools.AppAutomation.sendToContactByName(controller, sender, replyText)
+                }
+                res.success to res.message
+            } else {
+                false to "UI fallback unavailable for $packageName"
+            }
+        },
+    )
+
     fun triggerProactiveSimulation(scenarioCode: String) {
         send("simulate $scenarioCode")
     }
 
     fun setProactiveKillSwitch(enabled: Boolean) {
         proactiveCallEngine.setKillSwitch(enabled)
+        perceptionLadderEngine.globalKillSwitchActive = enabled
         if (enabled) {
             interruptSpeech()
-            _state.update { it.copy(notice = "Global Kill Switch enabled: all autonomous calls and actions halted.") }
+            _state.update { it.copy(notice = "Global Kill Switch enabled: all autonomous calls, messages, and UI actions halted.") }
         } else {
-            _state.update { it.copy(notice = "Global Kill Switch disabled: Chief-of-Staff engine online.") }
+            _state.update { it.copy(notice = "Global Kill Switch disabled: Chief-of-Staff & Receptionist engines online.") }
         }
     }
 
@@ -493,9 +550,23 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         JarvisAccessibilityService.windowStateListener = { pkg, className ->
             handleWhatsAppWindowEvent(pkg, className)
         }
-        // Incoming WhatsApp text notifications feed the opt-in voice auto-reply.
+        // Incoming social/WhatsApp text notifications feed both the Messaging Receptionist
+        // (Draft/Auto modes) and the opt-in voice auto-reply.
         JarvisNotificationListenerService.incomingWhatsAppListener = { event ->
-            handleIncomingWhatsAppMessage(event)
+            scope.launch {
+                runCatching {
+                    val ownerName = settings.value.profile.name.ifBlank { "Sahil" }
+                    socialMessagingEngine.handleIncomingMessage(
+                        sender = event.sender,
+                        body = event.body,
+                        packageName = event.packageName,
+                        ownerName = ownerName,
+                    )
+                }
+            }
+            if (event.packageName == WhatsAppVoiceNotes.PACKAGE || event.packageName == WhatsAppVoiceNotes.BUSINESS_PACKAGE) {
+                handleIncomingWhatsAppMessage(event)
+            }
         }
     }
 
@@ -929,6 +1000,92 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                 rejectConfirmation()
                 return
             }
+        }
+
+        // 1.4. Phase 0 Feasibility Probes & Simulated Caller Commands:
+        // "run phase 0 probes", "run probes", "simulate caller <1..5|customer|spam|vip|otp|ivr>"
+        val lowerTrim = clean.lowercase(Locale.ROOT)
+        if (lowerTrim == "run phase 0 probes" || lowerTrim == "run probes" || lowerTrim == "run feasibility probes") {
+            scope.launch {
+                val p1 = feasibilityProbeEngine.runP1DeviceProbe()
+                val p2 = feasibilityProbeEngine.runP2NotificationsProbe()
+                val p3 = feasibilityProbeEngine.runP3ScreenAndScreenshotProbe()
+                val p6 = feasibilityProbeEngine.runP6CallControlProbe()
+                val probeState = feasibilityProbeEngine.state.value
+                val reportSummary = buildString {
+                    appendLine("Phase 0 Feasibility Probes (Automated Pass):")
+                    appendLine("• P1 Device: ${p1.verdict}")
+                    appendLine("• P2 Notifications: ${p2.verdict}")
+                    appendLine("• P3 Screens: ${p3.verdict}")
+                    appendLine("• P6 Control: ${p6.verdict}")
+                    appendLine("• Recommended Path: ${probeState.recommendedPath()} (Path B Unlocked: ${probeState.isPathBUnlocked()})")
+                    append("Open Settings → System → Phase 0 Probes Lab to run interactive call audio probes P4 & P5 and export the full report.")
+                }
+                _state.update { state ->
+                    state.copy(
+                        messages = state.messages + listOf(
+                            CoreMessage(id = newId("user"), author = ChatAuthor.USER, text = clean),
+                            CoreMessage(
+                                id = newId("reply"),
+                                author = ChatAuthor.JARVIS,
+                                text = reportSummary,
+                                providerName = "Phase 0 Probe Engine",
+                            ),
+                        ),
+                        generating = false,
+                        error = null,
+                    )
+                }
+            }
+            return
+        }
+
+        val callerSimMatch = Regex("""^simulate\s+caller\s+([a-zA-Z0-9_-]+)$""", RegexOption.IGNORE_CASE).find(clean)
+        if (callerSimMatch != null) {
+            val rawScenario = callerSimMatch.groupValues[1].lowercase(Locale.ROOT)
+            val scenario = when (rawScenario) {
+                "1", "customer", "inquiry", "customer_inquiry" ->
+                    com.jarvis.assistant.service.SimulatedCallerScenario.CUSTOMER_INQUIRY
+                "2", "spam", "sales", "sales_spam" ->
+                    com.jarvis.assistant.service.SimulatedCallerScenario.SALES_SPAM
+                "3", "vip", "emergency", "vip_emergency" ->
+                    com.jarvis.assistant.service.SimulatedCallerScenario.VIP_EMERGENCY
+                "4", "otp", "social", "social_engineering", "social_engineering_otp" ->
+                    com.jarvis.assistant.service.SimulatedCallerScenario.SOCIAL_ENGINEERING_OTP
+                "5", "ivr", "voicemail", "loop", "voicemail_ivr_loop" ->
+                    com.jarvis.assistant.service.SimulatedCallerScenario.VOICEMAIL_IVR_LOOP
+                else -> com.jarvis.assistant.service.SimulatedCallerScenario.CUSTOMER_INQUIRY
+            }
+            scope.launch {
+                val ownerName = settings.value.profile.name.ifBlank { "Sahil" }
+                val report = callReceptionistEngine.runSimulatedCallerScenario(scenario, ownerName = ownerName)
+                val transcriptSummary = buildString {
+                    appendLine("Simulated Caller Scenario: ${scenario.name}")
+                    appendLine("Classification: ${report.classification} | Urgency: ${report.urgency}")
+                    appendLine("Caller: ${report.callerName} | Reason: ${report.reason} | Callback: ${report.callbackNumberOrTime}")
+                    appendLine("Summary: ${report.summary}")
+                    appendLine("Transcript:")
+                    report.transcript.forEach { t ->
+                        appendLine("  $t")
+                    }
+                }.trim()
+                _state.update { state ->
+                    state.copy(
+                        messages = state.messages + listOf(
+                            CoreMessage(id = newId("user"), author = ChatAuthor.USER, text = clean),
+                            CoreMessage(
+                                id = newId("reply"),
+                                author = ChatAuthor.JARVIS,
+                                text = transcriptSummary,
+                                providerName = "Call Receptionist (${scenario.name})",
+                            ),
+                        ),
+                        generating = false,
+                        error = null,
+                    )
+                }
+            }
+            return
         }
 
         // 1.5. Debug & Verification Command: "simulate <scenario>" (e.g., "simulate A", "simulate B", "simulate C")
@@ -4995,6 +5152,263 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             if (!keepRenderedFile) {
                 rendered?.file?.delete()
             }
+            _state.update { it.copy(toolActivity = null) }
+            synchronized(voiceNoteLock) { voiceNoteActive = false }
+            if (resumeListening && !userPausedMic) {
+                runCatching { startListeningInternal(interrupt = false, isAutoLoop = true) }
+            }
+        }
+    }
+
+    /**
+     * Multi-app Social Voice Note sender (`send_social_voice_note`):
+     * Supports WhatsApp, WhatsApp Business, Instagram, Telegram, Messenger, and SMS
+     * using [com.jarvis.assistant.service.SocialAppProfileRegistry].
+     */
+    suspend fun sendSocialVoiceNoteNow(
+        appQuery: String,
+        recipient: String,
+        message: String,
+    ): ScreenResult {
+        val profile = com.jarvis.assistant.service.SocialAppProfileRegistry.findByPackageOrName(appQuery)
+            ?: return ScreenResult(
+                false,
+                "Unsupported social app '$appQuery'. Supported: WhatsApp, Instagram, Telegram, Messenger, SMS.",
+                verified = false,
+            )
+
+        if (profile.appId == "whatsapp" || profile.appId == "whatsapp_business") {
+            return sendWhatsAppVoiceNoteNow(
+                recipient = recipient,
+                message = message,
+                autoReply = false,
+                displayName = recipient,
+            )
+        }
+
+        val current = settings.value
+        if (!current.safety.voiceNoteEnabled) {
+            return ScreenResult(
+                false,
+                "Voice messages are switched off in Settings, Security.",
+                verified = false,
+            )
+        }
+        if (!current.safety.screenControlEnabled || !ready()) {
+            return ScreenResult(
+                false,
+                "Screen control is off or disconnected, so I cannot reach ${profile.displayName}'s voice recorder.",
+                verified = false,
+            )
+        }
+        val appInstalled = runCatching {
+            appContext.packageManager.getPackageInfo(profile.packageName, 0)
+        }.isSuccess
+        if (!appInstalled) {
+            return ScreenResult(
+                false,
+                "${profile.displayName} (${profile.packageName}) is not installed on this phone, sir.",
+                verified = false,
+            )
+        }
+
+        val spoken = WhatsAppVoiceNotes.sanitizeSpokenText(
+            raw = message,
+            maxChars = current.safety.voiceNoteMaxChars,
+        )
+        if (spoken.isBlank()) {
+            return ScreenResult(false, "There was nothing to say in the voice note.", verified = false)
+        }
+
+        synchronized(voiceNoteLock) {
+            if (voiceNoteActive) {
+                return ScreenResult(
+                    false,
+                    "I am already recording a voice note, sir.",
+                    verified = false,
+                )
+            }
+            voiceNoteActive = true
+        }
+
+        var rendered: RenderedVoiceNote? = null
+        var resumeListening = false
+        try {
+            val controller = JarvisAccessibilityService.controller()
+                ?: return ScreenResult(
+                    false,
+                    "Screen control is disconnected, so I cannot reach ${profile.displayName}.",
+                    verified = false,
+                )
+            voiceNotePlayer.externalAudioRoute()?.let { route ->
+                return ScreenResult(
+                    false,
+                    "A $route is connected. ${profile.displayName} can only record my voice through the loudspeaker.",
+                    verified = false,
+                )
+            }
+
+            interruptSpeech()
+            val note = voiceNoteStudio.render(spoken, ttsConfig(current.voice))
+                ?: return ScreenResult(
+                    false,
+                    voiceNoteStudio.lastError ?: "I could not render the voice note.",
+                    verified = false,
+                )
+            rendered = note
+
+            resumeListening = _state.value.micLocked && !userPausedMic
+            pauseMainListeningForCall()
+            savedVoiceNoteVolume = audioManager?.getStreamVolume(AudioManager.STREAM_MUSIC)
+            audioManager?.let { manager ->
+                manager.setStreamVolume(
+                    AudioManager.STREAM_MUSIC,
+                    manager.getStreamMaxVolume(AudioManager.STREAM_MUSIC),
+                    0,
+                )
+            }
+
+            _state.update {
+                it.copy(toolActivity = "Opening ${profile.displayName} for $recipient...")
+            }
+
+            // Launch the target social app (or deep link if template matches)
+            val deepLinkOpened = profile.chatDeepLinkTemplate?.let { template ->
+                val cleanTarget = recipient.trim().removePrefix("@")
+                val url = template
+                    .replace("{phone}", cleanTarget)
+                    .replace("{handle}", cleanTarget)
+                runCatching {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                        setPackage(profile.packageName)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    }
+                    appContext.startActivity(intent)
+                    true
+                }.getOrDefault(false)
+            } ?: false
+
+            if (!deepLinkOpened) {
+                val launch = appContext.packageManager.getLaunchIntentForPackage(profile.packageName)
+                    ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    ?: return ScreenResult(false, "${profile.displayName} has no launchable activity.", verified = false)
+                appContext.startActivity(launch)
+            }
+            delay(1_800L)
+
+            // Search for recipient if not already inside the chat
+            com.jarvis.assistant.tools.AppAutomation.findWhatsAppContactRowSpot(recipient)?.let { rowBounds ->
+                com.jarvis.assistant.tools.AppAutomation.tapSpotOrAncestor(rowBounds)
+                delay(1_200L)
+            }
+
+            // Locate voice-note mic button via SocialAppProfile selectors
+            var micSpot: android.graphics.Rect? = null
+            for (micId in profile.voiceNoteMicViewIds) {
+                val node = com.jarvis.assistant.tools.AppAutomation.findByViewId(micId)
+                val bounds = node?.let { com.jarvis.assistant.tools.AppAutomation.boundsOf(it) }
+                if (bounds != null) {
+                    micSpot = bounds
+                    break
+                }
+            }
+            if (micSpot == null) {
+                micSpot = com.jarvis.assistant.tools.AppAutomation.findSpot(predicate = { node, bounds ->
+                    val label = com.jarvis.assistant.tools.AppAutomation.labelOf(node).lowercase()
+                    bounds.centerY() > 1_000 &&
+                        profile.voiceNoteMicLabels.any { hint -> label.contains(hint.lowercase()) }
+                })
+            }
+
+            val service = JarvisAccessibilityService.serviceInstance()
+            if (micSpot != null && service != null) {
+                _state.update {
+                    it.copy(toolActivity = "Recording ${profile.displayName} voice message for $recipient...")
+                }
+                val holdMs = (note.durationMs + 1_600L).coerceIn(2_400L, 60_000L)
+                val lockEndY = (micSpot.centerY() - profile.voiceNoteSlideUpPx).coerceAtLeast(200).toFloat()
+                val gestureOk = coroutineScope {
+                    val holdDone = CompletableDeferred<Boolean>()
+                    launch {
+                        val ok = if (profile.voiceNoteSlideUpPx > 0) {
+                            service.dispatchSwipeGesture(
+                                startX = micSpot.centerX().toFloat(),
+                                startY = micSpot.centerY().toFloat(),
+                                endX = micSpot.centerX().toFloat(),
+                                endY = lockEndY,
+                                durationMs = 950L,
+                            )
+                        } else {
+                            service.dispatchTapGesture(
+                                x = micSpot.centerX().toFloat(),
+                                y = micSpot.centerY().toFloat(),
+                                durationMs = holdMs,
+                            )
+                        }
+                        holdDone.complete(ok)
+                    }
+                    delay(650L)
+                    val played = voiceNotePlayer.play(note.file, note.durationMs + 4_000L)
+                    val held = holdDone.await()
+                    played && held
+                }
+
+                if (gestureOk) {
+                    delay(500L)
+                    // Press Send if slide-to-lock left a Send button visible
+                    for (sendId in profile.voiceNoteSendViewIds) {
+                        val sendNode = com.jarvis.assistant.tools.AppAutomation.findByViewId(sendId)
+                        val sendBounds = sendNode?.let { com.jarvis.assistant.tools.AppAutomation.boundsOf(it) }
+                        if (sendBounds != null) {
+                            com.jarvis.assistant.tools.AppAutomation.tapSpotOrAncestor(sendBounds)
+                            delay(900L)
+                            break
+                        }
+                    }
+                    val detail = "Sent ${profile.displayName} voice message to $recipient."
+                    proactiveCallEngine.actionLedger.record(
+                        incidentId = "voice_note_${System.currentTimeMillis()}",
+                        toolName = "send_social_voice_note",
+                        tier = com.jarvis.assistant.service.PermissionTier.RED,
+                        summary = detail,
+                        spokenSummary = detail,
+                        success = true,
+                        verified = true,
+                        resultDetail = "${profile.displayName} -> $recipient",
+                    )
+                    logVoiceNoteEvent("send_social_voice_note", detail, true)
+                    return ScreenResult(true, detail, verified = true)
+                }
+            }
+
+            // Safe fallback: share the rendered voice file directly to the target social app package
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                appContext,
+                "${appContext.packageName}.fileprovider",
+                note.file,
+            )
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "audio/wav"
+                setPackage(profile.packageName)
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val shared = runCatching { appContext.startActivity(shareIntent); true }.getOrDefault(false)
+            val msg = if (shared) {
+                "Prepared the voice message for $recipient and opened ${profile.displayName}'s share sheet to send it."
+            } else {
+                "Opened ${profile.displayName} for $recipient, but could not locate its voice-note microphone button."
+            }
+            logVoiceNoteEvent("send_social_voice_note", msg, shared)
+            return ScreenResult(shared, msg, verified = shared)
+        } finally {
+            voiceNotePlayer.stop()
+            savedVoiceNoteVolume?.let { volume ->
+                runCatching {
+                    audioManager?.setStreamVolume(AudioManager.STREAM_MUSIC, volume, 0)
+                }
+            }
+            savedVoiceNoteVolume = null
             _state.update { it.copy(toolActivity = null) }
             synchronized(voiceNoteLock) { voiceNoteActive = false }
             if (resumeListening && !userPausedMic) {

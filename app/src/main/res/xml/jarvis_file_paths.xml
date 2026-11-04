@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
     <cache-path name="voice_notes" path="voice_notes/" />
+    <files-path name="probe_reports" path="probe_reports/" />
+    <cache-path name="probe_reports_cache" path="probe_reports/" />
 </paths>

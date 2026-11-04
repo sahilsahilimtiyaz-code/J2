@@ -13,7 +13,7 @@ import com.jarvis.assistant.tools.ToolSummary
 
 enum class ChatAuthor { USER, JARVIS }
 
-enum class JarvisTab { HOME, MEMORY, TOOLS, LOG, SKILLS, PROPOSALS, SETTINGS, PERMISSIONS }
+enum class JarvisTab { HOME, MEMORY, TOOLS, LOG, SKILLS, PROPOSALS, SETTINGS, PERMISSIONS, DIAGNOSTICS }
 
 data class ChatMessageUi(
     val id: String,

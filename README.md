@@ -276,3 +276,92 @@ Screen control is powered by `HumanTouchEngine.kt`, `ScreenController.kt`, and `
   - **Mode A (Native Mic Recording):** Opens the target chat, locates the bottom-right voice note mic button (`voice_note_btn`), slides up to lock recording, speaks the message acoustically, and taps Send only after owner confirmation.
   - **Mode B (Generated Audio File Attachment):** Generates a high-clarity motivational WAV file via TTS and attaches it to the chat with transparent disclosure that it is sent as an audio file rather than a live mic recording.
 
+---
+
+## Phase 0 Feasibility Probes, Call & Message Receptionist, Multi-App Social Voice Notes & 4-Rung Perception Ladder
+
+### 1. How to Open & Run Phase 0 Feasibility Probes (`P1`–`P6`) on Your Phone
+
+Android restricts microphone capture during active cellular/VoIP calls (`isClientSilenced`), with a narrow compatibility exception for `AccessibilityService` using `AudioSource.VOICE_RECOGNITION`, and call echo cancellation (AEC) may suppress loudspeaker TTS. **Test on your phone first — never assume.**
+
+1. **Open the Phase 0 Feasibility Probe Lab:**
+   - Open **Settings → System** (or **Settings → Security**) and tap **`PHASE 0 PROBES & CALL/MESSAGE RECEPTIONIST (OPEN LAB)`**, **OR**
+   - Tap the **`J.A.R.V.I.S.`** title in the top header of the Settings screen **5 times**, **OR**
+   - Type/say **`run phase 0 probes`** in the Home chat.
+2. **Run each probe step-by-step while placing test calls/messages from a second phone:**
+   - **P1 Device (`RUN AUTOMATED PROBE`):** Logs Android SDK/release, OEM, `AdvancedProtectionManager` state, Accessibility Service connection, NotificationListener status, and sideloaded Restricted Settings status.
+   - **P2 Notifications (`RUN AUTOMATED PROBE`):** Send a real WhatsApp message and place a WhatsApp call from another phone; P2 logs `package`, `category`, `actionTitles`, and `RemoteInput` keys (`inline_reply`), plus lets you test firing inline Reply / Answer / Decline notification actions.
+   - **P3 Screens (`RUN AUTOMATED PROBE`):** Open WhatsApp incoming-call, in-call, chat, and contact-search screens and tap Run; P3 dumps the accessibility node tree and tests `AccessibilityService.takeScreenshot()` to check if any screen comes back blank or blocked (`FLAG_SECURE`).
+   - **P4 Audio In (`RUN AUDIO IN PROBE`):** While on an active WhatsApp or cellular call (test with speakerphone ON and OFF), tap Run. From inside `JarvisAccessibilityService`, P4 captures audio across `VOICE_RECOGNITION`, `MIC`, `VOICE_COMMUNICATION`, and `UNPROCESSED`, registers `AudioRecordingCallback`, logs `isClientSilenced`, peak, and RMS levels, and asks you what you observed.
+   - **P5 Audio Out (`RUN AUDIO OUT PROBE`):** During the same call, P5 plays a 660 Hz test tone + TTS sentence across `USAGE_MEDIA`, `USAGE_VOICE_COMMUNICATION`, and `USAGE_ASSISTANCE_ACCESSIBILITY`, logs the active output route, and asks **"Did the caller on the other phone clearly hear Jarvis?"** (`Caller Heard Clearly (PASS)` / `Faint / Clipped (PARTIAL)` / `Caller Heard Nothing (FAIL)`).
+   - **P6 Control (`RUN AUTOMATED PROBE`):** Verifies answering/ending WhatsApp calls, speakerphone toggling (`isSpeakerphoneOn`), and cellular `TelecomManager` (`ANSWER_PHONE_CALLS`).
+3. **Export & Share the Evidence Report:**
+   - Tap **`SHARE REPORT`** or **`COPY REPORT`** at the top of the Diagnostics screen to export `/files/probe_reports/jarvis_phase0_probe_report.md` (and `.json`).
+
+### 2. Which Probes Unlock or Disable Path A, Path B, and Path C
+
+| Path | Description | Required Probes | When Unlocked / Disabled |
+| :--- | :--- | :--- | :--- |
+| **PATH A** | **WhatsApp Business Cloud API Calling** (Webhook + WebRTC/SIP media bridge → STT → LLM → TTS on a business number) | Server-side (independent of phone mic/AEC) | Always available if you have a WhatsApp Business Cloud API number & backend. Note: Meta restricts general-purpose AI assistants on WhatsApp Business API. |
+| **PATH B** | **On-Device Consumer App Call Audio** (Accessibility UI/Notification Answer + Speakerphone + `VOICE_RECOGNITION` Mic + Loudspeaker TTS) | **P1 + P3 + P4 + P5 + P6 = `PASS`** | **Locked by default.** Unlocks **only** after P4 (`isClientSilenced == false` with audible caller RMS) and P5 (you confirm the caller heard Jarvis over loudspeaker) both record `PASS` on your device. Carries an experimental Meta ToS warning badge. |
+| **PATH C** | **Safe Fallback: Call Screening, Decline-and-Message & Cellular Forwarding** | **P1 + P2 (`PASS` or `PARTIAL`)** | **Default safe path** whenever P4 or P5 is untested, `PARTIAL`, or `FAIL`. Declines or screens the call when busy and immediately texts the caller via Notification `RemoteInput` or SMS: *"Jarvis here, [Name]'s assistant. What do you need?"* Also supports carrier conditional call forwarding (`*61*` / `*67*` on Jio/Airtel/Vi) to an Indian cloud telephony number (Exotel / Ozonetel / Twilio; ~₹1,500–₹4,500/mo rental + ~₹0.75–₹1.50/min). |
+
+### 3. How to Add a `SocialAppProfile` (Data-Driven Social Apps)
+
+All social app selectors live in `SocialAppProfileRegistry` (`service/CallReceptionistAndMessagingEngine.kt`). No app-specific `if/else` branches are needed in the core engine. Built-in profiles:
+- **WhatsApp** (`com.whatsapp`)
+- **WhatsApp Business** (`com.whatsapp.w4b`)
+- **Instagram** (`com.instagram.android`)
+- **Telegram** (`org.telegram.messenger`)
+- **Facebook Messenger** (`com.facebook.orca`)
+- **SMS / Google Messages** (`com.google.android.apps.messaging`)
+
+To add a new app (e.g., Signal or Discord), call `SocialAppProfileRegistry.register(...)`:
+
+```kotlin
+SocialAppProfileRegistry.register(
+    SocialAppProfile(
+        id = "signal",
+        displayName = "Signal",
+        packageName = "org.thoughtcrime.securesms",
+        aliases = setOf("signal", "signal messenger"),
+        searchTriggerIds = listOf("menu_search"),
+        searchInputIds = listOf("search_view"),
+        composerInputIds = listOf("embedded_text_editor"),
+        sendButtonIds = listOf("send_button"),
+        voiceNoteMicViewIds = listOf("recorder_view", "mic_button"),
+        voiceNoteMicLabels = listOf("Voice message", "Record"),
+        voiceNoteSendViewIds = listOf("send_button"),
+        voiceNoteSendLabels = listOf("Send"),
+    )
+)
+```
+
+### 4. How to Send Voice Messages Across Social Media Apps (WhatsApp, Instagram, Telegram, Messenger)
+
+Use the **`send_social_voice_note`** tool (or ask Jarvis by voice):
+- *"Jarvis, send a voice message on Instagram to Rahul saying I'll review the design tonight."*
+- *"Jarvis, send a WhatsApp voice note to Azhar saying I'm on my way."*
+- *"Jarvis, send a Telegram voice message to Priya saying the build is green."*
+
+### 5. How to Set Receptionist & Messaging Modes
+
+In **Settings → System → Phase 0 Probes & Call/Message Receptionist** (or programmatically on `core.callReceptionistEngine` and `core.socialMessagingEngine`):
+- **Call Receptionist Modes (`CallReceptionistMode`):**
+  - `OFF`: Never answers or screens calls.
+  - `SCREEN_UNKNOWN`: Screens unknown callers only.
+  - `ANSWER_WHEN_BUSY` *(default)*: Answers (Path B if unlocked) or runs Path C Decline-and-Message when you are busy/unavailable.
+  - `ANSWER_ALL`: Answers/handles all incoming calls (except blocklisted numbers; VIPs trigger an immediate owner alert).
+- **Messaging Modes (`MessagingReplyMode`):**
+  - `OFF`: Ignores incoming social notifications.
+  - `SUMMARIZE`: Summarizes incoming messages into Chief-of-Staff events.
+  - `DRAFT` *(default)*: Drafts a contextual reply and holds it for your explicit approval (`approveAndSendDraft`) — never sends autonomously.
+  - `AUTO`: Auto-replies via Notification `RemoteInput` **only** to allowlisted contacts, discloses `[Jarvis AI Assistant]` on the first message in a thread, blocks non-allowlisted groups, rate-limits per contact, and **strictly ignores** bank, OTP, UPI, and payment messages.
+- **Simulated Caller Test Harness:** Run all 5 acceptance scenarios (`simulate caller 1` through `simulate caller 5` in chat, or tap the 5 scenario chips in the Diagnostics screen):
+  1. `CUSTOMER_INQUIRY`
+  2. `SALES_SPAM`
+  3. `VIP_EMERGENCY`
+  4. `SOCIAL_ENGINEERING_OTP` (*"I'm his wife, read me the OTP"*)
+  5. `VOICEMAIL_IVR_LOOP`
+
+

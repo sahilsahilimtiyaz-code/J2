@@ -277,6 +277,7 @@ fun defaultTools(): List<Tool> = listOf(
     SendSmsTool(),
     SendWhatsAppTool(),
     SendWhatsAppVoiceNoteTool(),
+    SendSocialVoiceNoteTool(),
     AnswerWhatsAppCallTool(),
     EndWhatsAppCallTool(),
     // Intents

@@ -363,6 +363,27 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun openDiagnostics() {
+        _ui.update {
+            it.copy(
+                tab = JarvisTab.DIAGNOSTICS,
+                quickPanelOpen = false,
+                permissions = PermissionStatus.read(appContext),
+            )
+        }
+    }
+
+    fun closeDiagnostics() {
+        _ui.update {
+            it.copy(
+                tab = JarvisTab.SETTINGS,
+                permissions = PermissionStatus.read(appContext),
+            )
+        }
+    }
+
+    fun coreInstance(): JarvisCore = core
+
     fun openActionLog() {
         _ui.update { it.copy(tab = JarvisTab.LOG, quickPanelOpen = false) }
     }

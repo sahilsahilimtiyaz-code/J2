@@ -582,3 +582,19 @@
 - **LiveCallAudioAnchor VAD Stabilization (`SttEngine.kt`):**
   - Raised the continuous background anchor threshold from `peak >= 50` (which triggered on ambient room noise and caused `SpeechRecognizer` to cycle ON/OFF every few seconds) to `voiceThreshold = (noiseFloorRms * 1.85 + 28.0).coerceIn(55.0, 320.0)` with `peak >= 380` and `consecutiveVoiceFrames >= 2`, while retaining the 1.2s pre-roll PCM buffer so the first syllable of speech is never clipped.
 
+## 2026-11-04 (Part 2) — Phase 0 Feasibility Probes (`P1`–`P6`), Path A/B/C Gating, Call Receptionist, Multi-App Social Messaging & 4-Rung Perception Ladder
+
+- **Phase 0 First ("Measure on the Phone, Don't Assume"):**
+  - Android 10–16 silences ordinary apps (`AudioRecordingConfiguration.isClientSilenced == true`) during active cellular or VoIP calls, with a narrow Android CDD exception for an active `AccessibilityService` capturing from `MediaRecorder.AudioSource.VOICE_RECOGNITION`. Even when mic capture succeeds, the call's acoustic echo canceller (AEC) may suppress Jarvis's loudspeaker TTS before it reaches the remote caller.
+  - Therefore, `FeasibilityProbeEngine.kt` and `FeasibilityDiagnosticsScreen.kt` implement an interactive 6-probe wizard (`P1_DEVICE`, `P2_NOTIFICATIONS`, `P3_SCREENS`, `P4_AUDIO_IN`, `P5_AUDIO_OUT`, `P6_CONTROL`) that executes inside `JarvisAccessibilityService`, records objective telemetry (`isClientSilenced`, peak/RMS, audio routes, `RemoteInput` keys, screenshot validity), asks the owner what they observed on the second test phone, and exports a shareable report (`/files/probe_reports/jarvis_phase0_probe_report.md` and `.json`).
+  - **Path B Hard Gate:** On-device consumer-app call audio (`PATH_B_ON_DEVICE_CONSUMER_APP`) remains **locked** in `FeasibilityProbeEngine.computeRecommendation()` until both `P4_AUDIO_IN` and `P5_AUDIO_OUT` record `PASS` on the owner's device, and carries an explicit Meta ToS warning badge. Whenever P4 or P5 is `UNRUN`, `PARTIAL`, or `FAIL`, Jarvis defaults safely to **Path C** (`PATH_C_CELLULAR_AND_FALLBACK`: call screening + Decline-and-Message `"Jarvis here, [Name]'s assistant. What do you need?"` via Notification `RemoteInput` or SMS, plus optional carrier conditional call forwarding `*61*`/`*67*` to an Indian cloud telephony number).
+- **Data-Driven `SocialAppProfileRegistry` (`CallReceptionistAndMessagingEngine.kt`):**
+  - Eliminated app-specific `if/else` branching by defining `SocialAppProfile` objects for WhatsApp (`com.whatsapp`), WhatsApp Business (`com.whatsapp.w4b`), Instagram (`com.instagram.android`), Telegram (`org.telegram.messenger`), Facebook Messenger (`com.facebook.orca`), and Google/Samsung SMS. Each profile declares its package name, aliases, incoming/in-call window markers, answer/decline/speaker selectors, chat search & composer selectors, and voice-note mic/send selectors.
+- **4-Rung Perception Ladder (`PerceptionLadderEngine.kt`):**
+  - Standardized UI execution into 4 explicit rungs:
+    1. **Rung 1 (`RUNG_1_INTENT_OR_NOTIFICATION`):** Notification `RemoteInput` inline replies, notification action buttons, and direct Android intents/deep links.
+    2. **Rung 2 (`RUNG_2_ACCESSIBILITY_TREE`):** Accessibility tree node matching (`viewId`, `text`, `contentDescription`, `role`, `bounds`) backed by `SelectorCache` (keyed by `packageName:versionCode:intentKey`) with anti-Shorts / anti-full-width-container disambiguation.
+    3. **Rung 3 (`RUNG_3_VISION_SET_OF_MARK`):** `SetOfMarkAnnotator` draws numbered cyan bounding boxes (`#1`, `#2`...) on a downscaled `takeScreenshot()` bitmap paired with the indexed node list so multimodal vision picks a box number rather than guessing raw pixel coordinates.
+    4. **Rung 4 (`RUNG_4_POST_STEP_VERIFICATION`):** `verifyStepAndRecover` re-observes the screen after every action, checks the expected post-condition, and on mismatch presses Back, invalidates `SelectorCache`, and retries with the next rung.
+
+

@@ -162,7 +162,18 @@ fun SettingsScreen(
                     ReactorGlyph(modifier = Modifier.size(22.dp))
                 }
                 Spacer(Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
+                var hiddenTapCount by remember { mutableStateOf(0) }
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable {
+                            hiddenTapCount += 1
+                            if (hiddenTapCount >= 5) {
+                                hiddenTapCount = 0
+                                viewModel.openDiagnostics()
+                            }
+                        },
+                ) {
                     Text(
                         text = "J.A.R.V.I.S.",
                         style = MaterialTheme.typography.titleSmall,
@@ -414,6 +425,7 @@ fun SettingsScreen(
                     AnimatedVisibility(visible = expandedSection == SettingsSection.SYSTEM) {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             MasterPowerCard(state = state, onPowerOff = viewModel::powerOff)
+                            Phase0DiagnosticsEntryCard(onOpenDiagnostics = viewModel::openDiagnostics)
                             MicrophoneStatusMonitorCard(state = state, viewModel = viewModel)
                             ScreenUsageHealthCard(state = state, viewModel = viewModel)
                             BackgroundVoiceCard(state = state, viewModel = viewModel)
@@ -435,6 +447,7 @@ fun SettingsScreen(
                 item(key = "detail_security") {
                     AnimatedVisibility(visible = expandedSection == SettingsSection.SECURITY) {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Phase0DiagnosticsEntryCard(onOpenDiagnostics = viewModel::openDiagnostics)
                             MicrophoneStatusMonitorCard(state = state, viewModel = viewModel)
                             PermissionsCard(state = state, onOpenWizard = viewModel::openPermissions)
                             SafetyCard(state = state, viewModel = viewModel)
@@ -485,6 +498,42 @@ fun SettingsScreen(
                 showAddDialog = false
             },
         )
+    }
+}
+
+@Composable
+private fun Phase0DiagnosticsEntryCard(
+    onOpenDiagnostics: () -> Unit,
+) {
+    GlassPanel(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpenDiagnostics),
+        corner = 18.dp,
+        accent = JarvisPalette.CyanBright,
+        contentPadding = PaddingValues(16.dp),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "PHASE 0 PROBES & CALL/MESSAGE RECEPTIONIST",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = JarvisPalette.CyanBright,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.sp,
+                )
+                HudPill(text = "OPEN LAB", color = JarvisPalette.CyanBright)
+            }
+            Text(
+                text = "Run Phase 0 on-device feasibility probes (P1-P6), export shareable evidence report, configure Call Receptionist & Social Messaging modes (Draft/Auto), or tap J.A.R.V.I.S. 5x in the header.",
+                style = MaterialTheme.typography.bodySmall,
+                color = JarvisPalette.TextDim,
+            )
+        }
     }
 }
 
