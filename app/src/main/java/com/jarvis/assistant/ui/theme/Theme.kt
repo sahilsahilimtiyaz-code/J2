@@ -10,20 +10,25 @@ import androidx.compose.ui.graphics.Color
  * anything the owner should look at first.
  */
 object JarvisPalette {
-    val Void = Color(0xFF01050A)
-    val Deep = Color(0xFF03101B)
-    val Navy = Color(0xFF061B2B)
-    val Panel = Color(0xFF082133)
-    val PanelLight = Color(0xFF0C2A40)
-    val Line = Color(0xFF133A55)
-    val Cyan = Color(0xFF2E9BFF)
-    val CyanBright = Color(0xFF8BD8FF)
-    val CyanDim = Color(0xFF1A5E94)
-    val Ice = Color(0xFFE6F6FF)
-    val TextDim = Color(0xFF8CAFC5)
-    val Amber = Color(0xFFFFA45C)
+    val Void = Color(0xFF02040A)
+    val Deep = Color(0xFF050B16)
+    val Navy = Color(0xFF071426)
+    val Panel = Color(0xFF0A1B2E)
+    val PanelLight = Color(0xFF102A44)
+    val Line = Color(0xFF173A5A)
+    val Cyan = Color(0xFF35A7FF)
+    val CyanBright = Color(0xFF9FE4FF)
+    val CyanDim = Color(0xFF1B6793)
+    val Ice = Color(0xFFEAF7FF)
+    val TextDim = Color(0xFF93B7CC)
+    val Amber = Color(0xFFFFB070)
     val Danger = Color(0xFFFF7A6B)
-    val Success = Color(0xFF4FE3A6)
+    val Success = Color(0xFF54E8B0)
+
+    /** Futuristic neural accents used by the orb and the premium surfaces. */
+    val Violet = Color(0xFF8B7CFF)
+    val Plasma = Color(0xFF4D6BFF)
+    val Magenta = Color(0xFFFF6FD8)
 }
 
 private val JarvisDarkScheme = darkColorScheme(

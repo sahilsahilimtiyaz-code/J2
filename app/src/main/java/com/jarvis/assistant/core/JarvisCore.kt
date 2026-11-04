@@ -166,17 +166,96 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         scope.launch {
             if (next) {
                 com.jarvis.assistant.voice.SoundFxEngine.play(com.jarvis.assistant.voice.SoundFxEngine.SoundType.ARC_REACTOR_BOOT)
-                if (isGranted(Manifest.permission.RECORD_AUDIO)) {
-                    startListeningInternal(
-                        interrupt = false,
-                        isAutoLoop = false,
-                        reason = "Conversation mode enabled",
-                    )
-                }
+                    if (isGranted(Manifest.permission.RECORD_AUDIO)) {
+                        if (shouldHoldHotMic()) {
+                            startHotMic("Conversation mode enabled")
+                        } else {
+                            startListeningInternal(
+                                interrupt = false,
+                                isAutoLoop = false,
+                                reason = "Conversation mode enabled",
+                            )
+                        }
+                    }
             } else {
                 com.jarvis.assistant.voice.SoundFxEngine.play(com.jarvis.assistant.voice.SoundFxEngine.SoundType.STANDBY)
                 stopListening(reason = "Conversation mode disabled", stopBackgroundService = false)
             }
+        }
+    }
+
+    /** True while the single continuous voice-link session owns the microphone. */
+    val isHotMicActive: Boolean
+        get() = hotMicJob?.isActive == true
+
+    /**
+     * The owner's master power switch. Everything stops: microphone, speech,
+     * services, automation, proactive thoughts and background health reminders.
+     */
+    fun powerOff() {
+        scope.launch {
+            runCatching { settingsRepository.update { it.copy(masterEnabled = false) } }
+            shutdownRuntime("Master power switch turned off")
+        }
+    }
+
+    /** Brings Jarvis back after [powerOff]. */
+    fun powerOn() {
+        scope.launch {
+            masterShutdownApplied = false
+            userPausedMic = false
+            val current = runCatching {
+                settingsRepository.update { it.copy(masterEnabled = true) }
+            }.getOrElse { settings.value }
+            startDevicePresenceMonitor()
+            if (current.health.enabled) {
+                runCatching {
+                    com.jarvis.assistant.service.ScreenUsageHealthService.ensureStarted(appContext)
+                }
+            }
+            if (uiVisible && current.voice.alwaysListening) {
+                runCatching { ListeningServiceController.start(appContext) }
+            }
+            _state.update {
+                it.copy(
+                    poweredOn = true,
+                    error = null,
+                    notice = "J.A.R.V.I.S. is online.",
+                )
+            }
+            maybeGreet()
+        }
+    }
+
+    private fun shutdownRuntime(reason: String) {
+        masterShutdownApplied = true
+        userPausedMic = true
+        autoListenAllowed = false
+        hotMicJob?.cancel()
+        hotMicJob = null
+        micStateMachine.setHotHold(false, reason)
+        stopAll()
+        runCatching { devicePresenceMonitor.stop() }
+        runCatching { ListeningServiceController.stop(appContext) }
+        runCatching { com.jarvis.assistant.service.JarvisFloatingHudService.stop(appContext) }
+        runCatching { com.jarvis.assistant.service.ScreenUsageHealthService.stop(appContext) }
+        _state.update {
+            it.copy(
+                poweredOn = false,
+                generating = false,
+                speaking = false,
+                listening = false,
+                micLocked = false,
+                serviceActive = false,
+                partialTranscript = "",
+                audioLevel = 0f,
+                toolActivity = null,
+                activePlan = null,
+                screenAutomationActive = false,
+                error = null,
+                notice = null,
+                voiceStatus = null,
+            )
         }
     }
 
@@ -263,6 +342,8 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
 
     private var turnJob: Job? = null
     private var manualListenJob: Job? = null
+    /** One persistent voice-link session: the AudioRecord anchor is never closed between turns. */
+    private var hotMicJob: Job? = null
     private var serviceJob: Job? = null
     private var automationJob: Job? = null
     @Volatile
@@ -273,6 +354,16 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
     private var focusRequest: AudioFocusRequest? = null
     private var listeningFocusRequest: AudioFocusRequest? = null
     private var nextId = 0L
+
+    /** Tool calls that succeeded in this turn, used to save a task as a skill. */
+    private val lastToolTrace = java.util.Collections.synchronizedList(
+        mutableListOf<com.jarvis.assistant.memory.SkillStep>(),
+    )
+
+    /** The most recent completed task's tool calls, kept for a follow-up "save that". */
+    private val lastCompletedToolTrace = java.util.Collections.synchronizedList(
+        mutableListOf<com.jarvis.assistant.memory.SkillStep>(),
+    )
     private var voiceTestPending = false
     private var greetingInFlight = false
 
@@ -294,6 +385,9 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
 
     @Volatile
     private var userPausedMic = false
+
+    @Volatile
+    private var masterShutdownApplied = false
 
     @Volatile
     private var uiVisible = false
@@ -322,20 +416,17 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             runCatching { proposalRepository.load() }
             runCatching { com.jarvis.assistant.service.SelfReviewWorker.scheduleNightly(appContext) }
         }
-        devicePresenceMonitor.start(
-            profileProvider = { settings.value.profile },
-            canSpeakNow = {
-                settings.value.persona.autonomousThoughtsEnabled &&
-                    !_state.value.generating &&
-                    !_state.value.speaking &&
-                    !greetingInFlight
-            },
-        )
-        runCatching {
-            if (settings.value.health.enabled) {
-                com.jarvis.assistant.service.ScreenUsageHealthService.ensureStarted(appContext)
+        runCatching { com.jarvis.assistant.service.JarvisWidgetProvider.updateAll(appContext) }
+        scope.launch {
+            val current = settingsRepository.current()
+            if (current.masterEnabled) {
+                startDevicePresenceMonitor()
+                if (current.health.enabled) {
+                    runCatching {
+                        com.jarvis.assistant.service.ScreenUsageHealthService.ensureStarted(appContext)
+                    }
+                }
             }
-            com.jarvis.assistant.service.JarvisWidgetProvider.updateAll(appContext)
         }
         // Incoming WhatsApp call windows drive the call receptionist when the
         // owner has switched it on in Settings, Safety.
@@ -395,6 +486,9 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
      */
     fun handleIncomingCallInterruption(reason: String = "Incoming phone call / audio interruption") {
         interruptSpeech()
+        hotMicJob?.cancel()
+        hotMicJob = null
+        micStateMachine.setHotHold(false, reason)
         manualListenJob?.cancel()
         manualListenJob = null
         abandonListeningAudioFocus()
@@ -414,11 +508,28 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
 
     fun warmUp() {
         fishTts.warmUp()
-        runCatching {
-            if (settings.value.health.enabled) {
-                com.jarvis.assistant.service.ScreenUsageHealthService.ensureStarted(appContext)
+        scope.launch {
+            val current = settingsRepository.current()
+            if (current.masterEnabled && current.health.enabled) {
+                runCatching {
+                    com.jarvis.assistant.service.ScreenUsageHealthService.ensureStarted(appContext)
+                }
             }
         }
+    }
+
+    /** Starts (or restarts) proactive presence monitoring. */
+    private fun startDevicePresenceMonitor() {
+        devicePresenceMonitor.start(
+            profileProvider = { settings.value.profile },
+            canSpeakNow = {
+                settings.value.masterEnabled &&
+                    settings.value.persona.autonomousThoughtsEnabled &&
+                    !_state.value.generating &&
+                    !_state.value.speaking &&
+                    !greetingInFlight
+            },
+        )
     }
 
     /** True while an attached screen can show confirmation and permission prompts. */
@@ -427,12 +538,12 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         if (visible) {
             fishTts.warmUp()
             val current = settings.value
-            if (current.health.enabled) {
+            if (current.masterEnabled && current.health.enabled) {
                 runCatching {
                     com.jarvis.assistant.service.ScreenUsageHealthService.ensureStarted(appContext)
                 }
             }
-            if (!userPausedMic && isGranted(Manifest.permission.RECORD_AUDIO)) {
+            if (current.masterEnabled && !userPausedMic && isGranted(Manifest.permission.RECORD_AUDIO)) {
                 if (current.voice.continuousListening || current.voice.alwaysListening || _conversationMode.value) {
                     sttEngine.ensureLiveCallAnchor()
                 }
@@ -468,12 +579,12 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
     }
 
     private fun ensureForegroundMicIfLocked(immediate: Boolean = false) {
+        if (!immediate && hotMicJob?.isActive == true) return
         scope.launch {
-            if (!immediate) {
-                delay(120)
-            }
+            if (!immediate) delay(120)
             if ((!uiVisible && !serviceActive) || userPausedMic) return@launch
             val current = settings.value
+            if (!current.masterEnabled) return@launch
             if (current.profile.name.isBlank()) return@launch
             if (!current.voice.continuousListening && !serviceActive && !_conversationMode.value) return@launch
             if (isGranted(Manifest.permission.RECORD_AUDIO)) {
@@ -482,10 +593,8 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             if (_state.value.generating || _state.value.speaking) return@launch
             if (manualListenJob?.isActive == true) return@launch
             if (isGranted(Manifest.permission.RECORD_AUDIO)) {
-                startListeningInternal(
-                    interrupt = false,
-                    isAutoLoop = true,
-                    reason = if (serviceActive) "Background wake-word service active" else "Continuous live call listening",
+                startHotMic(
+                    if (serviceActive) "Background wake-word service active" else "Continuous live call listening",
                 )
             }
         }
@@ -507,6 +616,16 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                 micStateMachine.onContinuousModeChanged(
                     current.voice.continuousListening || current.voice.alwaysListening,
                 )
+                if (_state.value.poweredOn != current.masterEnabled) {
+                    _state.update { it.copy(poweredOn = current.masterEnabled) }
+                }
+                if (!current.masterEnabled) {
+                    if (!masterShutdownApplied) {
+                        shutdownRuntime("Master power switch is off in saved settings")
+                    }
+                    return@collect
+                }
+                masterShutdownApplied = false
                 if (current.profile.name.isNotBlank()) {
                     withContext(Dispatchers.IO) { memoryRepository.syncProfile(current.profile) }
                     if ((current.voice.continuousListening || current.voice.alwaysListening) &&
@@ -532,7 +651,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
 
     private fun loadHistory() {
         scope.launch {
-            val recent = runCatching { memoryRepository.recentTranscript(HISTORY_LIMIT) }
+            val recent = runCatching { memoryRepository.recentTranscript(HISTORY_DISPLAY_LIMIT) }
                 .getOrDefault(emptyList())
             val mapped = recent.reversed()
                 .filter { it.text.isNotBlank() }
@@ -555,6 +674,28 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         }
     }
 
+    /** Replaces the visible transcript with the newest persisted messages. */
+    fun reloadHistory(reason: String = "Conversation history reloaded") {
+        scope.launch {
+            val recent = runCatching { memoryRepository.recentTranscript(HISTORY_DISPLAY_LIMIT) }
+                .getOrDefault(emptyList())
+            val mapped = recent.reversed()
+                .filter { it.text.isNotBlank() }
+                .map { message ->
+                    CoreMessage(
+                        id = "db_${message.id}",
+                        author = if (message.author == "user") ChatAuthor.USER else ChatAuthor.JARVIS,
+                        text = message.text,
+                        providerName = message.providerName,
+                        createdAt = message.createdAt,
+                    )
+                }
+            _state.update { current ->
+                current.copy(messages = mapped, historyLoaded = true, notice = reason)
+            }
+        }
+    }
+
     // Greeting ----------------------------------------------------------------
 
     private fun maybeGreet() {
@@ -562,7 +703,8 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         greetingInFlight = true
         scope.launch {
             try {
-                val current = settings.filter { it.profile.name.isNotBlank() }.first()
+                val current = settingsRepository.current()
+                if (!current.masterEnabled || current.profile.name.isBlank()) return@launch
                 val snapshot = _state.value
                 if (snapshot.generating) return@launch
                 val lastAt = snapshot.messages.maxOfOrNull { it.createdAt }
@@ -607,6 +749,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             runCatching {
                 val conversationId = memoryRepository.conversationForTurn()
                 memoryRepository.addMessage(conversationId, "jarvis", greeting.text)
+                syncGoogleChatsNow()
             }
         }
         speak(greeting.text)
@@ -681,6 +824,10 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
     fun send(text: String) {
         val clean = text.trim()
         if (clean.isEmpty()) return
+        if (!settings.value.masterEnabled) {
+            _state.update { it.copy(error = "Jarvis is switched off. Turn the power switch on in Settings, System.") }
+            return
+        }
         val current = settings.value
         if (current.profile.name.isBlank()) {
             _state.update { it.copy(error = "Complete onboarding before sending a request.") }
@@ -807,6 +954,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             conversationId = withContext(Dispatchers.IO) {
                 val id = memoryRepository.conversationForTurn()
                 memoryRepository.addMessage(id, "user", userText)
+                syncGoogleChatsNow()
                 id
             }
 
@@ -884,6 +1032,16 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                 allTools = allDefs,
             )
 
+            // Preserve the previous task before this turn clears its own trace.
+            // That is what lets "save that as a skill" work on the next turn.
+            synchronized(lastToolTrace) {
+                if (lastToolTrace.isNotEmpty()) {
+                    lastCompletedToolTrace.clear()
+                    lastCompletedToolTrace.addAll(lastToolTrace.filter { it.toolName != "save_skill" })
+                }
+                lastToolTrace.clear()
+            }
+
             agentLoop.run(
                 AgentRequest(
                     systemPrompt = systemPrompt,
@@ -918,6 +1076,18 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                     }
 
                     is AgentEvent.ToolFinished -> _state.update { state ->
+                        if (event.success && event.name != "save_skill") {
+                            val arguments = runCatching {
+                                val obj = org.json.JSONObject(event.arguments)
+                                obj.keys().asSequence().associateWith { key -> obj.optString(key) }
+                            }.getOrDefault(emptyMap())
+                            lastToolTrace.removeAll { it.toolName == event.name }
+                            lastToolTrace += com.jarvis.assistant.memory.SkillStep(
+                                toolName = event.name,
+                                arguments = arguments,
+                                description = "Step recorded from a successful task",
+                            )
+                        }
                         val updatedPlan = markPlanStepFinished(
                             state.activePlan,
                             event.name,
@@ -1046,10 +1216,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         scope.launch(Dispatchers.IO) {
             runCatching {
                 memoryRepository.addMessage(conversationId, "jarvis", text, providerName)
-                val currentAuth = settings.value.auth
-                if (currentAuth.mode == com.jarvis.assistant.settings.AuthMode.GOOGLE && currentAuth.email.isNotBlank()) {
-                    backupRestoreRepository.saveGoogleAccountChatBackup(currentAuth.email)
-                }
+                syncGoogleChatsNow()
             }
         }
     }
@@ -1117,13 +1284,43 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         } else {
             messages
         }
-        return withoutCurrent.map { message ->
+        // Collapse accidental repeats but keep every genuine turn.
+        val deduped = mutableListOf<CoreMessage>()
+        for (message in withoutCurrent) {
+            val previous = deduped.lastOrNull()
+            if (previous != null &&
+                previous.author == message.author &&
+                previous.text.trim() == message.text.trim()
+            ) {
+                continue
+            }
+            deduped += message
+        }
+        // Token-budgeted window: newest turns that fit, so long conversations
+        // keep their recent context instead of being cut at a fixed index.
+        val window = mutableListOf<CoreMessage>()
+        var characters = 0
+        for (message in deduped.asReversed()) {
+            if (window.size >= HISTORY_FOR_PROMPT) break
+            val next = characters + message.text.length
+            if (window.isNotEmpty() && next > HISTORY_PROMPT_CHARS) break
+            window += message
+            characters = next
+        }
+        return window.asReversed().map { message ->
             if (message.author == ChatAuthor.USER) {
                 LlmMessage.user(message.text)
             } else {
                 LlmMessage.assistant(message.text)
             }
-        }.takeLast(HISTORY_FOR_PROMPT)
+        }
+    }
+
+    private suspend fun syncGoogleChatsNow() {
+        val auth = settings.value.auth
+        if (auth.mode == com.jarvis.assistant.settings.AuthMode.GOOGLE && auth.email.isNotBlank()) {
+            runCatching { backupRestoreRepository.saveGoogleAccountChatBackup(auth.email) }
+        }
     }
 
     private fun toolActivityLabel(name: String): String = when (name) {
@@ -1482,6 +1679,21 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
     private fun releaseMicrophoneBeforeProcessing(reason: String) {
         val keepLiveCallAnchor = !userPausedMic &&
             (settings.value.voice.continuousListening || serviceActive || _conversationMode.value)
+
+        // Continuous voice-link: the hot-mic session owns the recognizer loop.
+        // Do not cancel it or release the AudioRecord anchor between turns.
+        if (hotMicJob?.isActive == true) {
+            micStateMachine.setHotHold(true)
+            _state.update {
+                it.copy(
+                    listening = true,
+                    partialTranscript = "",
+                    audioLevel = 0f,
+                    micLocked = true,
+                )
+            }
+            return
+        }
         val wasListening = _state.value.listening ||
             manualListenJob?.isActive == true ||
             micStateMachine.diagnostics.value.isMicrophoneResourceHeld ||
@@ -1513,12 +1725,164 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
     }
 
     fun startListening(reason: String = "User tapped microphone") {
+        if (!settings.value.masterEnabled) {
+            _state.update { it.copy(error = "Jarvis is switched off. Turn the power switch on in Settings, System.") }
+            return
+        }
         userPausedMic = false
         autoListenAllowed = settings.value.voice.continuousListening || serviceActive
         if (isGranted(Manifest.permission.RECORD_AUDIO)) {
             sttEngine.ensureLiveCallAnchor()
         }
+        if (shouldHoldHotMic()) {
+            startHotMic(reason)
+            return
+        }
         startListeningInternal(interrupt = true, isAutoLoop = false, reason = reason)
+    }
+
+    /** True when the owner asked for a continuous, call-like live microphone. */
+    private fun shouldHoldHotMic(): Boolean =
+        settings.value.masterEnabled &&
+            !userPausedMic &&
+            (uiVisible || serviceActive) &&
+            (settings.value.voice.continuousListening || serviceActive || _conversationMode.value)
+
+    /**
+     * Single long-lived microphone session. The AudioRecord anchor opens once and
+     * stays open; recognition pauses while Jarvis thinks or speaks and re-arms
+     * immediately afterwards. The hardware microphone is never closed between
+     * turns, which is what keeps Android's indicator steadily on.
+     */
+    private fun startHotMic(reason: String) {
+        if (hotMicJob?.isActive == true) return
+        if (manualListenJob?.isActive == true) return
+        if (!isGranted(Manifest.permission.RECORD_AUDIO)) return
+        if (!shouldHoldHotMic()) return
+
+        val opened = sttEngine.ensureLiveCallAnchor()
+        if (!opened) {
+            _state.update {
+                it.copy(error = "The microphone could not be opened. Check the Microphone permission and try again.")
+            }
+            return
+        }
+        micStateMachine.setHotHold(true, reason)
+        micStateMachine.tryBeginSession(reason)
+
+        hotMicJob = scope.launch {
+            _state.update {
+                it.copy(
+                    listening = true,
+                    micLocked = true,
+                    partialTranscript = "",
+                    audioLevel = 0f,
+                )
+            }
+            try {
+                while (isActive && shouldHoldHotMic()) {
+                    // Keep the anchor recording while Jarvis thinks or speaks, but do not
+                    // run the recognizer against his own voice.
+                    while (isActive && shouldHoldHotMic() &&
+                        (_state.value.generating || _state.value.speaking)
+                    ) {
+                        delay(100L)
+                    }
+                    if (!isActive || !shouldHoldHotMic()) break
+
+                    sttEngine.ensureLiveCallAnchor()
+                    micStateMachine.setHotHold(true, "Continuous voice link")
+                    micStateMachine.tryBeginSession("Continuous voice link re-arm")
+
+                    var captured: String? = null
+                    var fatal = false
+                    try {
+                        sttEngine.listen(localeFor(settings.value.voice.language)).collect { event ->
+                            when (event) {
+                                is SttEvent.Partial -> {
+                                    if (!_state.value.speaking && !_state.value.generating) {
+                                        _state.update { it.copy(listening = true, partialTranscript = event.text) }
+                                    }
+                                }
+
+                                is SttEvent.Rms -> {
+                                    if (!_state.value.speaking) {
+                                        _state.update { it.copy(audioLevel = event.level) }
+                                    }
+                                }
+
+                                is SttEvent.Final -> {
+                                    _state.update {
+                                        it.copy(
+                                            partialTranscript = "",
+                                            audioLevel = 0f,
+                                            micLocked = true,
+                                            listening = true,
+                                        )
+                                    }
+                                    if (event.text.isNotBlank()) captured = event.text
+                                }
+
+                                is SttEvent.Error -> {
+                                    val unrecoverable = event.code == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ||
+                                        event.message.contains("not available", ignoreCase = true) ||
+                                        event.message.contains("permission", ignoreCase = true)
+                                    if (unrecoverable) {
+                                        fatal = true
+                                        userPausedMic = true
+                                        _state.update { it.copy(error = event.message) }
+                                    }
+                                }
+
+                                SttEvent.End -> Unit
+                            }
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        micStateMachine.onError(e.message ?: "Speech recognition failed.")
+                    }
+
+                    val text = captured
+                    if (!text.isNullOrBlank() && !fatal) {
+                        if (!_state.value.speaking && !isLikelyTtsEcho(text)) {
+                            dispatchHotMicUtterance(text)
+                        }
+                    }
+                    if (fatal) break
+                    delay(45L)
+                }
+            } finally {
+                val stillLive = shouldHoldHotMic()
+                if (!stillLive) {
+                    micStateMachine.setHotHold(false, "Continuous voice link ended")
+                    sttEngine.forceDestroyActive("Continuous voice link ended", releaseLiveAnchor = true)
+                    micStateMachine.forceReleaseAll("Continuous voice link ended")
+                }
+                _state.update {
+                    it.copy(
+                        listening = stillLive,
+                        micLocked = stillLive,
+                        partialTranscript = "",
+                        audioLevel = 0f,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun dispatchHotMicUtterance(text: String) {
+        val voice = settings.value.voice
+        if (uiVisible || !voice.requireWakeWord || _conversationMode.value) {
+            val parsed = WakeWord.parse(text, voice.wakeWord, false)
+            if (parsed.summonsOnly) {
+                summon()
+            } else {
+                send(parsed.command.ifBlank { text })
+            }
+        } else {
+            handleServiceUtterance(text)
+        }
     }
 
     private fun startListeningInternal(
@@ -1526,6 +1890,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         isAutoLoop: Boolean = false,
         reason: String = if (isAutoLoop) "Auto-listen loop" else "User tapped microphone",
     ) {
+        if (!settings.value.masterEnabled) return
         // Prevent duplicate overlapping listeners when the microphone button is tapped rapidly.
         if (manualListenJob?.isActive == true ||
             micStateMachine.currentState == com.jarvis.assistant.voice.MicrophoneState.STARTING ||
@@ -1723,6 +2088,9 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         userPausedMic = true
         autoListenAllowed = false
         micStateMachine.beginStopping(reason)
+        hotMicJob?.cancel()
+        hotMicJob = null
+        micStateMachine.setHotHold(false, reason)
         manualListenJob?.cancel()
         manualListenJob = null
         abandonListeningAudioFocus()
@@ -1743,6 +2111,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
 
     fun toggleListening() {
         val micRunning = _state.value.listening ||
+            hotMicJob?.isActive == true ||
             manualListenJob?.isActive == true ||
             sttEngine.liveAnchor.isLive ||
             micStateMachine.currentState == com.jarvis.assistant.voice.MicrophoneState.STARTING ||
@@ -1892,6 +2261,11 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
     }
 
     fun onListeningServiceStarted() {
+        if (!settings.value.masterEnabled) {
+            serviceActive = false
+            _state.update { it.copy(serviceActive = false) }
+            return
+        }
         serviceActive = true
         micStateMachine.onForegroundServiceStateChanged(true)
         _state.update { it.copy(serviceActive = true) }
@@ -4462,19 +4836,67 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         triggers: List<String>,
         stepsJson: String,
     ): String = withContext(Dispatchers.IO) {
-        val steps = runCatching {
-            kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-                .decodeFromString(
-                    kotlinx.serialization.builtins.ListSerializer(com.jarvis.assistant.memory.SkillStep.serializer()),
-                    stepsJson,
-                )
-        }.getOrNull() ?: return@withContext "Invalid skill steps format."
+        val raw = stepsJson.trim()
+        val steps = if (raw.isBlank() || raw == "[]" || raw == "null") {
+            val current = lastToolTrace.toList()
+            if (current.isNotEmpty()) current else lastCompletedToolTrace.toList()
+        } else {
+            parseSkillSteps(raw)
+        }.filter { it.toolName != "save_skill" }
+        if (steps.isEmpty()) {
+            return@withContext "I have no completed task to save yet. Ask me to perform the task once, then say 'save that as a skill'."
+        }
         val availableNames = toolRegistry.definitions().map { it.name }.toSet()
         skillRepository.validateSteps(steps, availableNames)?.let { validationError ->
             return@withContext validationError
         }
         val saved = skillRepository.saveSkill(name, description, triggers, steps)
-        "Saved routine '${saved.name}' with ${saved.steps.size} step(s)."
+        "Saved routine '${saved.name}' with ${saved.steps.size} step(s). Say 'run ${saved.name}' any time."
+    }
+
+    /**
+     * Accepts the shapes real models send: a JSON array of steps, a wrapped
+     * {"steps": [...]} object, or the legacy serialized list. Key aliases are
+     * normalised so tool/name/args variants all work.
+     */
+    private fun parseSkillSteps(raw: String): List<com.jarvis.assistant.memory.SkillStep> {
+        val legacy = runCatching {
+            kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+                .decodeFromString(
+                    kotlinx.serialization.builtins.ListSerializer(com.jarvis.assistant.memory.SkillStep.serializer()),
+                    raw,
+                )
+        }.getOrNull()
+        if (!legacy.isNullOrEmpty()) return legacy
+
+        val root = runCatching { kotlinx.serialization.json.Json.parseToJsonElement(raw) }.getOrNull()
+            ?: return emptyList()
+        val array = when (root) {
+            is kotlinx.serialization.json.JsonArray -> root
+            is kotlinx.serialization.json.JsonObject ->
+                (root["steps"] as? kotlinx.serialization.json.JsonArray)
+                    ?: (root["toolCalls"] as? kotlinx.serialization.json.JsonArray)
+                    ?: return emptyList()
+            else -> return emptyList()
+        }
+        return array.mapNotNull { element ->
+            val obj = element as? kotlinx.serialization.json.JsonObject ?: return@mapNotNull null
+            fun text(vararg keys: String): String? = keys.firstNotNullOfOrNull { key ->
+                (obj[key] as? kotlinx.serialization.json.JsonPrimitive)?.content
+            }
+            val toolName = text("toolName", "tool", "name")?.trim().orEmpty()
+            if (toolName.isBlank()) return@mapNotNull null
+            val argsObject = (obj["arguments"] ?: obj["args"] ?: obj["parameters"])
+                as? kotlinx.serialization.json.JsonObject
+            val args = argsObject?.mapValues { (_, value) ->
+                (value as? kotlinx.serialization.json.JsonPrimitive)?.content ?: value.toString()
+            }.orEmpty()
+            com.jarvis.assistant.memory.SkillStep(
+                toolName = toolName,
+                arguments = args,
+                description = text("description", "label").orEmpty(),
+            )
+        }
     }
 
     override suspend fun runSkill(nameOrTrigger: String): String = withContext(Dispatchers.IO) {
@@ -4505,7 +4927,9 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
 
     companion object {
         private const val HISTORY_LIMIT = 30
-        private const val HISTORY_FOR_PROMPT = 30
+        private const val HISTORY_DISPLAY_LIMIT = 240
+        private const val HISTORY_FOR_PROMPT = 40
+        private const val HISTORY_PROMPT_CHARS = 18_000
         private const val GREETING_GAP_MS = 3 * 60 * 60 * 1000L
         private const val SUMMON_GREETING_GAP_MS = 15 * 60 * 1000L
         private const val CONFIRM_TIMEOUT_MS = 120_000L

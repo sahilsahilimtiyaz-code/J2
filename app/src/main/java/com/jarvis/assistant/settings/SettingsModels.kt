@@ -189,6 +189,12 @@ data class LocalAiSettings(
 
 @Serializable
 data class AppSettings(
+    /**
+     * Global power switch. When false Jarvis releases the microphone, stops every
+     * foreground service, silences all speech and stays completely off until the
+     * owner turns him back on.
+     */
+    val masterEnabled: Boolean = true,
     val profile: OwnerProfile = OwnerProfile(),
     val providers: List<ProviderSettings> = defaultProviderSettings(),
     val defaultProviderId: String = "openrouter",

@@ -405,6 +405,7 @@ fun SettingsScreen(
                 item(key = "detail_system") {
                     AnimatedVisibility(visible = expandedSection == SettingsSection.SYSTEM) {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            MasterPowerCard(state = state, onPowerOff = viewModel::powerOff)
                             MicrophoneStatusMonitorCard(state = state, viewModel = viewModel)
                             ScreenUsageHealthCard(state = state, viewModel = viewModel)
                             BackgroundVoiceCard(state = state, viewModel = viewModel)

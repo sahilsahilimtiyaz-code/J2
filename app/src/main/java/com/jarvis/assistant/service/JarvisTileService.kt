@@ -14,10 +14,15 @@ class JarvisTileService : TileService() {
 
     override fun onClick() {
         super.onClick()
+        val core = com.jarvis.assistant.core.JarvisCore.get(this)
+        if (!core.settings.value.masterEnabled) {
+            updateTile()
+            return
+        }
         if (JarvisListeningService.isRunning) {
             // Use the same explicit latch as the in-app mic button so the tile
             // cannot leave a foreground recognizer running behind a stopped service.
-            com.jarvis.assistant.core.JarvisCore.get(this).stopListening()
+            core.stopListening()
         } else {
             ListeningServiceController.start(this)
         }

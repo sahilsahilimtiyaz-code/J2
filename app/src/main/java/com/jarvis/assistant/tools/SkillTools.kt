@@ -9,9 +9,11 @@ class SaveSkillTool : Tool {
     override val definition: ToolDefinition = ToolDefinition(
         name = "save_skill",
         description = "Saves a multi-step routine or skill so it can be replayed deterministically in the future. " +
-            "Provide a name, trigger phrases, and the JSON sequence of tool calls.",
+            "Provide a name and trigger phrases. Pass steps as a JSON array of {toolName, arguments}. " +
+            "If the owner says 'save that as a skill' after a task you just completed, omit steps: " +
+            "Jarvis automatically records the successful tool calls from this turn.",
         parameters = objectSchema(
-            required = listOf("name", "triggers", "steps"),
+            required = listOf("name", "triggers"),
             properties = mapOf(
                 "name" to stringProperty("Unique human name for this routine (e.g. 'Morning Routine')."),
                 "description" to stringProperty("Optional summary of what this routine does."),
@@ -31,15 +33,26 @@ class SaveSkillTool : Tool {
         val name = arguments.argString("name")
             ?: return ToolResult(false, "Please specify a name for this skill.")
         val description = arguments.argString("description").orEmpty()
-        val triggersRaw = arguments.argString("triggers").orEmpty()
-        val triggers = triggersRaw.split(",").map { it.trim() }.filter { it.isNotBlank() }
-        val stepsJson = arguments.argString("steps").orEmpty()
+        val triggersRaw = when (val element = arguments["triggers"]) {
+            is kotlinx.serialization.json.JsonArray -> element.mapNotNull {
+                (it as? kotlinx.serialization.json.JsonPrimitive)?.content
+            }.joinToString(",")
+            is kotlinx.serialization.json.JsonPrimitive -> element.content
+            else -> ""
+        }
+        val triggers = triggersRaw.split(",", ";").map { it.trim() }.filter { it.isNotBlank() }
+        val stepsJson = when (val element = arguments["steps"]) {
+            null -> ""
+            is kotlinx.serialization.json.JsonPrimitive -> element.content
+            else -> element.toString()
+        }
 
         return withContext(Dispatchers.IO) {
             val response = bridge.saveSkill(name, description, triggers, stepsJson)
             val ok = !response.startsWith("Invalid", ignoreCase = true) &&
                 !response.startsWith("Unknown tool", ignoreCase = true) &&
-                !response.startsWith("A skill must", ignoreCase = true)
+                !response.startsWith("A skill must", ignoreCase = true) &&
+                !response.startsWith("I have no completed task", ignoreCase = true)
             ToolResult(ok, response)
         }
     }

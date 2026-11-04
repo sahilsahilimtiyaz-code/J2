@@ -1213,6 +1213,36 @@ object OfflineTaskRouter {
             }
         }
 
+        // 21b. Exact in-app destinations: never let "open my YouTube profile" drift to Shorts.
+        if (hasTool("open_app") && lower.contains("youtube")) {
+            val section = when {
+                lower.contains("profile") || lower.contains("my channel") ||
+                    lower.contains("my account") || lower.contains("account") -> "profile"
+                lower.contains("subscription") -> "subscriptions"
+                lower.contains("history") -> "history"
+                lower.contains("liked") -> "liked videos"
+                lower.contains("watch later") -> "watch later"
+                lower.contains("download") -> "downloads"
+                lower.contains("library") -> "library"
+                else -> null
+            }
+            val destinationIntent = lower.startsWith("open ") ||
+                lower.startsWith("launch ") ||
+                lower.startsWith("go to ") ||
+                lower.contains("take me to") ||
+                lower.contains("show me") ||
+                lower.contains("show my ")
+            if (section != null && destinationIntent) {
+                return call(
+                    "open_app",
+                    buildJsonObject {
+                        put("app", "YouTube")
+                        put("section", section)
+                    }.toString(),
+                )
+            }
+        }
+
         // 22. Open installed app (e.g. "open YouTube", "open WhatsApp", "launch Spotify")
         if ((lower.startsWith("open ") || lower.startsWith("launch ") || lower.startsWith("start app ")) &&
             hasTool("open_app")

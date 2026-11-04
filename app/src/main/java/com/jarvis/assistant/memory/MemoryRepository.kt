@@ -413,7 +413,8 @@ class MemoryRepository(private val dao: MemoryDao) {
         if (export.conversations.isNotEmpty()) {
             val convIdMap = mutableMapOf<Long, Long>()
             export.conversations.forEach { c ->
-                val newId = dao.insertConversation(
+                val existing = dao.conversationByStart(c.startedAt, c.title)
+                val newId = existing?.id ?: dao.insertConversation(
                     ConversationEntity(
                         startedAt = c.startedAt,
                         updatedAt = c.updatedAt,
@@ -423,16 +424,19 @@ class MemoryRepository(private val dao: MemoryDao) {
                 convIdMap[c.id] = newId
             }
             export.messages.forEach { m ->
-                val targetConvId = convIdMap[m.conversationId] ?: convIdMap.values.firstOrNull() ?: 1L
-                dao.insertMessage(
-                    MessageEntity(
-                        conversationId = targetConvId,
-                        author = m.author,
-                        text = m.text,
-                        providerName = m.providerName,
-                        createdAt = m.createdAt,
-                    ),
-                )
+                val targetConvId = convIdMap[m.conversationId] ?: convIdMap.values.firstOrNull() ?: return@forEach
+                val duplicate = dao.messageExists(targetConvId, m.author, m.text, m.createdAt) > 0
+                if (!duplicate) {
+                    dao.insertMessage(
+                        MessageEntity(
+                            conversationId = targetConvId,
+                            author = m.author,
+                            text = m.text,
+                            providerName = m.providerName,
+                            createdAt = m.createdAt,
+                        ),
+                    )
+                }
             }
         }
         added

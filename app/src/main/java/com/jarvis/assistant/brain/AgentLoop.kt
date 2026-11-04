@@ -20,7 +20,12 @@ sealed interface AgentEvent {
     data class TextDelta(val text: String, val providerName: String) : AgentEvent
     data class ProviderFallback(val from: String, val to: String, val reason: String) : AgentEvent
     data class ToolStarted(val name: String, val arguments: String) : AgentEvent
-    data class ToolFinished(val name: String, val success: Boolean, val summary: String) : AgentEvent
+    data class ToolFinished(
+        val name: String,
+        val success: Boolean,
+        val summary: String,
+        val arguments: String = "",
+    ) : AgentEvent
     data class Completed(val providerName: String) : AgentEvent
     data class Error(val message: String) : AgentEvent
 }
@@ -162,6 +167,7 @@ class AgentLoop(
                                 name = call.name,
                                 success = toolResult.success,
                                 summary = summary,
+                                arguments = call.argumentsJson,
                             ),
                         )
                         if (toolResult.image != null) {

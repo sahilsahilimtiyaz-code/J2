@@ -173,11 +173,24 @@ fun HomeScreen(
         }
     }
 
-    LaunchedEffect(state.messages.size, state.messages.lastOrNull()?.text?.length) {
+    LaunchedEffect(state.messages.size) {
         if (state.messages.isNotEmpty()) {
             runCatching {
                 listState.animateScrollToItem(listState.layoutInfo.totalItemsCount - 1)
             }
+        }
+    }
+
+    // Streaming must not re-animate the whole transcript on every token. Only
+    // follow the reply while the owner is already at the bottom, so messages
+    // never appear to slide away and vanish while Jarvis is talking.
+    LaunchedEffect(state.messages.lastOrNull()?.text?.length) {
+        if (!state.generating) return@LaunchedEffect
+        val info = listState.layoutInfo
+        val total = info.totalItemsCount
+        val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+        if (total > 0 && lastVisible >= total - 3) {
+            runCatching { listState.scrollToItem(total - 1) }
         }
     }
 
@@ -1343,15 +1356,31 @@ private fun MessageCard(
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
     ) {
         if (isUser) {
-            GlassPanel(                    modifier = Modifier.widthIn(max = 300.dp),
-                    accent = JarvisPalette.CyanBright,
-                corner = 20.dp,
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 11.dp),
+            val bubble = RoundedCornerShape(
+                topStart = 22.dp,
+                topEnd = 22.dp,
+                bottomEnd = 7.dp,
+                bottomStart = 22.dp,
+            )
+            Box(
+                modifier = Modifier
+                    .widthIn(max = 318.dp)
+                    .clip(bubble)
+                    .background(
+                        Brush.linearGradient(
+                            listOf(
+                                JarvisPalette.Cyan.copy(alpha = 0.92f),
+                                JarvisPalette.Plasma.copy(alpha = 0.90f),
+                            ),
+                        ),
+                    )
+                    .border(1.dp, JarvisPalette.CyanBright.copy(alpha = 0.45f), bubble)
+                    .padding(horizontal = 17.dp, vertical = 12.dp),
             ) {
                 Text(
                     text = message.text,
                     style = MaterialTheme.typography.bodyLarge,
-                    color = JarvisPalette.Ice,
+                    color = Color.White,
                 )
             }
         } else {

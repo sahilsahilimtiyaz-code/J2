@@ -493,6 +493,17 @@ private fun DrawScope.drawBrahmaHolographicOrb(
         audio = audio,
     )
 
+    // 5b. Neural synapse sphere: depth-sorted 3D nodes, glowing synapses and
+    // travelling pulses layered over the organic mesh.
+    drawNeuralSynapseLayer(
+        center = center,
+        baseR = baseRadius,
+        physics = physics,
+        thinking = thinking,
+        accent = accent,
+        audio = audio,
+    )
+
     // 6. Central Vertical Spindle / Hourglass Double-Helix (Amber in Thinking, Cyan/White in Speaking)
     drawCentralSpindleHourglass(
         center = center,
@@ -1004,6 +1015,106 @@ private fun DrawScope.drawGyroscopicOrbits(
                     center = Offset(center.x + tx2, center.y + ty2),
                 )
             }
+        }
+    }
+}
+
+/**
+ * A futuristic neural network sphere projected in 3D: Fibonacci-distributed
+ * nodes, depth-sorted synapses, travelling synaptic pulses and soft bloom.
+ */
+private fun DrawScope.drawNeuralSynapseLayer(
+    center: Offset,
+    baseR: Float,
+    physics: NeuralOrbPhysics,
+    thinking: Boolean,
+    accent: Color,
+    audio: Float,
+) {
+    val nodeCount = 56
+    val xs = FloatArray(nodeCount)
+    val ys = FloatArray(nodeCount)
+    val zs = FloatArray(nodeCount)
+
+    val yaw = (physics.spinAngleDeg / 180f) * PI.toFloat()
+    val pitch = ((physics.pitchAngleDeg * 0.55f + 16f) / 180f) * PI.toFloat()
+    val cosYaw = cos(yaw)
+    val sinYaw = sin(yaw)
+    val cosPitch = cos(pitch)
+    val sinPitch = sin(pitch)
+    val radius = baseR * (0.86f + audio * 0.07f + physics.touchImpactScale * 0.6f)
+    val camera = baseR * 3.1f
+
+    for (i in 0 until nodeCount) {
+        val y0 = 1f - (i / (nodeCount - 1f)) * 2f
+        val ring = sqrt((1f - y0 * y0).coerceAtLeast(0f))
+        val theta = i * 2.39996323f
+        val wobble = 1f +
+            0.055f * sin(physics.wavePhase * 0.85f + i * 0.55f) +
+            audio * 0.045f
+        val x0 = cos(theta) * ring * radius * wobble
+        val yy0 = y0 * radius * wobble
+        val z0 = sin(theta) * ring * radius * wobble
+
+        val x1 = x0 * cosYaw + z0 * sinYaw
+        val z1 = -x0 * sinYaw + z0 * cosYaw
+        val y1 = yy0 * cosPitch - z1 * sinPitch
+        val z2 = yy0 * sinPitch + z1 * cosPitch
+        val depth = camera / (camera + z2)
+
+        xs[i] = center.x + x1 * depth
+        ys[i] = center.y + y1 * depth
+        zs[i] = z2
+    }
+
+    val edgeColor = if (thinking) JarvisPalette.Amber else JarvisPalette.Violet
+    for (i in 0 until nodeCount) {
+        for (offset in intArrayOf(1, 5, 11)) {
+            val j = i + offset
+            if (j >= nodeCount) continue
+            val dx = xs[i] - xs[j]
+            val dy = ys[i] - ys[j]
+            val distance = sqrt(dx * dx + dy * dy)
+            if (distance > baseR * 0.52f) continue
+            val depth = ((zs[i] + zs[j]) * 0.5f)
+            val depthFactor = ((depth + radius) / (2f * radius)).coerceIn(0f, 1f)
+            drawLine(
+                color = edgeColor.copy(alpha = 0.06f + depthFactor * 0.22f + audio * 0.10f),
+                start = Offset(xs[i], ys[i]),
+                end = Offset(xs[j], ys[j]),
+                strokeWidth = (0.7f + depthFactor * 0.9f).dp.toPx(),
+                cap = StrokeCap.Round,
+            )
+        }
+    }
+
+    val ordered = (0 until nodeCount).sortedByDescending { zs[it] }
+    for (index in ordered) {
+        val depthFactor = ((zs[index] + radius) / (2f * radius)).coerceIn(0f, 1f)
+        val position = Offset(xs[index], ys[index])
+        val nodeColor = when {
+            index % 11 == 0 -> JarvisPalette.Magenta
+            index % 7 == 0 -> JarvisPalette.CyanBright
+            else -> accent
+        }
+        drawCircle(
+            color = nodeColor.copy(alpha = 0.05f + depthFactor * 0.20f),
+            radius = (5.5f + depthFactor * 3.5f).dp.toPx(),
+            center = position,
+        )
+        drawCircle(
+            color = if (depthFactor > 0.62f) Color.White.copy(alpha = 0.85f) else nodeColor.copy(alpha = 0.35f + depthFactor * 0.55f),
+            radius = (1.1f + depthFactor * 1.7f + audio * 0.8f).dp.toPx(),
+            center = position,
+        )
+        if (index % 9 == 0) {
+            val pulse = 8f + 8f * (sin(physics.frameTick * 3.2f + index) * 0.5f + 0.5f)
+            drawCircle(
+                color = nodeColor.copy(alpha = 0.10f + depthFactor * 0.12f),
+                radius = pulse.dp.toPx(),
+                center = position,
+                style = Stroke(width = 0.8.dp.toPx()),
+            )
         }
     }
 }

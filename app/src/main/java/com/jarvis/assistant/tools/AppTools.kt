@@ -12,12 +12,19 @@ class OpenAppTool : Tool {
 
     override val definition: ToolDefinition = ToolDefinition(
         name = "open_app",
-        description = "Open an installed app on the phone by its name, for example " +
-            "\"YouTube\", \"WhatsApp\", \"Camera\" or \"Spotify\".",
+        description = "Open an installed app, optionally on one exact screen inside it. " +
+            "Use section for destinations such as 'profile', 'subscriptions', 'history', " +
+            "'liked videos', 'watch later', 'downloads', 'library' or 'account'. " +
+            "The destination is matched in the app's accessibility tree and verified, " +
+            "never guessed with a coordinate tap.",
         parameters = objectSchema(
             required = listOf("app"),
             properties = mapOf(
                 "app" to stringProperty("The app name as the owner would say it."),
+                "section" to stringProperty(
+                    "Optional exact screen inside the app, e.g. 'profile', 'subscriptions', " +
+                        "'history', 'liked videos', 'watch later' or 'account'. Leave empty to just open the app.",
+                ),
             ),
         ),
     )
@@ -28,6 +35,10 @@ class OpenAppTool : Tool {
     override suspend fun execute(arguments: JsonObject, context: ToolContext): ToolResult {
         val query = arguments.argString("app")
             ?: return ToolResult(false, "Tell me which app to open.")
+        val section = arguments.argString("section").orEmpty()
+        if (section.isNotBlank()) {
+            return AppDestinationOpener.open(context.appContext, query, section)
+        }
 
         return withContext(Dispatchers.IO) {
             val packageManager = context.appContext.packageManager

@@ -142,6 +142,8 @@ fun JarvisApp(vm: JarvisViewModel = viewModel()) {
                     onFinished = { bootFinished = true },
                 )
 
+                !state.poweredOn -> PoweredOffScreen(onPowerOn = vm::powerOn)
+
                 !state.settings.auth.isAuthenticated -> AuthScreen(
                     defaultName = state.settings.profile.name,
                     onGoogleSignIn = vm::signInWithGoogle,
@@ -262,12 +264,12 @@ fun JarvisApp(vm: JarvisViewModel = viewModel()) {
                             .align(Alignment.CenterEnd)
                             .fillMaxHeight()
                             .width(20.dp),
-                        enabled = !state.quickPanelOpen,
+                        enabled = state.poweredOn && !state.quickPanelOpen,
                         onOpen = vm::openQuickPanel,
                     )
 
                     QuickPanelOverlay(
-                        visible = state.quickPanelOpen,
+                        visible = state.poweredOn && state.quickPanelOpen,
                         state = state,
                         onClose = vm::closeQuickPanel,
                         onSelectTab = { tab ->
@@ -282,7 +284,7 @@ fun JarvisApp(vm: JarvisViewModel = viewModel()) {
                     )
 
                     ConfirmationOverlay(
-                        pending = state.pendingConfirmation,
+                        pending = if (state.poweredOn) state.pendingConfirmation else null,
                         onApprove = vm::approveConfirmation,
                         onAlwaysAllow = vm::approveAndAlwaysAllowConfirmation,
                         onReject = vm::rejectConfirmation,

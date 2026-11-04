@@ -47,6 +47,8 @@ data class PendingPermission(
 
 data class JarvisUiState(
     val loading: Boolean = true,
+    /** False after the owner uses the master power switch. */
+    val poweredOn: Boolean = true,
     val onboardingComplete: Boolean = false,
     val settings: AppSettings = AppSettings(),
     val messages: List<ChatMessageUi> = emptyList(),

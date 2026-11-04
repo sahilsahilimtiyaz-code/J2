@@ -104,6 +104,7 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
                         audioLevel = runtime.audioLevel,
                         micLocked = runtime.micLocked,
                         micDiagnostics = runtime.micDiagnostics,
+                        poweredOn = runtime.poweredOn,
                         activePlan = runtime.activePlan,
                         sharedPayload = runtime.sharedPayload,
                     )
@@ -209,6 +210,15 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun stop() = core.stop()
+
+    /** Master power switch: stops every service, the microphone and all speech. */
+    fun powerOff() {
+        _ui.update { it.copy(quickPanelOpen = false, tab = JarvisTab.HOME) }
+        core.powerOff()
+    }
+
+    /** Turns Jarvis back on after [powerOff]. */
+    fun powerOn() = core.powerOn()
 
     fun stopScreenAutomation() = core.stopScreenAutomation()
 
@@ -1173,6 +1183,13 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
         val cleanEmail = email.trim()
         val cleanName = displayName.trim().ifBlank { deriveDisplayNameFromEmail(cleanEmail) }
         viewModelScope.launch {
+            // Preserve every message from the account we are leaving before switching.
+            val previous = core.settings.value.auth
+            if (previous.mode == com.jarvis.assistant.settings.AuthMode.GOOGLE && previous.email.isNotBlank()) {
+                withContext(Dispatchers.IO) {
+                    core.backupRestoreRepository.saveGoogleAccountChatBackup(previous.email)
+                }
+            }
             core.settingsRepository.saveAuthSession(
                 com.jarvis.assistant.settings.AuthSession(
                     mode = com.jarvis.assistant.settings.AuthMode.GOOGLE,
@@ -1181,15 +1198,20 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
                     signedInAt = System.currentTimeMillis(),
                 ),
             )
-            // 100% Real Google Login Chat Persistence: restore chats for this account
+            // Restore this Google account's complete chat vault, then reload the transcript
+            // into the live UI so the owner sees every saved conversation immediately.
             val restoredCount = withContext(Dispatchers.IO) {
                 core.backupRestoreRepository.restoreGoogleAccountChatBackup(cleanEmail)
             }
+            core.reloadHistory("Google account chats restored")
+            withContext(Dispatchers.IO) {
+                core.backupRestoreRepository.saveGoogleAccountChatBackup(cleanEmail)
+            }
             core.setNotice(
                 if (restoredCount > 0) {
-                    "Signed in with Google as $cleanEmail. Restored $restoredCount chats from your Google account."
+                    "Signed in with Google as $cleanEmail. Restored $restoredCount saved messages from this account."
                 } else {
-                    "Signed in with Google as $cleanEmail. Chat history is now synced to this account."
+                    "Signed in with Google as $cleanEmail. Every chat from now on is saved to this account."
                 },
             )
         }
@@ -1197,6 +1219,12 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
 
     fun continueAsGuest() {
         viewModelScope.launch {
+            val previous = core.settings.value.auth
+            if (previous.mode == com.jarvis.assistant.settings.AuthMode.GOOGLE && previous.email.isNotBlank()) {
+                withContext(Dispatchers.IO) {
+                    core.backupRestoreRepository.saveGoogleAccountChatBackup(previous.email)
+                }
+            }
             core.settingsRepository.saveAuthSession(
                 com.jarvis.assistant.settings.AuthSession(
                     mode = com.jarvis.assistant.settings.AuthMode.GUEST,
@@ -1210,6 +1238,12 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
 
     fun signOut() {
         viewModelScope.launch {
+            val current = core.settings.value.auth
+            if (current.mode == com.jarvis.assistant.settings.AuthMode.GOOGLE && current.email.isNotBlank()) {
+                withContext(Dispatchers.IO) {
+                    core.backupRestoreRepository.saveGoogleAccountChatBackup(current.email)
+                }
+            }
             core.settingsRepository.signOut()
             _ui.update { it.copy(tab = JarvisTab.HOME, quickPanelOpen = false) }
         }

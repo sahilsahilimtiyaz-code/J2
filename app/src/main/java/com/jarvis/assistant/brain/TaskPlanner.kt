@@ -98,6 +98,7 @@ object ToolContextBudgeter {
         "read_calendar_events",
         "create_calendar_event",
         "run_skill",
+        "save_skill",
         "automate_screen",
         "see_screen",
         "tap_screen",

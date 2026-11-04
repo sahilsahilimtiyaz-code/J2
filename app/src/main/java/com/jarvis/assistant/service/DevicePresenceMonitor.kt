@@ -125,6 +125,16 @@ class DevicePresenceMonitor(
         }
     }
 
+    /** Stops all monitoring and releases the screen-state receiver. */
+    fun stop() {
+        monitorJob?.cancel()
+        monitorJob = null
+        if (receiverRegistered) {
+            runCatching { appContext.unregisterReceiver(screenReceiver) }
+            receiverRegistered = false
+        }
+    }
+
     fun start(profileProvider: () -> OwnerProfile, canSpeakNow: () -> Boolean) {
         registerReceiverIfNeeded()
         refreshTelemetry(System.currentTimeMillis())

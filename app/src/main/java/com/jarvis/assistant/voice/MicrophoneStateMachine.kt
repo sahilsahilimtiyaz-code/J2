@@ -68,6 +68,13 @@ class MicrophoneStateMachine(
     private var activeSessionId: String? = null
     private var audioRecordRecording: Boolean = false
 
+    /**
+     * While true the microphone is held in a single continuous "hot mic" session.
+     * Recognizer teardown between utterances must never report IDLE, because that
+     * is what made the microphone indicator and the UI flicker on/off/on/off.
+     */
+    private var hotHold: Boolean = false
+
     private val _diagnostics = MutableStateFlow(MicrophoneDiagnostics())
     val diagnostics: StateFlow<MicrophoneDiagnostics> = _diagnostics.asStateFlow()
 
@@ -247,16 +254,54 @@ class MicrophoneStateMachine(
         synchronized(lock) {
             val snap = _diagnostics.value
             if (snap.activeRecognitionSessionCount == 0 && snap.state != MicrophoneState.IDLE) {
-                activeSessionId = null
+                if (hotHold) {
+                    // The AudioRecord anchor still owns the microphone: stay live.
+                    val history = appendTransition(snap.transitionHistory, MicrophoneState.LISTENING)
+                    _diagnostics.value = snap.copy(
+                        state = MicrophoneState.LISTENING,
+                        lastStopReason = stopReason ?: snap.lastStopReason,
+                        isMicrophoneResourceHeld = audioRecordRecording || snap.isMicrophoneResourceHeld,
+                        transitionHistory = history,
+                    )
+                } else {
+                    activeSessionId = null
+                    _diagnostics.value = snap.copy(
+                        state = MicrophoneState.IDLE,
+                        lastStopReason = stopReason ?: snap.lastStopReason,
+                        isMicrophoneResourceHeld = audioRecordRecording,
+                        transitionHistory = appendTransition(snap.transitionHistory, MicrophoneState.IDLE),
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Marks the microphone as deliberately held across turns (continuous voice link).
+     * When disabled, the normal deterministic release path resumes.
+     */
+    fun setHotHold(enabled: Boolean, reason: String = "Continuous live microphone") {
+        synchronized(lock) {
+            hotHold = enabled
+            val snap = _diagnostics.value
+            if (enabled) {
+                val history = if (snap.state != MicrophoneState.LISTENING) {
+                    appendTransition(snap.transitionHistory, MicrophoneState.LISTENING)
+                } else {
+                    snap.transitionHistory
+                }
                 _diagnostics.value = snap.copy(
-                    state = MicrophoneState.IDLE,
-                    lastStopReason = stopReason ?: snap.lastStopReason,
-                    isMicrophoneResourceHeld = audioRecordRecording,
-                    transitionHistory = appendTransition(snap.transitionHistory, MicrophoneState.IDLE),
+                    state = MicrophoneState.LISTENING,
+                    lastStartReason = reason,
+                    isMicrophoneResourceHeld = true,
+                    transitionHistory = history,
                 )
             }
         }
     }
+
+    val isHotHeld: Boolean
+        get() = synchronized(lock) { hotHold }
 
     /**
      * Initiates deterministic teardown of an active microphone session
@@ -307,7 +352,16 @@ class MicrophoneStateMachine(
             val duration = computeElapsedLocked(snap)
             val withError = appendTransition(snap.transitionHistory, MicrophoneState.ERROR)
             val held = snap.activeRecognitionSessionCount > 0 || audioRecordRecording
-            if (!held) {
+            if (hotHold) {
+                _diagnostics.value = snap.copy(
+                    state = MicrophoneState.LISTENING,
+                    listeningDurationMs = duration,
+                    lastError = errorMessage,
+                    lastStopReason = stopReason,
+                    isMicrophoneResourceHeld = true,
+                    transitionHistory = appendTransition(appendTransition(withError, MicrophoneState.LISTENING), MicrophoneState.LISTENING),
+                )
+            } else if (!held) {
                 val withStopping = appendTransition(withError, MicrophoneState.STOPPING)
                 val withIdle = appendTransition(withStopping, MicrophoneState.IDLE)
                 activeSessionId = null
@@ -344,9 +398,12 @@ class MicrophoneStateMachine(
             val snap = _diagnostics.value
             val nextCount = (snap.activeRecognitionSessionCount - 1).coerceAtLeast(0)
             val duration = computeElapsedLocked(snap)
-            val held = nextCount > 0 || audioRecordRecording
+            val held = nextCount > 0 || audioRecordRecording || hotHold
             var history = snap.transitionHistory
-            val nextState = if (!held) {
+            val nextState = if (hotHold) {
+                history = appendTransition(history, MicrophoneState.LISTENING)
+                MicrophoneState.LISTENING
+            } else if (!held) {
                 if (snap.state == MicrophoneState.ERROR ||
                     snap.state == MicrophoneState.LISTENING ||
                     snap.state == MicrophoneState.STARTING
@@ -465,6 +522,7 @@ class MicrophoneStateMachine(
      */
     fun forceReleaseAll(reason: String) {
         synchronized(lock) {
+            hotHold = false
             val snap = _diagnostics.value
             val duration = computeElapsedLocked(snap)
             activeSessionId = null

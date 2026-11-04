@@ -24,6 +24,10 @@ class JarvisListeningService : Service() {
     override fun onCreate() {
         super.onCreate()
         core = JarvisCore.get(this)
+        if (!core.settings.value.masterEnabled) {
+            stopSelf()
+            return
+        }
         val promoted = runCatching {
             ServiceCompat.startForeground(
                 this,

@@ -30,6 +30,8 @@ data class PendingPermission(
 
 /** Everything the UI and the notification reflect. */
 data class CoreState(
+    /** False after the owner uses the master power switch in Settings. */
+    val poweredOn: Boolean = true,
     val messages: List<CoreMessage> = emptyList(),
     val generating: Boolean = false,
     val listening: Boolean = false,

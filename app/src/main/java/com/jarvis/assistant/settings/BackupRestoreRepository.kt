@@ -239,6 +239,9 @@ class BackupRestoreRepository(
             if (!targetFile.exists() || targetFile.length() == 0L) return@withContext 0
             val raw = targetFile.readText()
             memoryRepository.importJson(raw)
+            // Report how many saved messages this account actually owns, not the
+            // memory-insert count, so the UI can confirm a complete restore.
+            json.decodeFromString<MemoryRepository.MemoryExport>(raw).messages.size
         }.getOrDefault(0)
     }
 }

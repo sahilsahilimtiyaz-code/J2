@@ -88,6 +88,15 @@ interface MemoryDao {
     @Query("SELECT * FROM conversations WHERE id = :id")
     suspend fun conversation(id: Long): ConversationEntity?
 
+    @Query("SELECT * FROM conversations WHERE startedAt = :startedAt AND title = :title LIMIT 1")
+    suspend fun conversationByStart(startedAt: Long, title: String): ConversationEntity?
+
+    @Query(
+        "SELECT COUNT(*) FROM messages WHERE conversationId = :conversationId " +
+            "AND author = :author AND text = :text AND createdAt = :createdAt",
+    )
+    suspend fun messageExists(conversationId: Long, author: String, text: String, createdAt: Long): Int
+
     @Insert
     suspend fun insertMessage(message: MessageEntity): Long
 
