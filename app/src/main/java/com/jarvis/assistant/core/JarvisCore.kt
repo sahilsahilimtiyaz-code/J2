@@ -650,9 +650,15 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
     }
 
     private fun loadHistory() {
-        scope.launch {
-            val recent = runCatching { memoryRepository.recentTranscript(HISTORY_DISPLAY_LIMIT) }
+        scope.launch(Dispatchers.IO) {
+            var recent = runCatching { memoryRepository.recentTranscript(HISTORY_DISPLAY_LIMIT) }
                 .getOrDefault(emptyList())
+            val auth = settings.value.auth
+            if (recent.isEmpty() && auth.mode == com.jarvis.assistant.settings.AuthMode.GOOGLE && auth.email.isNotBlank()) {
+                runCatching { backupRestoreRepository.restoreGoogleAccountChatBackup(auth.email) }
+                recent = runCatching { memoryRepository.recentTranscript(HISTORY_DISPLAY_LIMIT) }
+                    .getOrDefault(emptyList())
+            }
             val mapped = recent.reversed()
                 .filter { it.text.isNotBlank() }
                 .map { message ->
@@ -665,10 +671,20 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                     )
                 }
             _state.update { current ->
-                if (current.messages.isEmpty()) {
+                if (mapped.isEmpty()) {
+                    current.copy(historyLoaded = true)
+                } else if (current.messages.isEmpty()) {
                     current.copy(messages = mapped, historyLoaded = true)
                 } else {
-                    current.copy(historyLoaded = true)
+                    // Merge persisted DB history with any in-flight or greeting messages added during startup
+                    val existingTexts = mapped.takeLast(6).map { "${it.author}:${it.text.trim()}" }.toSet()
+                    val extraInMemory = current.messages.filter { msg ->
+                        !msg.id.startsWith("db_") && "${msg.author}:${msg.text.trim()}" !in existingTexts
+                    }
+                    current.copy(
+                        messages = (mapped + extraInMemory).takeLast(HISTORY_DISPLAY_LIMIT),
+                        historyLoaded = true,
+                    )
                 }
             }
         }
@@ -676,7 +692,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
 
     /** Replaces the visible transcript with the newest persisted messages. */
     fun reloadHistory(reason: String = "Conversation history reloaded") {
-        scope.launch {
+        scope.launch(Dispatchers.IO) {
             val recent = runCatching { memoryRepository.recentTranscript(HISTORY_DISPLAY_LIMIT) }
                 .getOrDefault(emptyList())
             val mapped = recent.reversed()
@@ -691,7 +707,11 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                     )
                 }
             _state.update { current ->
-                current.copy(messages = mapped, historyLoaded = true, notice = reason)
+                current.copy(
+                    messages = if (mapped.isNotEmpty()) mapped else current.messages,
+                    historyLoaded = true,
+                    notice = reason,
+                )
             }
         }
     }
@@ -1023,8 +1043,25 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                     }
                 }
             }.orEmpty()
+            val promptHistory = historyForPrompt()
+            val recentDialogueContext = if (promptHistory.isNotEmpty()) {
+                buildString {
+                    append("\n\n## Immediate Conversation Context (Recent Turns — Remember What Was Just Said)\n")
+                    append("Use this recent dialogue to resolve pronouns ('it', 'that', 'there', 'my profile', 'what did you just say', 'repeat that') and maintain continuity:\n")
+                    promptHistory.takeLast(8).forEach { msg ->
+                        val speaker = if (msg.role == LlmRole.USER) {
+                            current.profile.name.ifBlank { "Owner" }
+                        } else {
+                            "Jarvis (You)"
+                        }
+                        append("- $speaker: ${msg.content.trim().take(360)}\n")
+                    }
+                }
+            } else {
+                ""
+            }
             val systemPrompt = withContext(Dispatchers.IO) {
-                personaBuilder.build(current, memoryContext + sharedContext)
+                personaBuilder.build(current, memoryContext + sharedContext + recentDialogueContext)
             }
 
             val selectedTools = com.jarvis.assistant.brain.ToolContextBudgeter.selectToolsForTurn(
@@ -1045,7 +1082,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             agentLoop.run(
                 AgentRequest(
                     systemPrompt = systemPrompt,
-                    history = historyForPrompt(),
+                    history = promptHistory,
                     userMessage = userText,
                     providers = providers,
                     tools = selectedTools,
@@ -1463,6 +1500,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
     private fun onReplySpoken() {
         lastSpeechEndedAt = System.currentTimeMillis()
         currentSpeechText = ""
+        sttEngine.setMutedForTts(false)
         abandonAudioFocus()
         _state.update { it.copy(speaking = false, audioLevel = 0f, spokenCaption = null) }
         // Mid-call the microphone belongs to the call capture, never to the
@@ -1477,11 +1515,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                 com.jarvis.assistant.voice.SoundFxEngine.play(com.jarvis.assistant.voice.SoundFxEngine.SoundType.DUPLEX_CHIRP)
             }
             if (isGranted(Manifest.permission.RECORD_AUDIO)) {
-                startListeningInternal(
-                    interrupt = false,
-                    isAutoLoop = false,
-                    reason = "Conversation mode turn follow-up",
-                )
+                ensureForegroundMicIfLocked(immediate = true)
             }
             return
         }
@@ -1492,19 +1526,16 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         if (!uiVisible && !serviceActive) return
         if (_state.value.generating) return
         if (isGranted(Manifest.permission.RECORD_AUDIO)) {
-            startListeningInternal(
-                interrupt = false,
-                isAutoLoop = true,
-                reason = if (serviceActive) "Background wake-word loop after reply" else "Continuous listening after reply",
-            )
+            ensureForegroundMicIfLocked(immediate = true)
         }
     }
 
     private fun beginSpeaking() {
         if (_state.value.speaking) return
-        // Release any active microphone capture before Jarvis speaks so the OS microphone
-        // indicator turns off immediately during TTS playback and Jarvis never transcribes his own voice.
-        releaseMicrophoneBeforeProcessing("Released microphone before TTS speech playback")
+        sttEngine.setMutedForTts(true)
+        // Pause active recognition while keeping the LiveCallAudioAnchor alive so the
+        // microphone never cycles off/on and Jarvis never transcribes his own voice.
+        releaseMicrophoneBeforeProcessing("Muted recognition during TTS speech playback")
         requestAudioFocus()
         speechStartedAt = System.currentTimeMillis()
         _state.update { it.copy(speaking = true, spokenCaption = null) }
@@ -1597,6 +1628,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             speechOutbox = Channel(Channel.UNLIMITED)
             audioPlayer.stop()
             systemTts.stop()
+            sttEngine.setMutedForTts(false)
             lastSpeechEndedAt = System.currentTimeMillis()
             currentSpeechText = ""
             abandonAudioFocus()
@@ -1681,8 +1713,10 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             (settings.value.voice.continuousListening || serviceActive || _conversationMode.value)
 
         // Continuous voice-link: the hot-mic session owns the recognizer loop.
-        // Do not cancel it or release the AudioRecord anchor between turns.
+        // Pause active recognition while keeping the AudioRecord anchor open so
+        // the microphone stays live continuously without cycling ON/OFF.
         if (hotMicJob?.isActive == true) {
+            sttEngine.pauseRecognitionKeepLiveAnchor(reason)
             micStateMachine.setHotHold(true)
             _state.update {
                 it.copy(
@@ -1704,6 +1738,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         if (wasListening) {
             if (keepLiveCallAnchor) {
                 sttEngine.pauseRecognitionKeepLiveAnchor(reason)
+                micStateMachine.setHotHold(true, reason)
                 micStateMachine.completeProcessingToIdle(reason)
             } else {
                 sttEngine.forceDestroyActive(reason, releaseLiveAnchor = true)
@@ -1716,7 +1751,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         }
         _state.update {
             it.copy(
-                listening = false,
+                listening = keepLiveCallAnchor,
                 partialTranscript = "",
                 audioLevel = 0f,
                 micLocked = keepLiveCallAnchor,
@@ -3590,6 +3625,30 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         val seenSignatures = mutableMapOf<Int, Int>()
 
         try {
+            val initialController = JarvisAccessibilityService.controller()
+            if (initialController != null) {
+                // Fast-path: check if goal matches a known AppDestination (e.g., "open my YouTube profile")
+                val knownDest = detectGoalDestination(goal)
+                if (knownDest != null) {
+                    val destResult = AppDestinations.planFor(knownDest).run(initialController)
+                    if (destResult.success) {
+                        logAutomationStep("open_app_section", "Completed destination ${knownDest.appName} -> ${knownDest.section}: ${destResult.message}", true)
+                        return destResult
+                    }
+                }
+                // If Jarvis itself is still in the foreground and the goal names another app, launch that app first!
+                val currentPkg = initialController.foregroundPackage()
+                if (currentPkg.isBlank() || currentPkg == appContext.packageName) {
+                    val targetApp = detectGoalTargetApp(goal)
+                    if (targetApp != null && targetApp.packageName != appContext.packageName) {
+                        if (appRegistry.launch(targetApp.packageName)) {
+                            historySteps += "Pre-step: Launched ${targetApp.label} (${targetApp.packageName})"
+                            delay(1_050L)
+                        }
+                    }
+                }
+            }
+
             for (step in 1..limit) {
                 coroutineContext.ensureActive()
                 if (screenAutomationCancelled) {
@@ -3995,16 +4054,115 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         if (jsonStart >= 0 && jsonEnd > jsonStart) {
             runCatching {
                 val obj = JSONObject(raw.substring(jsonStart, jsonEnd + 1))
-                return@withContext ScreenStepDecision(
+                val parsed = ScreenStepDecision(
                     action = obj.optString("action", "fail").trim(),
                     target = obj.optString("target", "").trim(),
                     text = obj.optString("text", ""),
                     expectedPostCondition = obj.optString("expected_post_condition", "").trim(),
                     reason = obj.optString("reason", "").trim(),
                 )
+                if (parsed.action != "fail") return@withContext parsed
             }
         }
-        ScreenStepDecision(action = "fail", reason = "Could not determine the next screen step.")
+        heuristicScreenStepFallback(goal = goal, step = step, previousSteps = previousSteps)
+    }
+
+    private fun detectGoalDestination(goal: String): com.jarvis.assistant.tools.AppDestination? {
+        val norm = goal.lowercase(Locale.UK)
+            .replace(Regex("[^\\p{L}\\p{N} ]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        val appNames = listOf(
+            "youtube" to listOf("youtube", "yt"),
+            "instagram" to listOf("instagram", "insta", "ig"),
+            "whatsapp" to listOf("whatsapp", "wa"),
+            "spotify" to listOf("spotify"),
+            "chrome" to listOf("chrome", "browser"),
+            "gmail" to listOf("gmail", "mail"),
+            "settings" to listOf("settings", "setting"),
+            "maps" to listOf("maps", "google maps"),
+            "clock" to listOf("clock", "alarm", "timer"),
+        )
+        val matchedApp = appNames.firstOrNull { (_, aliases) ->
+            aliases.any { alias -> Regex("\\b${Regex.escape(alias)}\\b").containsMatchIn(norm) }
+        }?.first ?: run {
+            val fgPkg = JarvisAccessibilityService.controller()?.foregroundPackage().orEmpty()
+            when {
+                fgPkg.contains("youtube") -> "youtube"
+                fgPkg.contains("instagram") -> "instagram"
+                fgPkg.contains("whatsapp") -> "whatsapp"
+                fgPkg.contains("spotify") -> "spotify"
+                fgPkg.contains("settings") -> "settings"
+                else -> return null
+            }
+        }
+        val sectionCleaned = norm
+            .replace(Regex("\\b(open|go to|navigate to|show|take me to|my|the|in|on|inside|please|jarvis|section|tab|page|screen)\\b"), " ")
+            .replace(Regex("\\b(youtube|yt|instagram|insta|ig|whatsapp|wa|spotify|chrome|gmail|settings)\\b"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        if (sectionCleaned.isBlank()) return null
+        return AppDestinations.findDestination(matchedApp, sectionCleaned)
+    }
+
+    private fun detectGoalTargetApp(goal: String): com.jarvis.assistant.tools.InstalledApp? {
+        val norm = goal.lowercase(Locale.UK)
+        val candidates = listOf(
+            "youtube", "instagram", "whatsapp", "spotify", "chrome", "gmail",
+            "settings", "maps", "telegram", "camera", "photos", "gallery",
+            "clock", "calculator", "calendar", "files", "play store", "netflix",
+        )
+        for (name in candidates) {
+            if (Regex("\\b${Regex.escape(name)}\\b").containsMatchIn(norm)) {
+                appRegistry.findBest(name)?.let { return it }
+            }
+        }
+        val openMatch = Regex("""(?:open|launch|in|on)\s+([a-z0-9 ]{2,22}?)(?:\s+and\b|\s+to\b|\s+profile\b|\s+settings\b|$)""")
+            .find(norm)?.groupValues?.getOrNull(1)?.trim()
+        if (!openMatch.isNullOrBlank()) {
+            appRegistry.findBest(openMatch)?.let { return it }
+        }
+        return null
+    }
+
+    private suspend fun heuristicScreenStepFallback(
+        goal: String,
+        step: Int,
+        previousSteps: List<String>,
+    ): ScreenStepDecision = withContext(Dispatchers.Main) {
+        val controller = JarvisAccessibilityService.controller()
+            ?: return@withContext ScreenStepDecision(action = "fail", reason = "Accessibility service disconnected.")
+        val cleanTarget = goal.lowercase(Locale.UK)
+            .replace(Regex("\\b(open|tap|click|press|go to|navigate to|show|take me to|turn on|turn off|enable|disable|my|the|in|on|inside|please|jarvis|youtube|instagram|whatsapp|spotify|settings|app|section|tab|page)\\b"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .ifBlank { goal.trim() }
+
+        if (step > 1 && previousSteps.any { it.contains("VERIFIED") }) {
+            return@withContext ScreenStepDecision(
+                action = "done",
+                reason = "Target action verified on screen.",
+            )
+        }
+
+        val candidates = controller.findTapCandidates(cleanTarget)
+        val best = candidates.firstOrNull()
+        if (best != null) {
+            return@withContext ScreenStepDecision(
+                action = "click",
+                target = cleanTarget,
+                expectedPostCondition = "Opened ${best.label}",
+                reason = "Matched on-screen element '${best.label}' for '$cleanTarget'",
+            )
+        }
+        if (step <= 2) {
+            return@withContext ScreenStepDecision(
+                action = "scroll_down",
+                expectedPostCondition = "More elements visible",
+                reason = "Scrolling down to look for '$cleanTarget'",
+            )
+        }
+        ScreenStepDecision(action = "fail", reason = "Could not locate '$cleanTarget' on the current screen.")
     }
 
     private fun logAutomationStep(toolName: String, detail: String, success: Boolean) {
@@ -4837,20 +4995,47 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         stepsJson: String,
     ): String = withContext(Dispatchers.IO) {
         val raw = stepsJson.trim()
-        val steps = if (raw.isBlank() || raw == "[]" || raw == "null") {
+        var steps = if (raw.isBlank() || raw == "[]" || raw == "null") {
             val current = lastToolTrace.toList()
             if (current.isNotEmpty()) current else lastCompletedToolTrace.toList()
         } else {
             parseSkillSteps(raw)
         }.filter { it.toolName != "save_skill" }
+
+        // If the owner asked to create a skill directly (e.g. "create a skill called Morning Music to open YouTube and play lo-fi")
+        // without having executed the steps in the previous turn, synthesize the steps from the description or name!
         if (steps.isEmpty()) {
-            return@withContext "I have no completed task to save yet. Ask me to perform the task once, then say 'save that as a skill'."
+            val commandSource = description.trim().ifBlank { name.trim() }
+            if (commandSource.isNotBlank()) {
+                val routedCalls = com.jarvis.assistant.brain.OfflineTaskRouter.routeUserCommand(
+                    userText = commandSource,
+                    tools = toolRegistry.definitions(),
+                ).filter { it.name != "save_skill" && it.name != "run_skill" }
+                if (routedCalls.isNotEmpty()) {
+                    steps = routedCalls.map { call ->
+                        val argsMap = runCatching {
+                            val obj = JSONObject(call.arguments)
+                            obj.keys().asSequence().associateWith { k -> obj.optString(k) }
+                        }.getOrDefault(emptyMap())
+                        com.jarvis.assistant.memory.SkillStep(
+                            toolName = call.name,
+                            arguments = argsMap,
+                            description = "Synthesized from '$commandSource'",
+                        )
+                    }
+                }
+            }
+        }
+
+        if (steps.isEmpty()) {
+            return@withContext "I have no completed task to save yet. Ask me to perform the task once, or describe what the skill should do (for example: 'create a skill called Morning Music that opens YouTube and searches lo-fi')."
         }
         val availableNames = toolRegistry.definitions().map { it.name }.toSet()
         skillRepository.validateSteps(steps, availableNames)?.let { validationError ->
             return@withContext validationError
         }
-        val saved = skillRepository.saveSkill(name, description, triggers, steps)
+        val effectiveTriggers = if (triggers.isEmpty()) listOf(name.lowercase(Locale.UK)) else triggers
+        val saved = skillRepository.saveSkill(name, description.ifBlank { "Automated routine for $name" }, effectiveTriggers, steps)
         "Saved routine '${saved.name}' with ${saved.steps.size} step(s). Say 'run ${saved.name}' any time."
     }
 

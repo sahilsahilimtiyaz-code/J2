@@ -81,8 +81,8 @@ class LiveCallAudioAnchor(
     @Volatile
     var onVoiceSilenceReached: (() -> Unit)? = null
 
-    // 750ms circular pre-roll buffer at 16,000 Hz (12,000 shorts = 24,000 bytes)
-    private val preRollCapacityShorts = 12_000
+    // 1.2-second circular pre-roll buffer at 16,000 Hz (19,200 shorts = 38,400 bytes)
+    private val preRollCapacityShorts = 19_200
     private val preRollRing = ShortArray(preRollCapacityShorts)
     private var preRollWritePos = 0
     private var preRollFilled = 0
@@ -92,6 +92,9 @@ class LiveCallAudioAnchor(
     @Volatile
     var isSpeechActive: Boolean = false
         private set
+
+    @Volatile
+    var suppressedForTts: Boolean = false
 
     fun ensureLive(): Boolean {
         synchronized(lock) {
@@ -195,7 +198,7 @@ class LiveCallAudioAnchor(
     private fun runCaptureLoop() {
         val frameShorts = ShortArray(FRAME_SHORTS) // 320 shorts = 20ms @ 16kHz
         val pcmBytes = ByteArray(FRAME_SHORTS * 2)
-        var noiseFloorRms = 35.0
+        var noiseFloorRms = 14.0
         var consecutiveVoiceFrames = 0
         var lastVoiceFrameAtMs = 0L
         var speechTriggeredAtMs = 0L
@@ -221,29 +224,33 @@ class LiveCallAudioAnchor(
                 sumSq += (s * s).toDouble()
             }
             val rms = kotlin.math.sqrt(sumSq / read)
-            // Perceptual logarithmic audio scaling: normal speech (~50-350 RMS) gives 0.25 - 0.75 audioLevel
-            val normalizedLevel = if (rms > 12.0) {
-                (kotlin.math.ln((rms / 14.0).coerceAtLeast(1.0)) / kotlin.math.ln(45.0))
+            // Perceptual logarithmic audio scaling: normal speech (~35-350 RMS) gives 0.25 - 0.85 audioLevel
+            val normalizedLevel = if (rms > 10.0) {
+                (kotlin.math.ln((rms / 11.0).coerceAtLeast(1.0)) / kotlin.math.ln(42.0))
                     .toFloat().coerceIn(0.05f, 1f)
             } else {
                 0.04f
             }
-            onRmsLevel?.invoke(normalizedLevel)
-
-            // Dynamic ambient noise floor tracking (stays agile in quiet & moderate environments)
-            if (!isSpeechActive && rms < noiseFloorRms * 1.8) {
-                noiseFloorRms = (noiseFloorRms * 0.95 + rms * 0.05).coerceIn(12.0, 320.0)
+            if (!suppressedForTts) {
+                onRmsLevel?.invoke(normalizedLevel)
             }
 
-            // High-sensitivity speech threshold: triggers on normal conversation and gentle voices
-            val voiceThreshold = (noiseFloorRms * 1.25 + 12.0).coerceIn(28.0, 220.0)
-            val isVoiceFrame = rms >= voiceThreshold || peak >= 100
+            // Dynamic ambient noise floor tracking (stays agile in quiet & moderate environments)
+            if (!isSpeechActive && rms < noiseFloorRms * 1.6) {
+                noiseFloorRms = (noiseFloorRms * 0.94 + rms * 0.06).coerceIn(10.0, 180.0)
+            }
+
+            // High-sensitivity speech threshold: triggers immediately on soft or normal voice
+            val voiceThreshold = (noiseFloorRms * 1.15 + 5.0).coerceIn(14.0, 120.0)
+            val isVoiceFrame = !suppressedForTts && (rms >= voiceThreshold || peak >= 50)
             val now = System.currentTimeMillis()
 
             // Convert shorts to little-endian 16-bit PCM bytes for any attached pipe sink
             var sinkToWrite: OutputStream?
             synchronized(sinkLock) {
-                appendPreRollLocked(frameShorts, read)
+                if (!suppressedForTts) {
+                    appendPreRollLocked(frameShorts, read)
+                }
                 sinkToWrite = activePipeSink
             }
 
@@ -276,7 +283,7 @@ class LiveCallAudioAnchor(
                 if (isSpeechActive) {
                     val silenceDurationMs = now - lastVoiceFrameAtMs
                     val totalSpeechMs = now - speechTriggeredAtMs
-                    if (silenceDurationMs >= TRAILING_SILENCE_MS || totalSpeechMs >= MAX_UTTERANCE_MS) {
+                    if (suppressedForTts || silenceDurationMs >= TRAILING_SILENCE_MS || totalSpeechMs >= MAX_UTTERANCE_MS) {
                         isSpeechActive = false
                         onVoiceSilenceReached?.invoke()
                     }
@@ -297,7 +304,7 @@ class LiveCallAudioAnchor(
 
     /**
      * Attaches an [OutputStream] (such as the write end of a `ParcelFileDescriptor.createPipe()`)
-     * and immediately flushes the 750ms circular pre-roll buffer into it so the beginning of
+     * and immediately flushes the 1.2s circular pre-roll buffer into it so the beginning of
      * the user's spoken phrase is never clipped.
      */
     fun attachPipeSinkWithPreRoll(sink: OutputStream) {
@@ -346,6 +353,7 @@ class LiveCallAudioAnchor(
     private fun stopInternalLocked(notifyStateMachine: Boolean, reason: String? = null) {
         isLive = false
         isSpeechActive = false
+        suppressedForTts = false
         detachPipeSink()
         val thread = drainThread
         drainThread = null
@@ -371,8 +379,8 @@ class LiveCallAudioAnchor(
     companion object {
         const val SAMPLE_RATE_HZ = 16000
         private const val FRAME_SHORTS = 320 // 20ms frame at 16kHz
-        private const val TRAILING_SILENCE_MS = 1_150L
-        private const val MAX_UTTERANCE_MS = 18_000L
+        private const val TRAILING_SILENCE_MS = 1_100L
+        private const val MAX_UTTERANCE_MS = 20_000L
     }
 }
 
@@ -386,7 +394,7 @@ class LiveCallAudioAnchor(
  * 2. During silence, [SpeechRecognizer] is NOT running at all — only [LiveCallAudioAnchor]'s
  *    in-process VAD monitors the audio stream and updates the UI voice orb RMS level.
  * 3. The instant the user begins speaking, [LiveCallAudioAnchor] triggers VAD and
- *    streams the 750ms pre-roll + live PCM audio into [SpeechRecognizer] through
+ *    streams the 1.2s pre-roll + live PCM audio into [SpeechRecognizer] through
  *    [RecognizerIntent.EXTRA_AUDIO_SOURCE] (`ParcelFileDescriptor.createPipe()`).
  *    Because [SpeechRecognizer] reads from the pipe instead of opening the hardware
  *    microphone, there is zero hardware mic contention and zero `OP_RECORD_AUDIO`
@@ -411,6 +419,9 @@ class AndroidSttEngine(
     private var pipeModeSupported: Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
 
     @Volatile
+    private var consecutivePipeAudioErrors: Int = 0
+
+    @Volatile
     private var activeRecognizerRef: SpeechRecognizer? = null
 
     @Volatile
@@ -423,24 +434,30 @@ class AndroidSttEngine(
     fun ensureLiveCallAnchor(): Boolean = liveAnchor.ensureLive()
 
     /**
+     * Mutes/unmutes VAD triggering while Jarvis is speaking so TTS audio is not
+     * transcribed as user speech, while keeping the hardware [AudioRecord] 100% open.
+     */
+    fun setMutedForTts(muted: Boolean) {
+        liveAnchor.suppressedForTts = muted
+        if (muted) {
+            liveAnchor.detachPipeSink()
+        }
+    }
+
+    /**
      * Stops active speech recognition before LLM generation / TTS playback while
      * keeping the [LiveCallAudioAnchor] open so the microphone stays live
      * like a phone call across conversation turns.
      */
     fun pauseRecognitionKeepLiveAnchor(reason: String = "Paused recognizer for Jarvis reply") {
+        liveAnchor.suppressedForTts = true
         liveAnchor.detachPipeSink()
         liveAnchor.ensureLive()
         val cleanup = Runnable {
             val rec = activeRecognizerRef
-            activeRecognizerRef = null
             if (rec != null) {
                 runCatching { rec.stopListening() }
                 runCatching { rec.cancel() }
-                runCatching { rec.destroy() }
-            }
-            if (activeHardwareCounted) {
-                activeHardwareCounted = false
-                stateMachine?.onRecognitionHardwareReleased(stopReason = reason)
             }
         }
         if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -469,7 +486,7 @@ class AndroidSttEngine(
                 runCatching { rec.cancel() }
                 runCatching { rec.destroy() }
             }
-            if (activeHardwareCounted) {
+            if (releaseLiveAnchor && activeHardwareCounted) {
                 activeHardwareCounted = false
                 stateMachine?.onRecognitionHardwareReleased(stopReason = reason)
             }
@@ -493,13 +510,14 @@ class AndroidSttEngine(
         }
 
         // 1. Ensure the single continuous AudioRecord is running and holding OP_RECORD_AUDIO.
+        liveAnchor.suppressedForTts = false
         val anchorOk = liveAnchor.ensureLive()
         stateMachine?.onListeningReady()
 
-        var recognizer: SpeechRecognizer? = null
+        var recognizer: SpeechRecognizer? = activeRecognizerRef
         var activeReadPipe: ParcelFileDescriptor? = null
         var closed = false
-        var hardwareOpened = false
+        var hardwareOpened = activeHardwareCounted
         var recognitionInFlight = false
         var usingOnDevice = false
         var lastPartialText = ""
@@ -519,7 +537,7 @@ class AndroidSttEngine(
         }
 
         liveAnchor.onRmsLevel = { level ->
-            if (!closed) {
+            if (!closed && !liveAnchor.suppressedForTts) {
                 emit(SttEvent.Rms(level))
             }
         }
@@ -568,7 +586,7 @@ class AndroidSttEngine(
                 putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
                 putExtra(RecognizerIntent.EXTRA_CONFIDENCE_SCORES, true)
                 putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
-                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 8_000L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 12_000L)
                 putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1_500L)
                 putExtra(
                     RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
@@ -624,7 +642,7 @@ class AndroidSttEngine(
             }
         }
 
-        fun destroyRecognizer(releaseReason: String? = null, releaseHardwareCount: Boolean = true) {
+        fun destroyRecognizer(releaseReason: String? = null, releaseHardwareCount: Boolean = false) {
             recognitionInFlight = false
             closeActivePipe()
             val rec = recognizer
@@ -637,7 +655,7 @@ class AndroidSttEngine(
                 runCatching { rec.cancel() }
                 runCatching { rec.destroy() }
             }
-            if (releaseHardwareCount && hardwareOpened) {
+            if (releaseHardwareCount && !liveAnchor.isLive && hardwareOpened) {
                 hardwareOpened = false
                 activeHardwareCounted = false
                 stateMachine?.onRecognitionHardwareReleased(stopReason = releaseReason)
@@ -675,7 +693,7 @@ class AndroidSttEngine(
         }
 
         startRecognitionForSpeech = recognition@{
-            if (closed || recognitionInFlight) return@recognition
+            if (closed || recognitionInFlight || liveAnchor.suppressedForTts) return@recognition
             liveAnchor.ensureLive()
             val rec = recognizer ?: createRecognizer()
             if (rec == null) {
@@ -714,9 +732,9 @@ class AndroidSttEngine(
         // Hook up VAD callbacks on the continuous LiveCallAudioAnchor:
         // SpeechRecognizer only starts when the user actually speaks!
         liveAnchor.onVoiceActivityDetected = {
-            if (!closed && !recognitionInFlight) {
+            if (!closed && !recognitionInFlight && !liveAnchor.suppressedForTts) {
                 mainHandler.post {
-                    if (!closed && !recognitionInFlight) {
+                    if (!closed && !recognitionInFlight && !liveAnchor.suppressedForTts) {
                         startRecognitionForSpeech()
                     }
                 }
@@ -745,7 +763,7 @@ class AndroidSttEngine(
                 override fun onBeginningOfSpeech() = Unit
 
                 override fun onRmsChanged(rmsdB: Float) {
-                    if (!liveAnchor.isLive) {
+                    if (!liveAnchor.isLive && !liveAnchor.suppressedForTts) {
                         val normalized = ((rmsdB + 2f) / 12f).coerceIn(0.04f, 1f)
                         emit(SttEvent.Rms(normalized))
                     }
@@ -768,17 +786,13 @@ class AndroidSttEngine(
                     val rescued = lastPartialText.trim()
                     if (rescued.length >= 2) {
                         lastPartialText = ""
-                        stateMachine?.onUtteranceCapturedBeginProcessing(
-                            stopReason = "Utterance rescued after silence",
-                        )
-                        destroyRecognizer("Utterance rescued", releaseHardwareCount = true)
+                        consecutivePipeAudioErrors = 0
                         emit(SttEvent.Final(rescued))
                         close()
                         return
                     }
 
-                    // 2. If a device's SpeechRecognizer rejects EXTRA_AUDIO_SOURCE with ERROR_CLIENT
-                    // or ERROR_AUDIO, or offline pack is missing, adapt and retry if speech is still active.
+                    // 2. If offline language pack is missing, fall back to standard recognizer.
                     val languageProblem =
                         error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ||
                             error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE ||
@@ -793,24 +807,29 @@ class AndroidSttEngine(
                             omitExplicitLanguage = true
                         }
                         createRecognizer()
-                        if (liveAnchor.isSpeechActive) {
-                            mainHandler.postDelayed({ startRecognitionForSpeech() }, 25L)
+                        if (liveAnchor.isSpeechActive && !liveAnchor.suppressedForTts) {
+                            mainHandler.postDelayed({ startRecognitionForSpeech() }, 35L)
                         }
                         return
                     }
 
-                    if ((error == SpeechRecognizer.ERROR_AUDIO || error == SpeechRecognizer.ERROR_CLIENT) &&
-                        pipeModeSupported
-                    ) {
-                        // Recreate recognizer with direct mic mode and resume listening immediately
-                        pipeModeSupported = false
-                        createRecognizer()
-                        startRecognitionForSpeech()
+                    // Only disable pipe mode if ERROR_AUDIO happens 3 consecutive times during active speech
+                    if (error == SpeechRecognizer.ERROR_AUDIO && pipeModeSupported) {
+                        consecutivePipeAudioErrors++
+                        if (consecutivePipeAudioErrors >= 3) {
+                            pipeModeSupported = false
+                            createRecognizer()
+                        }
+                        if (liveAnchor.isSpeechActive && !liveAnchor.suppressedForTts) {
+                            mainHandler.postDelayed({ startRecognitionForSpeech() }, 60L)
+                        }
                         return
                     }
 
-                    // 3. Recoverable silence / no-match / busy errors:
-                    // Automatically re-arm recognition so Jarvis remains actively listening for the user's speech
+                    // 3. Recoverable silence / no-match / client / busy errors:
+                    // Do NOT spin in an endless 4-second startListening loop during silence!
+                    // LiveCallAudioAnchor stays 100% open and will trigger startRecognitionForSpeech()
+                    // the moment the user speaks again.
                     if (isRecoverableSttError(error) ||
                         error == SpeechRecognizer.ERROR_NETWORK ||
                         error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT ||
@@ -821,11 +840,15 @@ class AndroidSttEngine(
                         ) {
                             createRecognizer()
                         }
-                        mainHandler.postDelayed({
-                            if (!closed && !recognitionInFlight) {
-                                startRecognitionForSpeech()
-                            }
-                        }, 60L)
+                        if ((!liveAnchor.isLive || !pipeModeSupported || liveAnchor.isSpeechActive) &&
+                            !liveAnchor.suppressedForTts
+                        ) {
+                            mainHandler.postDelayed({
+                                if (!closed && !recognitionInFlight && !liveAnchor.suppressedForTts) {
+                                    startRecognitionForSpeech()
+                                }
+                            }, 180L)
+                        }
                         return
                     }
 
@@ -844,29 +867,28 @@ class AndroidSttEngine(
                 override fun onResults(results: Bundle?) {
                     if (closed) return
                     recognitionInFlight = false
+                    consecutivePipeAudioErrors = 0
                     closeActivePipe()
                     liveAnchor.ensureLive()
                     val text = pickBestCandidate(results).ifBlank { lastPartialText.trim() }
                     lastPartialText = ""
                     if (text.isNotBlank()) {
-                        stateMachine?.onUtteranceCapturedBeginProcessing(
-                            stopReason = "Utterance completed",
-                        )
-                        destroyRecognizer("Utterance completed", releaseHardwareCount = true)
                         emit(SttEvent.Final(text))
                         close()
-                    } else {
-                        // If empty result (silence timeout), immediately re-arm so the user can speak naturally
+                    } else if ((!liveAnchor.isLive || !pipeModeSupported || liveAnchor.isSpeechActive) &&
+                        !liveAnchor.suppressedForTts
+                    ) {
                         mainHandler.postDelayed({
-                            if (!closed && !recognitionInFlight) {
+                            if (!closed && !recognitionInFlight && !liveAnchor.suppressedForTts) {
                                 startRecognitionForSpeech()
                             }
-                        }, 40L)
+                        }, 120L)
                     }
                 }
 
                 override fun onPartialResults(partialResults: Bundle?) {
                     if (closed) return
+                    consecutivePipeAudioErrors = 0
                     val text = pickBestCandidate(partialResults)
                     if (text.isNotBlank()) {
                         lastPartialText = text
@@ -878,9 +900,19 @@ class AndroidSttEngine(
             }
         }
 
-        createRecognizer()
-        // Start recognition IMMEDIATELY upon listen(): eliminates the need to shout or scream
-        startRecognitionForSpeech()
+        if (recognizer == null) {
+            createRecognizer()
+        } else {
+            recognizer?.setRecognitionListener(makeListener())
+        }
+        markHardwareOpened()
+
+        // If LiveCallAudioAnchor is active and pipeMode is supported (Android 13+),
+        // LiveCallAudioAnchor holds the hardware mic open continuously and buffers 1.2s of pre-roll.
+        // We only start SpeechRecognizer when voice is active (or immediately if anchor/pipe is unavailable).
+        if (!anchorOk || !pipeModeSupported || liveAnchor.isSpeechActive) {
+            startRecognitionForSpeech()
+        }
 
         awaitClose {
             closed = true
@@ -889,10 +921,26 @@ class AndroidSttEngine(
             liveAnchor.onVoiceSilenceReached = null
             closeActivePipe()
             mainHandler.removeCallbacksAndMessages(null)
-            if (Looper.myLooper() == Looper.getMainLooper()) {
-                destroyRecognizer(releaseHardwareCount = true)
+            // Keep the SpeechRecognizer instance alive across turns while LiveCallAudioAnchor is active
+            // so Android never tears down and recreates the recognizer between utterances.
+            if (!liveAnchor.isLive) {
+                if (Looper.myLooper() == Looper.getMainLooper()) {
+                    destroyRecognizer(releaseHardwareCount = true)
+                } else {
+                    mainHandler.post { destroyRecognizer(releaseHardwareCount = true) }
+                }
             } else {
-                mainHandler.post { destroyRecognizer(releaseHardwareCount = true) }
+                val stopRec = Runnable {
+                    if (recognitionInFlight) {
+                        recognitionInFlight = false
+                        runCatching { recognizer?.cancel() }
+                    }
+                }
+                if (Looper.myLooper() == Looper.getMainLooper()) {
+                    stopRec.run()
+                } else {
+                    mainHandler.post(stopRec)
+                }
             }
         }
     }.flowOn(Dispatchers.Main)

@@ -119,12 +119,11 @@ object AppSkillsRegistry {
         avoidRules = listOf(
             AvoidRule(
                 viewIds = listOf(
-                    "com.google.android.youtube:id/pivot_bar",
-                    "com.google.android.youtube:id/bottom_nav",
                     "com.google.android.youtube:id/shorts_container",
+                    "com.google.android.youtube:id/reel_pivot_button",
                 ),
-                textOrDescContains = listOf("shorts", "pivot bar", "subscriptions"),
-                reason = "Bottom navigation bar (never click Shorts tab when searching)",
+                textOrDescContains = listOf("shorts", "create"),
+                reason = "Avoid accidental taps on Shorts or Create tab unless explicitly requested",
             ),
         ),
     )

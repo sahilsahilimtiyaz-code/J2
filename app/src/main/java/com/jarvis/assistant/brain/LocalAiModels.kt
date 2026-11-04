@@ -720,6 +720,7 @@ object OfflineTaskRouter {
     fun routeUserCommand(
         userText: String,
         availableTools: List<ToolDefinition>,
+        conversationHistory: List<LlmMessage> = emptyList(),
     ): List<ToolCall> {
         val clean = userText.trim()
         if (clean.isBlank()) return emptyList()
@@ -1200,9 +1201,11 @@ object OfflineTaskRouter {
                 )
             }
         }
-        if ((lower.startsWith("tap ") || lower.startsWith("click ")) && hasTool("tap_screen")) {
+        if ((lower.startsWith("tap ") || lower.startsWith("click ") || lower.startsWith("press ") || lower.startsWith("select ") || lower.startsWith("touch ")) &&
+            hasTool("tap_screen")
+        ) {
             val targetLabel = clean
-                .replace(Regex("(?i)^(jarvis\\s*,?\\s*)?(please\\s+)?(tap|click)\\s+(on\\s+)?(the\\s+)?"), "")
+                .replace(Regex("(?i)^(jarvis\\s*,?\\s*)?(please\\s+)?(tap|click|press|select|touch)\\s+(on\\s+)?(the\\s+)?(button\\s+)?"), "")
                 .trim()
                 .trim('"', '\'')
             if (targetLabel.isNotBlank()) {
@@ -1213,33 +1216,73 @@ object OfflineTaskRouter {
             }
         }
 
-        // 21b. Exact in-app destinations: never let "open my YouTube profile" drift to Shorts.
-        if (hasTool("open_app") && lower.contains("youtube")) {
+        // 21b. Exact in-app destinations across YouTube, Instagram, WhatsApp, Spotify, Chrome, Gmail, Settings
+        if (hasTool("open_app")) {
+            val recentContextLower = conversationHistory.takeLast(4).joinToString(" ") { it.content.lowercase(Locale.ROOT) }
+            val activeApp = when {
+                lower.contains("youtube") || lower.contains(" yt ") || lower.endsWith(" yt") -> "YouTube"
+                lower.contains("instagram") || lower.contains("insta") -> "Instagram"
+                lower.contains("whatsapp") -> "WhatsApp"
+                lower.contains("spotify") -> "Spotify"
+                lower.contains("chrome") -> "Chrome"
+                lower.contains("gmail") -> "Gmail"
+                lower.contains("settings") -> "Settings"
+                recentContextLower.contains("youtube") -> "YouTube"
+                recentContextLower.contains("instagram") -> "Instagram"
+                recentContextLower.contains("whatsapp") -> "WhatsApp"
+                recentContextLower.contains("spotify") -> "Spotify"
+                else -> null
+            }
             val section = when {
-                lower.contains("profile") || lower.contains("my channel") ||
-                    lower.contains("my account") || lower.contains("account") -> "profile"
+                lower.contains("profile") || lower.contains("my channel") || lower.contains("your channel") ||
+                    lower.contains("my account") || lower.contains("you tab") -> "profile"
                 lower.contains("subscription") -> "subscriptions"
-                lower.contains("history") -> "history"
-                lower.contains("liked") -> "liked videos"
+                lower.contains("history") || lower.contains("watch history") -> "history"
+                lower.contains("liked video") || lower.contains("liked") -> "liked videos"
                 lower.contains("watch later") -> "watch later"
                 lower.contains("download") -> "downloads"
-                lower.contains("library") -> "library"
+                lower.contains("library") || lower.contains("playlists") -> "library"
+                lower.contains("shorts") -> "shorts"
+                lower.contains("reels") -> "reels"
+                lower.contains("explore") -> "explore"
+                lower.contains("notifications") && activeApp != null -> "notifications"
                 else -> null
             }
             val destinationIntent = lower.startsWith("open ") ||
                 lower.startsWith("launch ") ||
                 lower.startsWith("go to ") ||
+                lower.startsWith("navigate to ") ||
                 lower.contains("take me to") ||
                 lower.contains("show me") ||
-                lower.contains("show my ")
-            if (section != null && destinationIntent) {
+                lower.contains("show my ") ||
+                lower.contains("open my ") ||
+                lower.contains("go to my ")
+            if (activeApp != null && section != null && destinationIntent) {
                 return call(
                     "open_app",
                     buildJsonObject {
-                        put("app", "YouTube")
+                        put("app", activeApp)
                         put("section", section)
                     }.toString(),
                 )
+            }
+            // Also support "open <app> <section>" or "in <app> open <section>" for any app
+            val appSectionMatch = Regex("""(?i)^(?:jarvis\s*,?\s*)?(?:please\s+)?(?:open|go to|navigate to|show)\s+(?:my\s+|the\s+)?(youtube|instagram|whatsapp|spotify|chrome|gmail|settings)\s+([a-z0-9 ]{2,25})$""")
+                .find(clean)
+            if (appSectionMatch != null) {
+                val appTarget = appSectionMatch.groupValues[1].trim()
+                val secTarget = appSectionMatch.groupValues[2]
+                    .replace(Regex("(?i)\\b(tab|section|page|screen|app)\\b"), "")
+                    .trim()
+                if (secTarget.isNotBlank()) {
+                    return call(
+                        "open_app",
+                        buildJsonObject {
+                            put("app", appTarget)
+                            put("section", secTarget)
+                        }.toString(),
+                    )
+                }
             }
         }
 
@@ -1248,7 +1291,7 @@ object OfflineTaskRouter {
             hasTool("open_app")
         ) {
             val appPart = clean
-                .replace(Regex("(?i)^(jarvis\\s*,?\\s*)?(please\\s+)?(open|launch|start app)\\s+(the\\s+)?"), "")
+                .replace(Regex("(?i)^(jarvis\\s*,?\\s*)?(please\\s+)?(open|launch|start app)\\s+(my\\s+|the\\s+)?"), "")
                 .replace(Regex("(?i)\\s+app$"), "")
                 .trim()
             val appName = if (appPart.contains(" and ", ignoreCase = true)) {
@@ -1296,21 +1339,46 @@ object OfflineTaskRouter {
             return call("create_calendar_event", buildJsonObject { put("title", title.ifBlank { "New Event" }) }.toString())
         }
         if ((lower.contains("what's on my calendar") || lower.contains("read calendar") || lower.contains("check calendar") || lower.contains("my events")) &&
-            hasTool("read_calendar")
+            (hasTool("read_calendar_events") || hasTool("read_calendar"))
         ) {
-            return call("read_calendar", "{}")
+            val calTool = if (hasTool("read_calendar_events")) "read_calendar_events" else "read_calendar"
+            return call(calTool, "{}")
         }
 
-        // 26. Declarative skills
-        if ((lower.startsWith("replay skill ") || lower.startsWith("run skill ")) && hasTool("replay_skill")) {
-            val name = clean.replace(Regex("(?i)^(jarvis\\s*,?\\s*)?(please\\s+)?(replay|run)\\s+skill\\s+"), "").trim()
-            return call("replay_skill", buildJsonObject { put("name", name) }.toString())
+        // 26. Declarative skills (save_skill, run_skill, list_skills)
+        if ((lower.startsWith("replay skill ") || lower.startsWith("run skill ") || lower.startsWith("run routine ") || lower.startsWith("execute skill ")) &&
+            (hasTool("run_skill") || hasTool("replay_skill"))
+        ) {
+            val skillTool = if (hasTool("run_skill")) "run_skill" else "replay_skill"
+            val name = clean.replace(Regex("(?i)^(jarvis\\s*,?\\s*)?(please\\s+)?(replay|run|execute)\\s+(skill|routine)\\s+"), "").trim()
+            return call(skillTool, buildJsonObject { put("name", name) }.toString())
         }
-        if ((lower.startsWith("save as skill ") || lower.startsWith("save skill ")) && hasTool("save_as_skill")) {
-            val name = clean.replace(Regex("(?i)^(jarvis\\s*,?\\s*)?(please\\s+)?save\\s+(as\\s+)?skill\\s+"), "").trim()
-            return call("save_as_skill", buildJsonObject { put("name", name) }.toString())
+        if ((lower.contains("save that as a skill") || lower.contains("save this as a skill") ||
+                lower.contains("save as a skill") || lower.startsWith("save as skill") ||
+                lower.startsWith("save skill") || lower.startsWith("create a skill") ||
+                lower.startsWith("make a skill") || lower.startsWith("create skill") ||
+                lower.startsWith("make skill")) &&
+            (hasTool("save_skill") || hasTool("save_as_skill"))
+        ) {
+            val saveTool = if (hasTool("save_skill")) "save_skill" else "save_as_skill"
+            val afterCalled = Regex("""(?i)(?:called|named|as)\s+([A-Za-z0-9 _\-]{2,35}?)(?:\s+(?:to|that|which|for)\s+(.+))?$""").find(clean)
+            val skillName = afterCalled?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotBlank() }
+                ?: clean.replace(Regex("(?i)^(jarvis\\s*,?\\s*)?(please\\s+)?(save\\s+(that|this)\\s+as\\s+a\\s+skill|save\\s+as\\s+a?\\s*skill|save\\s+skill|create\\s+a?\\s*skill|make\\s+a?\\s*skill)\\s*(called|named|to|for)?\\s*"), "")
+                    .take(36)
+                    .trim()
+                    .ifBlank { "Custom Routine" }
+            val skillDesc = afterCalled?.groupValues?.getOrNull(2)?.trim()?.takeIf { it.isNotBlank() }
+                ?: clean
+            return call(
+                saveTool,
+                buildJsonObject {
+                    put("name", skillName)
+                    put("description", skillDesc)
+                    put("triggers", skillName.lowercase(Locale.ROOT))
+                }.toString(),
+            )
         }
-        if ((lower.contains("list skills") || lower.contains("show skills") || lower.contains("what skills")) && hasTool("list_skills")) {
+        if ((lower.contains("list skills") || lower.contains("show skills") || lower.contains("what skills") || lower.contains("my skills")) && hasTool("list_skills")) {
             return call("list_skills", "{}")
         }
 
@@ -1677,9 +1745,16 @@ class LocalLlmProvider(
         }
 
         // On-device execution engine:
-        // Round 1 (USER turn): Match intent against available tools
+        // Round 1 (USER turn): Match intent against available tools (including recent conversation context)
         if (lastMessage?.role == LlmRole.USER && request.tools.isNotEmpty()) {
-            val toolCalls = OfflineTaskRouter.routeUserCommand(lastMessage.content, request.tools)
+            val priorConversation = request.messages.dropLast(1).filter {
+                it.role == LlmRole.USER || it.role == LlmRole.ASSISTANT
+            }
+            val toolCalls = OfflineTaskRouter.routeUserCommand(
+                userText = lastMessage.content,
+                availableTools = request.tools,
+                conversationHistory = priorConversation,
+            )
             if (toolCalls.isNotEmpty()) {
                 for (call in toolCalls) {
                     emit(LlmEvent.ToolCallReady(call))
@@ -1818,6 +1893,43 @@ class LocalLlmProvider(
             return "From your stored memory, $title: $matchedMemory"
         }
 
+        val priorDialogue = request.messages
+            .filter { it.role == LlmRole.USER || it.role == LlmRole.ASSISTANT }
+            .dropLast(1)
+        val lastAssistantReply = priorDialogue.lastOrNull { it.role == LlmRole.ASSISTANT && it.content.isNotBlank() }?.content?.trim()
+        val previousUserQuestion = priorDialogue.lastOrNull { it.role == LlmRole.USER && it.content.isNotBlank() }?.content?.trim()
+
+        // Short-term conversation memory queries ("what did you just say?", "repeat that", "what was I asking about?")
+        if (lower.contains("what did you just say") ||
+            lower.contains("what did you say") ||
+            lower.contains("repeat that") ||
+            lower.contains("say that again") ||
+            lower == "pardon" ||
+            lower == "come again" ||
+            lower.contains("what was your last")
+        ) {
+            return if (!lastAssistantReply.isNullOrBlank()) {
+                "I just said: \"$lastAssistantReply\", $title."
+            } else {
+                "We have only just begun this session, $title, so I had not spoken prior to this."
+            }
+        }
+
+        if (lower.contains("what did i just say") ||
+            lower.contains("what did i say") ||
+            lower.contains("what did i ask") ||
+            lower.contains("what was i asking") ||
+            lower.contains("what were we talking about") ||
+            lower.contains("do you remember what we")
+        ) {
+            return if (!previousUserQuestion.isNullOrBlank()) {
+                val replyNote = if (!lastAssistantReply.isNullOrBlank()) " And I answered: \"$lastAssistantReply\"" else ""
+                "You just asked me: \"$previousUserQuestion\", $title.$replyNote"
+            } else {
+                "You have not asked a prior question in this session yet, $title."
+            }
+        }
+
         return when {
             lower.contains("who are you") || lower.contains("what is your name") || lower.contains("introduce yourself") ->
                 "I am Jarvis, your personal AI assistant, $title. I am currently running locally on your device using ${spec.displayName} (${spec.parameterBadge}) with zero API keys required."
@@ -1835,7 +1947,7 @@ class LocalLlmProvider(
             }
 
             lower.contains("what can you do") || lower.contains("help") || lower.contains("capabilities") ->
-                "Running on ${spec.displayName}, $title, I can perform web research, recall and save your personal memories and notes, open any installed app, play videos on YouTube, send WhatsApp messages and voice notes, place calls, send texts, set alarms, timers and reminders, toggle the torch, adjust volume and brightness, and read notifications."
+                "Running on ${spec.displayName}, $title, I can perform web research, recall and save your personal memories and notes, open any installed app or specific section like your YouTube profile, play videos, send WhatsApp messages and voice notes, place calls, send texts, set alarms, timers and reminders, toggle the torch, adjust volume and brightness, and read notifications."
 
             lower.contains("time") && (lower.contains("what") || lower.contains("current") || lower.contains("tell")) -> {
                 val now = SimpleDateFormat("HH:mm 'on' EEEE, d MMMM yyyy", Locale.getDefault()).format(Date())
@@ -1852,8 +1964,10 @@ class LocalLlmProvider(
                 val allMemoriesSummary = listStoredMemoriesFromPrompt(systemText)
                 if (allMemoriesSummary != null && (lower.contains("note") || lower.contains("memor") || lower.contains("remember") || lower.contains("know about me"))) {
                     "Here is what I have stored in your memories and notes, $title:\n$allMemoriesSummary"
+                } else if (!previousUserQuestion.isNullOrBlank() && (lower.startsWith("and ") || lower.startsWith("what about ") || lower.startsWith("tell me more") || lower.contains("about that") || lower.contains("about it"))) {
+                    "Regarding your earlier point on \"$previousUserQuestion\", $title: I have that context in focus. Tell me if you would like me to run a web search on it, save it to your memories, or execute a phone action."
                 } else {
-                    "At your service on ${spec.displayName}, $title. You can ask me to research any topic on the web, recall or save notes to memory, send a WhatsApp voice message, play YouTube, or control your phone."
+                    "At your service on ${spec.displayName}, $title. You can ask me to open any app or section (such as your YouTube profile), research any topic on the web, save or run skills, or control your phone."
                 }
             }
         }

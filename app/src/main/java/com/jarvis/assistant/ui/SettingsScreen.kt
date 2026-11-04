@@ -214,6 +214,14 @@ fun SettingsScreen(
                     }
                 }
 
+                // Top-level Shut Off switch (always visible at top of Settings)
+                item(key = "top_shut_off_card") {
+                    MasterPowerCard(
+                        state = state,
+                        onPowerOff = viewModel::powerOff,
+                    )
+                }
+
                 // 0. Account Session (G Login / Guest)
                 item(key = "account_session_card") {
                     GlassPanel(

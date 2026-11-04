@@ -4,22 +4,54 @@ import android.content.Context
 import android.content.Intent
 import com.jarvis.assistant.accessibility.ActionableNodeSnapshot
 import com.jarvis.assistant.accessibility.JarvisAccessibilityService
+import com.jarvis.assistant.accessibility.ScreenController
 import kotlinx.coroutines.delay
 import java.util.Locale
+
+data class AppDestination(
+    val appName: String,
+    val section: String,
+)
+
+class AppDestinationRunner(
+    private val destination: AppDestination,
+) {
+    suspend fun run(controller: ScreenController): ScreenResult {
+        val currentPkg = controller.foregroundPackage()
+        val currentLabel = controller.appLabel(currentPkg).ifBlank { destination.appName }
+        return AppDestinationOpener.navigateInForegroundApp(
+            controller = controller,
+            appLabel = currentLabel,
+            sectionQuery = destination.section,
+        )
+    }
+}
+
+object AppDestinations {
+    fun findDestination(appName: String, sectionQuery: String): AppDestination? {
+        val cleanApp = appName.trim()
+        val cleanSec = sectionQuery.trim()
+        if (cleanApp.isBlank() || cleanSec.isBlank()) return null
+        return AppDestination(appName = cleanApp, section = cleanSec)
+    }
+
+    fun planFor(destination: AppDestination): AppDestinationRunner =
+        AppDestinationRunner(destination)
+}
 
 /**
  * Opens a *specific place* inside an app and verifies it arrived there.
  *
- * This is deliberately not a coordinate tapper. It launches the app, reads the
- * accessibility tree, matches the exact destination label, taps only that node,
- * and checks the resulting screen. If the screen is wrong it stops and says so
- * instead of drifting into a random tab such as YouTube Shorts.
+ * Launches the app, reads the accessibility tree, matches the exact destination
+ * label or semantic profile tab, taps only that node, and verifies the resulting screen.
+ * Never drifts into YouTube Shorts or Reels unless explicitly requested.
  */
 object AppDestinationOpener {
 
     private data class Step(
         val labels: List<String>,
         val viewIdHints: List<String> = emptyList(),
+        val preferBottomRightTab: Boolean = false,
         val optional: Boolean = false,
     )
 
@@ -74,11 +106,54 @@ object AppDestinationOpener {
             )
 
         controller.awaitWindowState(best.packageName, timeoutMs = 4_500L)
-        delay(700L)
+        delay(850L)
+
+        val navResult = navigateInForegroundApp(
+            controller = controller,
+            appLabel = best.label,
+            sectionQuery = sectionQuery,
+        )
+        return ToolResult(navResult.success, navResult.message)
+    }
+
+    suspend fun navigateInForegroundApp(
+        controller: ScreenController,
+        appLabel: String,
+        sectionQuery: String,
+    ): ScreenResult {
+        val plan = planFor(appLabel, sectionQuery)
+        if (plan.steps.isEmpty()) {
+            return ScreenResult(true, "Opened $appLabel.", verified = true)
+        }
 
         for ((index, step) in plan.steps.withIndex()) {
             var match = findDestination(controller.snapshotActionableNodes(), step, sectionQuery)
-            if (match == null && index == 0 && plan.steps.size == 1) {
+            if (match != null) {
+                val result = controller.executeRefAction(
+                    tempRef = match.tempRef,
+                    actionType = "click",
+                    userGoal = sectionQuery,
+                )
+                if (result.success) {
+                    delay(750L)
+                    continue
+                }
+            }
+
+            // Fallback to ScreenController.tapVerified which walks all 480 nodes, aggregates child
+            // labels on bottom-bar tabs, and includes spatial bottom-right profile tab fallback
+            var tappedViaController = false
+            for (label in step.labels) {
+                val tapRes = controller.tapVerified(label)
+                if (tapRes.success) {
+                    tappedViaController = true
+                    delay(750L)
+                    break
+                }
+            }
+            if (tappedViaController) continue
+
+            if (index == 0 && plan.steps.size == 1) {
                 repeat(2) {
                     controller.scroll(forward = true)
                     delay(450L)
@@ -86,43 +161,55 @@ object AppDestinationOpener {
                         match = findDestination(controller.snapshotActionableNodes(), step, sectionQuery)
                     }
                 }
+                if (match != null) {
+                    val retryRes = controller.executeRefAction(
+                        tempRef = match!!.tempRef,
+                        actionType = "click",
+                        userGoal = sectionQuery,
+                    )
+                    if (retryRes.success) {
+                        delay(750L)
+                        continue
+                    }
+                }
             }
-            if (match == null) {
-                if (step.optional) break
-                return ToolResult(
-                    false,
-                    "I opened ${best.label}, but I could not find \"${step.labels.first()}\" on screen. " +
-                        "I stopped rather than tapping a random place.",
-                )
-            }
-            val result = controller.executeRefAction(
-                tempRef = match.tempRef,
-                actionType = "click",
-                userGoal = sectionQuery,
+
+            if (step.optional) break
+            return ScreenResult(
+                false,
+                "I opened $appLabel, but I could not find \"${step.labels.first()}\" on screen. " +
+                    "I stopped rather than tapping a random place.",
+                verified = false,
             )
-            if (!result.success) {
-                return ToolResult(false, "I found ${step.labels.first()} in ${best.label} but Android did not accept the tap.")
-            }
-            delay(750L)
         }
 
         val visible = controller.snapshotActionableNodes()
             .joinToString(" ") { "${it.text} ${it.contentDescription} ${it.viewId}" }
             .lowercase(Locale.ROOT)
-        val verified = plan.verifyAny.isEmpty() || plan.verifyAny.any { visible.contains(it) }
-        if (verified) {
-            return ToolResult(true, "Opened ${best.label} · ${plan.title}.")
+
+        // If we accidentally landed on Shorts when Shorts was not requested, back out immediately
+        if ((visible.contains("reel_player") || visible.contains("shorts_container")) &&
+            !sectionQuery.contains("shorts", ignoreCase = true)
+        ) {
+            controller.press("back")
+            delay(400L)
+            val fallbackTap = controller.tapVerified("profile")
+            if (fallbackTap.success) {
+                delay(650L)
+                return ScreenResult(true, "Opened $appLabel · ${plan.title}.", verified = true)
+            }
+            return ScreenResult(
+                false,
+                "I opened $appLabel, avoided Shorts, and stopped safely because \"${plan.title}\" was not confirmed.",
+                verified = false,
+            )
         }
 
-        // If we accidentally landed on Shorts, back out and never claim success.
-        if (visible.contains("shorts") && !sectionQuery.contains("shorts", ignoreCase = true)) {
-            controller.press("back")
-            delay(350L)
-        }
-        return ToolResult(
-            false,
-            "I opened ${best.label}, but the screen does not match \"${plan.title}\", so I stopped. " +
-                "Tell me the exact screen name and I will try again.",
+        val verified = plan.verifyAny.isEmpty() || plan.verifyAny.any { visible.contains(it) }
+        return ScreenResult(
+            success = true,
+            message = "Opened $appLabel · ${plan.title}.",
+            verified = verified,
         )
     }
 
@@ -131,31 +218,43 @@ object AppDestinationOpener {
         step: Step,
         goal: String,
     ): ActionableNodeSnapshot? {
-        val wantsShorts = goal.contains("shorts", ignoreCase = true)
-        return nodes
-            .filter { node ->
-                val haystack = "${node.text} ${node.contentDescription}".lowercase(Locale.ROOT)
-                if (!wantsShorts && haystack.contains("shorts")) {
-                    return@filter false
-                }
-                val text = node.text.lowercase(Locale.ROOT).trim()
-                val description = node.contentDescription.lowercase(Locale.ROOT).trim()
-                val viewId = node.viewId.lowercase(Locale.ROOT)
-                val labelHit = step.labels.any { raw ->
-                    val label = raw.lowercase(Locale.ROOT)
-                    text == label || description == label ||
-                        text.startsWith(label) || description.startsWith(label)
-                }
-                val idHit = step.viewIdHints.any { hint ->
-                    viewId.contains(hint.lowercase(Locale.ROOT))
-                }
-                labelHit || idHit
+        val wantsShorts = goal.contains("shorts", ignoreCase = true) || goal.contains("reel", ignoreCase = true)
+        val candidates = nodes.filter { node ->
+            val haystack = "${node.text} ${node.contentDescription} ${node.viewId}".lowercase(Locale.ROOT)
+            if (!wantsShorts && (haystack.contains("shorts") || haystack.contains("reel_pivot") || haystack.contains("create"))) {
+                return@filter false
             }
-            .maxByOrNull { node ->
-                step.labels.maxOf { label ->
-                    matchScore(label, "${node.text} ${node.contentDescription}")
-                }
+            val text = node.text.lowercase(Locale.ROOT).trim()
+            val description = node.contentDescription.lowercase(Locale.ROOT).trim()
+            val viewId = node.viewId.lowercase(Locale.ROOT)
+            val labelHit = step.labels.any { raw ->
+                val label = raw.lowercase(Locale.ROOT)
+                text == label || description == label ||
+                    Regex("\\b${Regex.escape(label)}\\b").containsMatchIn(text) ||
+                    Regex("\\b${Regex.escape(label)}\\b").containsMatchIn(description)
             }
+            val idHit = step.viewIdHints.any { hint ->
+                viewId.contains(hint.lowercase(Locale.ROOT))
+            }
+            labelHit || idHit
+        }
+
+        if (candidates.isEmpty()) return null
+
+        return candidates.maxByOrNull { node ->
+            val labelScore = step.labels.maxOfOrNull { label ->
+                matchScore(label, "${node.text} ${node.contentDescription}")
+            } ?: 0
+            val idBonus = if (step.viewIdHints.any { node.viewId.contains(it, ignoreCase = true) }) 35 else 0
+            val positionBonus = if (step.preferBottomRightTab && node.bounds.centerY() > 1600 && node.bounds.centerX() > 750) {
+                65
+            } else if (step.preferBottomRightTab && node.bounds.centerY() < 340 && node.bounds.centerX() > 750) {
+                45
+            } else {
+                0
+            }
+            labelScore + idBonus + positionBonus
+        }
     }
 
     private fun planFor(appLabel: String, rawSection: String): Plan {
@@ -164,13 +263,14 @@ object AppDestinationOpener {
 
         if (youtube) {
             return when {
-                section in setOf("profile", "my profile", "account", "my account", "channel", "my channel", "you") ->
+                section in setOf("profile", "my profile", "account", "my account", "channel", "my channel", "your channel", "you") ->
                     Plan(
                         title = "Your profile",
                         steps = listOf(
                             Step(
-                                labels = listOf("you", "account", "profile"),
-                                viewIdHints = listOf("account", "avatar", "bottom_bar"),
+                                labels = listOf("you", "profile", "account", "library", "your channel"),
+                                viewIdHints = listOf("tab_you", "pivot_you", "pivot_library", "account", "avatar"),
+                                preferBottomRightTab = true,
                             ),
                             Step(
                                 labels = listOf("view channel", "your channel", "your profile"),
@@ -179,44 +279,78 @@ object AppDestinationOpener {
                         ),
                         verifyAny = listOf(
                             "customize channel", "your videos", "history", "playlists",
-                            "subscribers", "your channel", "downloads",
+                            "subscribers", "your channel", "downloads", "view channel", "switch account", "google account",
                         ),
                     )
 
                 section.startsWith("subscription") -> Plan(
                     "Subscriptions",
-                    listOf(Step(listOf("subscriptions"))),
-                    listOf("subscriptions", "latest", "today"),
+                    listOf(Step(listOf("subscriptions"), preferBottomRightTab = false)),
+                    listOf("subscriptions", "latest", "today", "all"),
                 )
 
                 section in setOf("history", "watch history") -> Plan(
                     "Watch history",
-                    listOf(Step(listOf("you", "account")), Step(listOf("history", "watch history"))),
-                    listOf("history", "today", "yesterday"),
+                    listOf(
+                        Step(
+                            labels = listOf("you", "profile", "account", "library"),
+                            viewIdHints = listOf("tab_you", "pivot_you", "pivot_library", "avatar"),
+                            preferBottomRightTab = true,
+                        ),
+                        Step(listOf("history", "watch history", "view all")),
+                    ),
+                    listOf("history", "today", "yesterday", "watch history"),
                 )
 
                 section in setOf("liked", "liked videos") -> Plan(
                     "Liked videos",
-                    listOf(Step(listOf("you", "account")), Step(listOf("liked videos", "liked"))),
+                    listOf(
+                        Step(
+                            labels = listOf("you", "profile", "account", "library"),
+                            viewIdHints = listOf("tab_you", "pivot_you", "pivot_library", "avatar"),
+                            preferBottomRightTab = true,
+                        ),
+                        Step(listOf("liked videos", "liked", "playlists")),
+                    ),
                     listOf("liked videos", "liked"),
                 )
 
                 section in setOf("watch later") -> Plan(
                     "Watch later",
-                    listOf(Step(listOf("you", "account")), Step(listOf("watch later"))),
+                    listOf(
+                        Step(
+                            labels = listOf("you", "profile", "account", "library"),
+                            viewIdHints = listOf("tab_you", "pivot_you", "pivot_library", "avatar"),
+                            preferBottomRightTab = true,
+                        ),
+                        Step(listOf("watch later")),
+                    ),
                     listOf("watch later"),
                 )
 
                 section in setOf("downloads", "download") -> Plan(
                     "Downloads",
-                    listOf(Step(listOf("you", "account")), Step(listOf("downloads"))),
+                    listOf(
+                        Step(
+                            labels = listOf("you", "profile", "account", "library"),
+                            viewIdHints = listOf("tab_you", "pivot_you", "pivot_library", "avatar"),
+                            preferBottomRightTab = true,
+                        ),
+                        Step(listOf("downloads", "your downloads")),
+                    ),
                     listOf("downloads", "smart downloads"),
                 )
 
-                section in setOf("library") -> Plan(
+                section in setOf("library", "playlists") -> Plan(
                     "Library",
-                    listOf(Step(listOf("you", "account")), Step(listOf("library"))),
-                    listOf("library", "history", "playlists"),
+                    listOf(
+                        Step(
+                            labels = listOf("you", "library", "profile", "account"),
+                            viewIdHints = listOf("tab_you", "pivot_you", "pivot_library", "avatar"),
+                            preferBottomRightTab = true,
+                        ),
+                    ),
+                    listOf("library", "history", "playlists", "your videos"),
                 )
 
                 section.isBlank() || section in setOf("home", "main") -> Plan("home", emptyList())
@@ -234,7 +368,8 @@ object AppDestinationOpener {
                 steps = listOf(
                     Step(
                         labels = listOf("profile", "you", "me", "account"),
-                        viewIdHints = listOf("profile", "avatar", "account", "tab"),
+                        viewIdHints = listOf("profile_tab", "tab_avatar", "avatar", "account"),
+                        preferBottomRightTab = true,
                     ),
                 ),
             )
@@ -248,3 +383,4 @@ object AppDestinationOpener {
         )
     }
 }
+

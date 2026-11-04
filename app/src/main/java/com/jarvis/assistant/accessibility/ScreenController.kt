@@ -194,10 +194,17 @@ class ScreenController(private val service: AccessibilityService) {
                 bounds.bottom >= 0 && bounds.top <= screenHeight &&
                 bounds.right >= 0 && bounds.left <= screenWidth
 
-            val text = node.text?.toString()?.trim().orEmpty()
-            val desc = node.contentDescription?.toString()?.trim().orEmpty()
+            var text = node.text?.toString()?.trim().orEmpty()
+            var desc = node.contentDescription?.toString()?.trim().orEmpty()
             val viewId = node.viewIdResourceName.orEmpty()
             val className = node.className?.toString().orEmpty()
+
+            if (text.isBlank() && desc.isBlank() && node.isClickable) {
+                val childLabel = collectChildLabels(node, maxDepth = 2)
+                if (childLabel.isNotBlank()) {
+                    desc = childLabel
+                }
+            }
 
             val isActionable = node.isClickable || node.isEditable || node.isScrollable ||
                 text.isNotBlank() || desc.isNotBlank()
@@ -221,7 +228,7 @@ class ScreenController(private val service: AccessibilityService) {
                     bounds = bounds,
                 )
             }
-            list.size < 120
+            list.size < 220
         }
         return list
     }
@@ -669,12 +676,6 @@ class ScreenController(private val service: AccessibilityService) {
         val before = withContext(Dispatchers.Main) { captureFingerprint() }
         val candidates = withContext(Dispatchers.Main) { findTapCandidates(wanted) }
         if (candidates.isEmpty()) {
-            // If on YouTube and search failed, try video item targeting
-            val fg = foregroundPackage()
-            if (fg.contains("youtube") || fg.contains("browser") || fg.contains("chrome")) {
-                val videoRes = tapVideoItemVerified(1, wanted)
-                if (videoRes.success) return videoRes
-            }
             return ScreenResult(
                 success = false,
                 message = "I could not find \"$text\" on this screen.",
@@ -985,61 +986,220 @@ class ScreenController(private val service: AccessibilityService) {
         val indexMatch = Regex("""(?:#|item\s*)(\d+)""").find(wanted)
         val targetItemNum = indexMatch?.groupValues?.get(1)?.toIntOrNull()
 
-        val rawMatches = mutableListOf<Pair<Int, AccessibilityNodeInfo>>()
-        val queryWords = wanted.split(' ').filter { it.length >= 3 }
+        val (screenWidth, screenHeight) = jarvisService?.getScreenDimensions() ?: (1080 to 2340)
+        val synonyms = semanticSynonymsFor(wanted)
+        val wantsShortsOrReels = wanted.contains("shorts") || wanted.contains("reel") || wanted.contains("create")
+        val isProfileIntent = wanted in setOf(
+            "profile", "my profile", "you", "account", "my account",
+            "channel", "my channel", "your channel", "library", "me",
+        )
+        val isNavTabIntent = isProfileIntent || wanted in setOf(
+            "home", "subscriptions", "subscription", "explore", "notifications", "inbox", "activity",
+        )
+
+        val rawMatches = mutableListOf<Triple<Int, AccessibilityNodeInfo, String>>()
+        val queryWords = wanted.split(' ').filter { it.length >= 2 }
         walked = 0
         var itemCounter = 0
 
         walk(root) { node ->
-            val label = normalize(
-                node.text?.toString().orEmpty() + " " + node.contentDescription?.toString().orEmpty(),
-            )
             val bounds = Rect()
             runCatching { node.getBoundsInScreen(bounds) }
-            val hasBounds = bounds.width() > 0 && bounds.height() > 0
+            val hasBounds = bounds.width() > 0 && bounds.height() > 0 &&
+                bounds.bottom > 0 && bounds.top < screenHeight &&
+                bounds.right > 0 && bounds.left < screenWidth
 
-            if (label.isNotBlank() && hasBounds) {
-                itemCounter++
-                var score = when {
-                    label == wanted -> 100
-                    label.startsWith(wanted) -> 85
-                    label.contains(wanted) -> 70
-                    wanted.contains(label) && label.length >= 3 -> 50
-                    else -> 0
+            if (!hasBounds) return@walk true
+
+            val directText = (node.text?.toString().orEmpty() + " " + node.contentDescription?.toString().orEmpty()).trim()
+            val aggregatedText = if (directText.isNotBlank()) {
+                directText
+            } else if (node.isClickable) {
+                collectChildLabels(node, maxDepth = 2)
+            } else {
+                ""
+            }
+            val viewIdRaw = node.viewIdResourceName.orEmpty().substringAfterLast('/')
+            val label = normalize(aggregatedText)
+            val normViewId = normalize(viewIdRaw.replace('_', ' '))
+
+            // Never match Shorts / Reels / Create button unless explicitly requested
+            if (!wantsShortsOrReels) {
+                val combinedCheck = "$label $normViewId"
+                if (combinedCheck == "shorts" ||
+                    combinedCheck.startsWith("shorts ") ||
+                    combinedCheck.contains("reel pivot") ||
+                    combinedCheck.contains("shorts container") ||
+                    combinedCheck == "create"
+                ) {
+                    return@walk true
                 }
-                // Partial multi-word matching for long video titles or descriptions
-                if (score == 0 && queryWords.isNotEmpty()) {
-                    val matchedWords = queryWords.count { label.contains(it) }
-                    if (matchedWords > 0) {
-                        score = 40 + matchedWords * 20
+            }
+
+            if (label.isNotBlank() || normViewId.isNotBlank()) {
+                itemCounter++
+                var score = scoreNodeAgainstSynonyms(
+                    label = label,
+                    normViewId = normViewId,
+                    wanted = wanted,
+                    synonyms = synonyms,
+                    queryWords = queryWords,
+                )
+
+                // Boost bottom navigation bar or top-right avatar for tab/profile intents
+                if (score > 0 && isNavTabIntent) {
+                    val centerY = bounds.exactCenterY()
+                    val centerX = bounds.exactCenterX()
+                    if (centerY >= screenHeight * 0.84f) {
+                        score += 40
+                        if (isProfileIntent && centerX >= screenWidth * 0.72f) {
+                            score += 35
+                        }
+                    } else if (isProfileIntent && centerY <= screenHeight * 0.16f && centerX >= screenWidth * 0.72f) {
+                        score += 35
                     }
                 }
-                // Index match
-                if (targetItemNum != null && itemCounter == targetItemNum) {
-                    score = 150
+
+                // Prefer nodes that are directly clickable or have a small focused hit area
+                if (score > 0 && node.isClickable) {
+                    score += 12
                 }
-                if (score > 0) rawMatches += score to node
+
+                if (targetItemNum != null && itemCounter == targetItemNum) {
+                    score = 220
+                }
+                if (score > 0) {
+                    rawMatches += Triple(score, node, aggregatedText.ifBlank { viewIdRaw })
+                }
             }
-            rawMatches.size < MAX_CANDIDATES * 3
+            true
         }
 
-        return rawMatches
-            .sortedByDescending { it.first }
-            .mapNotNull { (score, node) ->
-                val clickable = clickableTarget(node)
-                val bounds = Rect()
-                runCatching { (clickable ?: node).getBoundsInScreen(bounds) }
-                if (bounds.width() <= 0 || bounds.height() <= 0) {
-                    null
-                } else {
-                    CandidateTarget(
-                        score = score,
-                        label = labelOf(node).ifBlank { labelOf(clickable ?: node) },
-                        clickableNode = clickable,
-                        bounds = bounds,
+        // Fallback for YouTube / Instagram / app bottom-right profile tab when it only displays
+        // the user's custom handle or avatar without the literal word "Profile" or "You"
+        if (rawMatches.isEmpty() && isProfileIntent) {
+            walked = 0
+            walk(root) { node ->
+                if (node.isClickable && node.isEnabled) {
+                    val b = Rect()
+                    runCatching { node.getBoundsInScreen(b) }
+                    val cx = b.exactCenterX()
+                    val cy = b.exactCenterY()
+                    val combined = normalize(
+                        "${node.text.orEmpty()} ${node.contentDescription.orEmpty()} ${node.viewIdResourceName.orEmpty()} ${collectChildLabels(node, 2)}",
                     )
+                    val isShortsOrCreate = combined.contains("shorts") || combined.contains("create") || combined.contains("reel")
+                    if (!isShortsOrCreate &&
+                        b.width() in 40..(screenWidth / 2) &&
+                        b.height() in 36..260 &&
+                        cy >= screenHeight * 0.85f &&
+                        cx >= screenWidth * 0.75f
+                    ) {
+                        rawMatches += Triple(135, node, combined.ifBlank { "Profile Tab" })
+                    }
                 }
+                true
             }
+        }
+
+        val deduplicated = mutableListOf<CandidateTarget>()
+        for ((score, node, resolvedLabel) in rawMatches.sortedByDescending { it.first }) {
+            val clickable = clickableTarget(node)
+            val targetNode = clickable ?: node
+            val bounds = Rect()
+            runCatching { targetNode.getBoundsInScreen(bounds) }
+            if (bounds.width() <= 0 || bounds.height() <= 0) continue
+            val alreadyPresent = deduplicated.any { existing ->
+                kotlin.math.abs(existing.bounds.centerX() - bounds.centerX()) < 18 &&
+                    kotlin.math.abs(existing.bounds.centerY() - bounds.centerY()) < 18
+            }
+            if (!alreadyPresent) {
+                deduplicated += CandidateTarget(
+                    score = score,
+                    label = resolvedLabel.ifBlank { labelOf(node).ifBlank { labelOf(targetNode) } },
+                    clickableNode = clickable,
+                    bounds = bounds,
+                )
+            }
+            if (deduplicated.size >= MAX_CANDIDATES) break
+        }
+        return deduplicated
+    }
+
+    private fun semanticSynonymsFor(wanted: String): List<String> {
+        val clean = wanted
+            .replace(Regex("\\b(my|the|on|in|tab|button|icon|section|page|screen|youtube|instagram|whatsapp|spotify)\\b"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .ifBlank { wanted }
+        val extra = when (clean) {
+            "profile", "you", "account", "channel", "your channel", "my channel", "me", "avatar" -> listOf(
+                "you", "profile", "account", "your channel", "my channel", "library",
+                "signed in as", "google account", "avatar", "tab you", "pivot you", "pivot library",
+            )
+            "library" -> listOf("library", "you", "playlists", "your videos", "pivot library")
+            "subscriptions", "subscription" -> listOf("subscriptions", "subscription", "subscribed")
+            "history", "watch history" -> listOf("history", "watch history", "view all")
+            "downloads", "download" -> listOf("downloads", "download", "your downloads")
+            "liked videos", "liked" -> listOf("liked videos", "liked", "likes")
+            "watch later" -> listOf("watch later")
+            "search", "find" -> listOf("search", "search youtube", "find", "menu search", "search button", "search box")
+            "settings", "setting" -> listOf("settings", "preferences", "more options", "gear")
+            "notifications", "notification", "inbox" -> listOf("notifications", "notification", "inbox", "activity")
+            else -> emptyList()
+        }
+        return (listOf(wanted, clean) + extra).map { normalize(it) }.filter { it.isNotBlank() }.distinct()
+    }
+
+    private fun scoreNodeAgainstSynonyms(
+        label: String,
+        normViewId: String,
+        wanted: String,
+        synonyms: List<String>,
+        queryWords: List<String>,
+    ): Int {
+        var best = 0
+        for ((idx, syn) in synonyms.withIndex()) {
+            val priorityPenalty = (idx * 2).coerceAtMost(14)
+            val s = when {
+                label.isNotBlank() && label == syn -> 120 - priorityPenalty
+                label.isNotBlank() && Regex("\\b${Regex.escape(syn)}\\b").containsMatchIn(label) -> 102 - priorityPenalty
+                label.isNotBlank() && label.startsWith(syn) -> 92 - priorityPenalty
+                label.isNotBlank() && label.contains(syn) -> 76 - priorityPenalty
+                normViewId.isNotBlank() && normViewId == syn -> 95 - priorityPenalty
+                normViewId.isNotBlank() && Regex("\\b${Regex.escape(syn)}\\b").containsMatchIn(normViewId) -> 82 - priorityPenalty
+                label.isNotBlank() && syn.contains(label) && label.length >= 3 -> 58 - priorityPenalty
+                else -> 0
+            }
+            if (s > best) best = s
+        }
+        if (best == 0 && queryWords.isNotEmpty() && label.isNotBlank()) {
+            val matchedWords = queryWords.count { word ->
+                Regex("\\b${Regex.escape(word)}\\b").containsMatchIn(label) || label.contains(word)
+            }
+            if (matchedWords > 0) {
+                best = 40 + matchedWords * 22
+            }
+        }
+        return best
+    }
+
+    private fun collectChildLabels(node: AccessibilityNodeInfo, maxDepth: Int, depth: Int = 0): String {
+        if (depth >= maxDepth) return ""
+        val parts = mutableListOf<String>()
+        val count = node.childCount.coerceAtMost(12)
+        for (i in 0 until count) {
+            val child = runCatching { node.getChild(i) }.getOrNull() ?: continue
+            val t = child.text?.toString()?.trim().orEmpty()
+            val d = child.contentDescription?.toString()?.trim().orEmpty()
+            if (t.isNotBlank()) parts += t
+            if (d.isNotBlank() && ! d.equals(t, ignoreCase = true)) parts += d
+            if (parts.isEmpty() && depth + 1 < maxDepth) {
+                val nested = collectChildLabels(child, maxDepth, depth + 1)
+                if (nested.isNotBlank()) parts += nested
+            }
+        }
+        return parts.distinct().joinToString(" ").trim()
     }
 
     /**
@@ -1595,14 +1755,25 @@ class ScreenController(private val service: AccessibilityService) {
     }
 
     private fun labelOf(node: AccessibilityNodeInfo): String =
-        node.text?.toString() ?: node.contentDescription?.toString().orEmpty()
+        node.text?.toString()?.takeIf { it.isNotBlank() }
+            ?: node.contentDescription?.toString()?.takeIf { it.isNotBlank() }
+            ?: collectChildLabels(node, maxDepth = 2)
 
     private fun describe(node: AccessibilityNodeInfo, index: Int = 0): String {
         val text = node.text?.toString()?.trim().orEmpty()
         val description = node.contentDescription?.toString()?.trim().orEmpty()
-        if (text.isBlank() && description.isBlank()) return ""
+        val childFallback = if (text.isBlank() && description.isBlank() && node.isClickable) {
+            collectChildLabels(node, maxDepth = 2)
+        } else {
+            ""
+        }
+        if (text.isBlank() && description.isBlank() && childFallback.isBlank()) return ""
         if (node.isPassword) return "- [password field]"
-        val label = if (text.isNotBlank()) text else description
+        val label = when {
+            text.isNotBlank() -> text
+            description.isNotBlank() -> description
+            else -> childFallback
+        }
         val bounds = Rect()
         runCatching { node.getBoundsInScreen(bounds) }
         val isVideo = isVideoCardNode(node)
@@ -1639,9 +1810,9 @@ class ScreenController(private val service: AccessibilityService) {
     }
 
     private companion object {
-        const val MAX_NODES = 160
-        const val MAX_DEPTH = 14
-        const val MAX_CANDIDATES = 6
+        const val MAX_NODES = 480
+        const val MAX_DEPTH = 18
+        const val MAX_CANDIDATES = 8
         const val VERIFY_POLL_ATTEMPTS = 7
         const val VERIFY_POLL_INTERVAL_MS = 320L
     }

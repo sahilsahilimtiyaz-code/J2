@@ -219,15 +219,69 @@ class BackupRestoreRepository(
         return dir
     }
 
+    private fun googleChatVaultDir(): java.io.File {
+        val dir = java.io.File(context.noBackupFilesDir, "google_chat_vault")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
     private fun sanitizeEmail(email: String): String =
         email.lowercase().replace(Regex("[^a-z0-9_]"), "_").ifBlank { "anonymous" }
 
     suspend fun saveGoogleAccountChatBackup(email: String): Boolean = withContext(Dispatchers.IO) {
         if (email.isBlank()) return@withContext false
         runCatching {
-            val fullExportJson = memoryRepository.exportJson()
-            val targetFile = java.io.File(googleChatSyncDir(), "chats_${sanitizeEmail(email)}.json")
-            targetFile.writeText(fullExportJson)
+            val fileName = "chats_${sanitizeEmail(email)}.json"
+            val primaryFile = java.io.File(googleChatSyncDir(), fileName)
+            val vaultFile = java.io.File(googleChatVaultDir(), fileName)
+
+            val currentExportJson = memoryRepository.exportJson()
+            val currentExport = runCatching {
+                json.decodeFromString<MemoryRepository.MemoryExport>(currentExportJson)
+            }.getOrNull()
+
+            // Merge with any previously saved vault for this Google account so earlier chats are never overwritten
+            val existingRaw = when {
+                primaryFile.exists() && primaryFile.length() > 0L -> runCatching { primaryFile.readText() }.getOrNull()
+                vaultFile.exists() && vaultFile.length() > 0L -> runCatching { vaultFile.readText() }.getOrNull()
+                else -> null
+            }
+            val existingExport = existingRaw?.let {
+                runCatching { json.decodeFromString<MemoryRepository.MemoryExport>(it) }.getOrNull()
+            }
+
+            val finalJson = if (currentExport != null && existingExport != null) {
+                val mergedConvs = (existingExport.conversations + currentExport.conversations)
+                    .distinctBy { "${it.startedAt}:${it.title}" }
+                val mergedMessages = (existingExport.messages + currentExport.messages)
+                    .filter { it.text.isNotBlank() }
+                    .distinctBy { "${it.author}:${it.text.trim()}:${it.createdAt / 1000}" }
+                    .sortedBy { it.createdAt }
+                val mergedMemories = (existingExport.memories + currentExport.memories)
+                    .distinctBy { it.text.trim().lowercase() }
+                val mergedFacts = (existingExport.facts + currentExport.facts)
+                    .associateBy { it.key }
+                    .values
+                    .toList()
+                val mergedSkills = (existingExport.skills + currentExport.skills)
+                    .distinctBy { it.name.trim().lowercase() }
+                json.encodeToString(
+                    MemoryRepository.MemoryExport(
+                        version = currentExport.version,
+                        exportedAt = System.currentTimeMillis(),
+                        facts = mergedFacts,
+                        memories = mergedMemories,
+                        skills = mergedSkills,
+                        conversations = mergedConvs,
+                        messages = mergedMessages,
+                    ),
+                )
+            } else {
+                currentExportJson
+            }
+
+            primaryFile.writeText(finalJson)
+            runCatching { vaultFile.writeText(finalJson) }
             true
         }.getOrDefault(false)
     }
@@ -235,12 +289,18 @@ class BackupRestoreRepository(
     suspend fun restoreGoogleAccountChatBackup(email: String): Int = withContext(Dispatchers.IO) {
         if (email.isBlank()) return@withContext 0
         runCatching {
-            val targetFile = java.io.File(googleChatSyncDir(), "chats_${sanitizeEmail(email)}.json")
-            if (!targetFile.exists() || targetFile.length() == 0L) return@withContext 0
-            val raw = targetFile.readText()
+            val fileName = "chats_${sanitizeEmail(email)}.json"
+            val primaryFile = java.io.File(googleChatSyncDir(), fileName)
+            val vaultFile = java.io.File(googleChatVaultDir(), fileName)
+            val sourceFile = when {
+                primaryFile.exists() && primaryFile.length() > 0L -> primaryFile
+                vaultFile.exists() && vaultFile.length() > 0L -> vaultFile
+                else -> return@withContext 0
+            }
+            val raw = sourceFile.readText()
             memoryRepository.importJson(raw)
-            // Report how many saved messages this account actually owns, not the
-            // memory-insert count, so the UI can confirm a complete restore.
+            // Keep both locations synced after restore
+            saveGoogleAccountChatBackup(email)
             json.decodeFromString<MemoryRepository.MemoryExport>(raw).messages.size
         }.getOrDefault(0)
     }

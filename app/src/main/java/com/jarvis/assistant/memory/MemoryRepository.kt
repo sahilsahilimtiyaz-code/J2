@@ -378,7 +378,7 @@ class MemoryRepository(private val dao: MemoryDao) {
         val export = json.decodeFromString<MemoryExport>(raw)
         var added = 0
         export.facts.forEach { fact ->
-            if (fact.key.isNotBlank() && fact.value.isNotBlank() && fact.source != "onboarding") {
+            if (fact.key.isNotBlank() && fact.value.isNotBlank()) {
                 upsertFact(fact.key, fact.value, fact.source)
             }
         }
@@ -410,7 +410,7 @@ class MemoryRepository(private val dao: MemoryDao) {
             }
         }
         // Restore conversations and messages if present
-        if (export.conversations.isNotEmpty()) {
+        if (export.conversations.isNotEmpty() || export.messages.isNotEmpty()) {
             val convIdMap = mutableMapOf<Long, Long>()
             export.conversations.forEach { c ->
                 val existing = dao.conversationByStart(c.startedAt, c.title)
@@ -423,10 +423,19 @@ class MemoryRepository(private val dao: MemoryDao) {
                 )
                 convIdMap[c.id] = newId
             }
-            export.messages.forEach { m ->
-                val targetConvId = convIdMap[m.conversationId] ?: convIdMap.values.firstOrNull() ?: return@forEach
+            val fallbackConvId by lazy {
+                convIdMap.values.firstOrNull() ?: dao.insertConversation(
+                    ConversationEntity(
+                        startedAt = System.currentTimeMillis(),
+                        updatedAt = System.currentTimeMillis(),
+                        title = "Restored Google Chat History",
+                    ),
+                )
+            }
+            export.messages.sortedBy { it.createdAt }.forEach { m ->
+                val targetConvId = convIdMap[m.conversationId] ?: fallbackConvId
                 val duplicate = dao.messageExists(targetConvId, m.author, m.text, m.createdAt) > 0
-                if (!duplicate) {
+                if (!duplicate && m.text.isNotBlank()) {
                     dao.insertMessage(
                         MessageEntity(
                             conversationId = targetConvId,
