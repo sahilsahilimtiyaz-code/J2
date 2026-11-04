@@ -221,17 +221,36 @@ object AppDestinationOpener {
         val wantsShorts = goal.contains("shorts", ignoreCase = true) || goal.contains("reel", ignoreCase = true)
         val candidates = nodes.filter { node ->
             val haystack = "${node.text} ${node.contentDescription} ${node.viewId}".lowercase(Locale.ROOT)
-            if (!wantsShorts && (haystack.contains("shorts") || haystack.contains("reel_pivot") || haystack.contains("create"))) {
+            if (!wantsShorts && (Regex("\\bshorts?\\b").containsMatchIn(haystack) || haystack.contains("reel_pivot") || haystack.contains("create"))) {
                 return@filter false
+            }
+            // Reject full-width container bars when targeting a navigation tab
+            if (step.preferBottomRightTab && node.bounds.width() > 480) {
+                return@filter false
+            }
+            // When targeting the bottom-right or top-right profile/You tab, reject mid-screen video feed items
+            if (step.preferBottomRightTab) {
+                val cy = node.bounds.centerY()
+                val cx = node.bounds.centerX()
+                val isBottomRight = cy >= 1450 && cx >= 650
+                val isTopRight = cy <= 360 && cx >= 680
+                if (!isBottomRight && !isTopRight) {
+                    return@filter false
+                }
             }
             val text = node.text.lowercase(Locale.ROOT).trim()
             val description = node.contentDescription.lowercase(Locale.ROOT).trim()
             val viewId = node.viewId.lowercase(Locale.ROOT)
             val labelHit = step.labels.any { raw ->
                 val label = raw.lowercase(Locale.ROOT)
-                text == label || description == label ||
-                    Regex("\\b${Regex.escape(label)}\\b").containsMatchIn(text) ||
-                    Regex("\\b${Regex.escape(label)}\\b").containsMatchIn(description)
+                if (label == "you") {
+                    text == "you" || description == "you" ||
+                        description.startsWith("you,") || description.startsWith("you tab")
+                } else {
+                    text == label || description == label ||
+                        Regex("\\b${Regex.escape(label)}\\b").containsMatchIn(text) ||
+                        Regex("\\b${Regex.escape(label)}\\b").containsMatchIn(description)
+                }
             }
             val idHit = step.viewIdHints.any { hint ->
                 viewId.contains(hint.lowercase(Locale.ROOT))
@@ -246,10 +265,10 @@ object AppDestinationOpener {
                 matchScore(label, "${node.text} ${node.contentDescription}")
             } ?: 0
             val idBonus = if (step.viewIdHints.any { node.viewId.contains(it, ignoreCase = true) }) 35 else 0
-            val positionBonus = if (step.preferBottomRightTab && node.bounds.centerY() > 1600 && node.bounds.centerX() > 750) {
-                65
-            } else if (step.preferBottomRightTab && node.bounds.centerY() < 340 && node.bounds.centerX() > 750) {
-                45
+            val positionBonus = if (step.preferBottomRightTab && node.bounds.centerY() > 1550 && node.bounds.centerX() > 720) {
+                85
+            } else if (step.preferBottomRightTab && node.bounds.centerY() < 340 && node.bounds.centerX() > 720) {
+                55
             } else {
                 0
             }

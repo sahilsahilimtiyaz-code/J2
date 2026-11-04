@@ -236,13 +236,14 @@ class LiveCallAudioAnchor(
             }
 
             // Dynamic ambient noise floor tracking (stays agile in quiet & moderate environments)
-            if (!isSpeechActive && rms < noiseFloorRms * 1.6) {
-                noiseFloorRms = (noiseFloorRms * 0.94 + rms * 0.06).coerceIn(10.0, 180.0)
+            if (!isSpeechActive && rms < noiseFloorRms * 1.75) {
+                noiseFloorRms = (noiseFloorRms * 0.94 + rms * 0.06).coerceIn(18.0, 220.0)
             }
 
-            // High-sensitivity speech threshold: triggers immediately on soft or normal voice
-            val voiceThreshold = (noiseFloorRms * 1.15 + 5.0).coerceIn(14.0, 120.0)
-            val isVoiceFrame = !suppressedForTts && (rms >= voiceThreshold || peak >= 50)
+            // Calibrated speech threshold: rejects room silence & ADC thermal noise (peak < 380)
+            // while triggering reliably on real speech with 1.2s pre-roll so the first syllable is never clipped.
+            val voiceThreshold = (noiseFloorRms * 1.85 + 28.0).coerceIn(55.0, 320.0)
+            val isVoiceFrame = !suppressedForTts && (rms >= voiceThreshold || peak >= 380)
             val now = System.currentTimeMillis()
 
             // Convert shorts to little-endian 16-bit PCM bytes for any attached pipe sink
@@ -273,7 +274,7 @@ class LiveCallAudioAnchor(
             if (isVoiceFrame) {
                 consecutiveVoiceFrames++
                 lastVoiceFrameAtMs = now
-                if (!isSpeechActive && consecutiveVoiceFrames >= 1) {
+                if (!isSpeechActive && consecutiveVoiceFrames >= 2) {
                     isSpeechActive = true
                     speechTriggeredAtMs = now
                     onVoiceActivityDetected?.invoke()
@@ -379,8 +380,8 @@ class LiveCallAudioAnchor(
     companion object {
         const val SAMPLE_RATE_HZ = 16000
         private const val FRAME_SHORTS = 320 // 20ms frame at 16kHz
-        private const val TRAILING_SILENCE_MS = 1_100L
-        private const val MAX_UTTERANCE_MS = 20_000L
+        private const val TRAILING_SILENCE_MS = 1_650L
+        private const val MAX_UTTERANCE_MS = 24_000L
     }
 }
 

@@ -26,6 +26,7 @@ import com.jarvis.assistant.brain.ChatRequest
 import com.jarvis.assistant.brain.HttpClientFactory
 import com.jarvis.assistant.brain.LlmEvent
 import com.jarvis.assistant.brain.LlmMessage
+import com.jarvis.assistant.brain.LlmRole
 import com.jarvis.assistant.brain.LocalModelCatalog
 import com.jarvis.assistant.brain.LocalModelDownloadManager
 import com.jarvis.assistant.brain.ModelCatalogueService
@@ -55,6 +56,7 @@ import com.jarvis.assistant.settings.VoiceProvider
 import com.jarvis.assistant.settings.VoiceSettings
 import com.jarvis.assistant.tools.ActionLogEntry
 import com.jarvis.assistant.tools.ActionLogStore
+import com.jarvis.assistant.tools.AppDestinations
 import com.jarvis.assistant.tools.ConfirmationGate
 import com.jarvis.assistant.tools.MemoryBridge
 import com.jarvis.assistant.tools.PermissionGate
@@ -400,6 +402,64 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         scope = scope,
         onTriggerAutonomousThought = { seed -> deliverAutonomousThought(seed) },
     )
+
+    val proactiveCallEngine = com.jarvis.assistant.service.ProactiveIncidentCallEngine(
+        toolExecutor = { toolName, params ->
+            true to "Verified execution of $toolName(${params.entries.joinToString { "${it.key}=${it.value}" }})"
+        },
+        onRingIncomingCall = { callState ->
+            runCatching {
+                com.jarvis.assistant.service.NotificationHelper.alert(
+                    appContext,
+                    "J.A.R.V.I.S. — Incoming Call",
+                    callState.briefing.headline,
+                )
+            }
+            runCatching {
+                val intent = Intent(appContext, com.jarvis.assistant.service.JarvisIncomingCallActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    putExtra(com.jarvis.assistant.service.JarvisIncomingCallActivity.EXTRA_MESSAGE, callState.briefing.headline)
+                }
+                appContext.startActivity(intent)
+            }
+        },
+        onSendNotification = { title, body ->
+            runCatching {
+                com.jarvis.assistant.service.NotificationHelper.alert(appContext, title, body)
+            }
+        },
+        onSpeakLine = { spokenLine ->
+            speak(spokenLine)
+        },
+        onSaveDecisionMemory = { decisionFact ->
+            runCatching {
+                memoryRepository.remember(
+                    text = decisionFact,
+                    type = "chief_of_staff_decision",
+                    importance = 4,
+                )
+            }
+        },
+        scope = scope,
+    ).apply {
+        registerWatcher(com.jarvis.assistant.service.NotificationIncidentWatcher())
+        registerWatcher(com.jarvis.assistant.service.CalendarDeadlineWatcher())
+        registerWatcher(com.jarvis.assistant.service.DeviceOperationsHealthWatcher())
+    }
+
+    fun triggerProactiveSimulation(scenarioCode: String) {
+        send("simulate $scenarioCode")
+    }
+
+    fun setProactiveKillSwitch(enabled: Boolean) {
+        proactiveCallEngine.setKillSwitch(enabled)
+        if (enabled) {
+            interruptSpeech()
+            _state.update { it.copy(notice = "Global Kill Switch enabled: all autonomous calls and actions halted.") }
+        } else {
+            _state.update { it.copy(notice = "Global Kill Switch disabled: Chief-of-Staff engine online.") }
+        }
+    }
 
     init {
         startSpeechPipeline()
@@ -869,6 +929,84 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                 rejectConfirmation()
                 return
             }
+        }
+
+        // 1.5. Debug & Verification Command: "simulate <scenario>" (e.g., "simulate A", "simulate B", "simulate C")
+        val simulateMatch = Regex("""^simulate\s+([a-zA-Z0-9_-]+)$""", RegexOption.IGNORE_CASE).find(clean)
+        if (simulateMatch != null) {
+            val code = simulateMatch.groupValues[1].uppercase(Locale.ROOT)
+            scope.launch {
+                val callState = proactiveCallEngine.triggerSimulation(code)
+                val opening = if (callState != null) {
+                    proactiveCallEngine.onCallAnswered()
+                } else {
+                    "Simulation halted (check if Global Kill Switch is active)."
+                }
+                _state.update { state ->
+                    state.copy(
+                        messages = state.messages + listOf(
+                            CoreMessage(
+                                id = newId("user"),
+                                author = ChatAuthor.USER,
+                                text = clean,
+                            ),
+                            CoreMessage(
+                                id = newId("reply"),
+                                author = ChatAuthor.JARVIS,
+                                text = opening,
+                                providerName = "Chief of Staff Call ($code)",
+                            ),
+                        ),
+                        generating = false,
+                        error = null,
+                    )
+                }
+            }
+            return
+        }
+
+        // If a Proactive Chief-of-Staff Call is actively IN_CALL, route the owner's turn to proactiveCallEngine
+        val activeIncidentCall = proactiveCallEngine.activeCallState.value
+        if (activeIncidentCall != null &&
+            activeIncidentCall.status == com.jarvis.assistant.service.CallLifecycleStatus.IN_CALL &&
+            !clean.equals("end call", ignoreCase = true) &&
+            !clean.equals("hang up", ignoreCase = true)
+        ) {
+            scope.launch {
+                val reply = proactiveCallEngine.processOwnerCallTurn(clean)
+                val id = withContext(Dispatchers.IO) {
+                    val convId = memoryRepository.conversationForTurn()
+                    memoryRepository.addMessage(convId, "user", clean)
+                    memoryRepository.addMessage(convId, "jarvis", reply, "Chief of Staff Call")
+                    syncGoogleChatsNow()
+                    convId
+                }
+                _state.update { state ->
+                    state.copy(
+                        messages = state.messages + listOf(
+                            CoreMessage(
+                                id = newId("user"),
+                                author = ChatAuthor.USER,
+                                text = clean,
+                            ),
+                            CoreMessage(
+                                id = newId("reply_$id"),
+                                author = ChatAuthor.JARVIS,
+                                text = reply,
+                                providerName = "Chief of Staff Call",
+                            ),
+                        ),
+                        generating = false,
+                        error = null,
+                    )
+                }
+            }
+            return
+        } else if (activeIncidentCall != null &&
+            (clean.equals("end call", ignoreCase = true) || clean.equals("hang up", ignoreCase = true))
+        ) {
+            proactiveCallEngine.endActiveCall()
+            return
         }
 
         // 2. If the user says "ok", "ok ok", "yes", "do it", "go ahead" right after Jarvis asked a question,
@@ -1348,7 +1486,12 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             if (message.author == ChatAuthor.USER) {
                 LlmMessage.user(message.text)
             } else {
-                LlmMessage.assistant(message.text)
+                val toolSuffix = if (message.tools.isNotEmpty()) {
+                    " [Executed tools: ${message.tools.joinToString(", ")}]"
+                } else {
+                    ""
+                }
+                LlmMessage.assistant(message.text + toolSuffix)
             }
         }
     }
@@ -1519,10 +1662,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             }
             return
         }
-        val voice = settings.value.voice
         if (userPausedMic) return
-        // Only re-arm automatically if the owner explicitly enabled continuousListening or background service
-        if (!voice.continuousListening && !serviceActive) return
         if (!uiVisible && !serviceActive) return
         if (_state.value.generating) return
         if (isGranted(Manifest.permission.RECORD_AUDIO)) {
@@ -1709,8 +1849,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
     // Voice input -------------------------------------------------------------
 
     private fun releaseMicrophoneBeforeProcessing(reason: String) {
-        val keepLiveCallAnchor = !userPausedMic &&
-            (settings.value.voice.continuousListening || serviceActive || _conversationMode.value)
+        val keepLiveCallAnchor = !userPausedMic && (uiVisible || serviceActive)
 
         // Continuous voice-link: the hot-mic session owns the recognizer loop.
         // Pause active recognition while keeping the AudioRecord anchor open so
@@ -1765,7 +1904,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             return
         }
         userPausedMic = false
-        autoListenAllowed = settings.value.voice.continuousListening || serviceActive
+        autoListenAllowed = true
         if (isGranted(Manifest.permission.RECORD_AUDIO)) {
             sttEngine.ensureLiveCallAnchor()
         }
@@ -1780,8 +1919,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
     private fun shouldHoldHotMic(): Boolean =
         settings.value.masterEnabled &&
             !userPausedMic &&
-            (uiVisible || serviceActive) &&
-            (settings.value.voice.continuousListening || serviceActive || _conversationMode.value)
+            (uiVisible || serviceActive)
 
     /**
      * Single long-lived microphone session. The AudioRecord anchor opens once and
@@ -3640,10 +3778,15 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                 val currentPkg = initialController.foregroundPackage()
                 if (currentPkg.isBlank() || currentPkg == appContext.packageName) {
                     val targetApp = detectGoalTargetApp(goal)
-                    if (targetApp != null && targetApp.packageName != appContext.packageName) {
-                        if (appRegistry.launch(targetApp.packageName)) {
-                            historySteps += "Pre-step: Launched ${targetApp.label} (${targetApp.packageName})"
-                            delay(1_050L)
+                    if (targetApp != null && targetApp.second != appContext.packageName) {
+                        val launchIntent = appContext.packageManager.getLaunchIntentForPackage(targetApp.second)
+                        if (launchIntent != null) {
+                            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            val launched = runCatching { appContext.startActivity(launchIntent) }.isSuccess
+                            if (launched) {
+                                historySteps += "Pre-step: Launched ${targetApp.first} (${targetApp.second})"
+                                delay(1_050L)
+                            }
                         }
                     }
                 }
@@ -4105,22 +4248,38 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         return AppDestinations.findDestination(matchedApp, sectionCleaned)
     }
 
-    private fun detectGoalTargetApp(goal: String): com.jarvis.assistant.tools.InstalledApp? {
+    private fun detectGoalTargetApp(goal: String): Pair<String, String>? {
         val norm = goal.lowercase(Locale.UK)
-        val candidates = listOf(
-            "youtube", "instagram", "whatsapp", "spotify", "chrome", "gmail",
-            "settings", "maps", "telegram", "camera", "photos", "gallery",
-            "clock", "calculator", "calendar", "files", "play store", "netflix",
+        val knownPackages = mapOf(
+            "youtube" to "com.google.android.youtube",
+            "instagram" to "com.instagram.android",
+            "whatsapp" to "com.whatsapp",
+            "spotify" to "com.spotify.music",
+            "chrome" to "com.android.chrome",
+            "gmail" to "com.google.android.gm",
+            "settings" to "com.android.settings",
+            "maps" to "com.google.android.apps.maps",
+            "telegram" to "org.telegram.messenger",
         )
-        for (name in candidates) {
+        for ((name, pkg) in knownPackages) {
             if (Regex("\\b${Regex.escape(name)}\\b").containsMatchIn(norm)) {
-                appRegistry.findBest(name)?.let { return it }
+                if (appContext.packageManager.getLaunchIntentForPackage(pkg) != null) {
+                    return name.replaceFirstChar { it.titlecase(Locale.UK) } to pkg
+                }
             }
         }
-        val openMatch = Regex("""(?:open|launch|in|on)\s+([a-z0-9 ]{2,22}?)(?:\s+and\b|\s+to\b|\s+profile\b|\s+settings\b|$)""")
-            .find(norm)?.groupValues?.getOrNull(1)?.trim()
-        if (!openMatch.isNullOrBlank()) {
-            appRegistry.findBest(openMatch)?.let { return it }
+        val query = Regex("""(?:open|launch|in|on)\s+([a-z0-9 ]{2,22}?)(?:\s+and\b|\s+to\b|\s+profile\b|\s+settings\b|$)""")
+            .find(norm)?.groupValues?.getOrNull(1)?.trim() ?: return null
+        val pm = appContext.packageManager
+        val installed = runCatching {
+            pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
+        }.getOrDefault(emptyList())
+        for (info in installed) {
+            val label = runCatching { info.loadLabel(pm).toString().trim() }.getOrDefault("")
+            val pkg = info.activityInfo?.packageName.orEmpty()
+            if (label.isNotBlank() && pkg.isNotBlank() && label.lowercase(Locale.UK).contains(query)) {
+                return label to pkg
+            }
         }
         return null
     }
@@ -5009,12 +5168,12 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             if (commandSource.isNotBlank()) {
                 val routedCalls = com.jarvis.assistant.brain.OfflineTaskRouter.routeUserCommand(
                     userText = commandSource,
-                    tools = toolRegistry.definitions(),
+                    availableTools = toolRegistry.definitions(),
                 ).filter { it.name != "save_skill" && it.name != "run_skill" }
                 if (routedCalls.isNotEmpty()) {
                     steps = routedCalls.map { call ->
                         val argsMap = runCatching {
-                            val obj = JSONObject(call.arguments)
+                            val obj = JSONObject(call.argumentsJson)
                             obj.keys().asSequence().associateWith { k -> obj.optString(k) }
                         }.getOrDefault(emptyMap())
                         com.jarvis.assistant.memory.SkillStep(

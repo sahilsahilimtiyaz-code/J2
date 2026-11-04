@@ -752,6 +752,7 @@ private fun HomeHudHero(
     }
 
     val toolActive = state.toolActivity != null || state.screenAutomationActive
+    val isChatting = state.messages.size > 1
 
     Column(modifier = Modifier.fillMaxWidth()) {
         // AI MODEL selector pill bar + trailing gear
@@ -814,30 +815,32 @@ private fun HomeHudHero(
             )
         }
 
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(if (isChatting) 8.dp else 14.dp))
 
         // Central Reactor + Left/Right Telemetry + 3D Perspective Side Panels
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(286.dp),
+                .height(if (isChatting) 172.dp else 286.dp),
             contentAlignment = Alignment.Center,
         ) {
-            // 3D perspective holographic side screens behind the reactor
-            HolographicSidePanels(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(126.dp)
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 6.dp),
-            )
+            if (!isChatting) {
+                // 3D perspective holographic side screens behind the reactor
+                HolographicSidePanels(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(126.dp)
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 6.dp),
+                )
+            }
 
             // Left HUD telemetry column: SYSTEM STABLE, CPU, GPU
             Column(
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .width(96.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(if (isChatting) 6.dp else 10.dp),
             ) {
                 MiniTelemetryBlock(
                     title = "SYSTEM",
@@ -855,11 +858,13 @@ private fun HomeHudHero(
                     value = "$cpuPct%",
                     valueColor = JarvisPalette.Ice,
                 )
-                MiniTelemetryBlock(
-                    title = "GPU",
-                    value = "$gpuPct%",
-                    valueColor = JarvisPalette.Ice,
-                )
+                if (!isChatting) {
+                    MiniTelemetryBlock(
+                        title = "GPU",
+                        value = "$gpuPct%",
+                        valueColor = JarvisPalette.Ice,
+                    )
+                }
             }
 
             // Right HUD telemetry column: MEMORY, STORAGE
@@ -868,7 +873,7 @@ private fun HomeHudHero(
                     .align(Alignment.TopEnd)
                     .width(96.dp),
                 horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(if (isChatting) 8.dp else 12.dp),
             ) {
                 RightBarTelemetry(
                     label = "MEMORY",
@@ -882,7 +887,7 @@ private fun HomeHudHero(
 
             // Central 3D Brahma Morphing Wireframe Orb (touch physics + tap to open Voice Overlay)
             Box(
-                modifier = Modifier.size(268.dp),
+                modifier = Modifier.size(if (isChatting) 156.dp else 268.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 ArcReactor(
@@ -895,74 +900,80 @@ private fun HomeHudHero(
             }
         }
 
-        Spacer(Modifier.height(6.dp))
+        if (!isChatting || state.partialTranscript.isNotBlank() || toolActive) {
+            Spacer(Modifier.height(6.dp))
 
-        // Greeting glass card ("Good morning, sir." / live partial transcript or status)
-        GlassPanel(
-            modifier = Modifier.fillMaxWidth(),
-            corner = 20.dp,
-            accent = if (toolActive) JarvisPalette.Amber else JarvisPalette.CyanBright,
-            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 14.dp),
-        ) {
-            Column(
+            // Greeting glass card ("Good morning, sir." / live partial transcript or status)
+            GlassPanel(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
+                corner = 20.dp,
+                accent = if (toolActive) JarvisPalette.Amber else JarvisPalette.CyanBright,
+                contentPadding = PaddingValues(horizontal = 18.dp, vertical = if (isChatting) 10.dp else 14.dp),
             ) {
-                Text(
-                    text = greetingHeadline,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = JarvisPalette.Ice,
-                    fontWeight = FontWeight.Medium,
-                    textAlign = TextAlign.Center,
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = liveSubtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (state.partialTranscript.isNotBlank() || toolActive) {
-                        JarvisPalette.CyanBright
-                    } else {
-                        JarvisPalette.TextDim
-                    },
-                    textAlign = TextAlign.Center,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    if (!isChatting) {
+                        Text(
+                            text = greetingHeadline,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = JarvisPalette.Ice,
+                            fontWeight = FontWeight.Medium,
+                            textAlign = TextAlign.Center,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                    }
+                    Text(
+                        text = liveSubtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (state.partialTranscript.isNotBlank() || toolActive) {
+                            JarvisPalette.CyanBright
+                        } else {
+                            JarvisPalette.TextDim
+                        },
+                        textAlign = TextAlign.Center,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
 
-        Spacer(Modifier.height(12.dp))
+        if (!isChatting) {
+            Spacer(Modifier.height(12.dp))
 
-        // 4 Quick Action Tiles: Web Search, Generate, Tools, Memory
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            ActionTile(
-                glyph = HudGlyph.GLOBE,
-                label = "Web Search",
-                onClick = { onQuickPrompt("Search the web for today's top technology news") },
-                modifier = Modifier.weight(1f),
-                accent = JarvisPalette.CyanBright,
-            )
-            ActionTile(
-                glyph = HudGlyph.SPARKLES,
-                label = "Generate",
-                onClick = { onQuickPrompt("Explain quantum computing clearly in a few sentences") },
-                modifier = Modifier.weight(1f),
-                accent = JarvisPalette.Cyan,
-            )
-            ActionTile(
-                glyph = HudGlyph.WRENCH,
-                label = "Tools",
-                onClick = { onSelectTab(JarvisTab.TOOLS) },
-                modifier = Modifier.weight(1f),
-                accent = JarvisPalette.CyanBright,
-            )
-            ActionTile(
-                glyph = HudGlyph.BRAIN,
-                label = "Memory",
-                onClick = { onSelectTab(JarvisTab.MEMORY) },
-                modifier = Modifier.weight(1f),
-                accent = JarvisPalette.Cyan,
-            )
+            // 4 Quick Action Tiles: Web Search, Generate, Tools, Memory
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                ActionTile(
+                    glyph = HudGlyph.GLOBE,
+                    label = "Web Search",
+                    onClick = { onQuickPrompt("Search the web for today's top technology news") },
+                    modifier = Modifier.weight(1f),
+                    accent = JarvisPalette.CyanBright,
+                )
+                ActionTile(
+                    glyph = HudGlyph.SPARKLES,
+                    label = "Generate",
+                    onClick = { onQuickPrompt("Explain quantum computing clearly in a few sentences") },
+                    modifier = Modifier.weight(1f),
+                    accent = JarvisPalette.Cyan,
+                )
+                ActionTile(
+                    glyph = HudGlyph.WRENCH,
+                    label = "Tools",
+                    onClick = { onSelectTab(JarvisTab.TOOLS) },
+                    modifier = Modifier.weight(1f),
+                    accent = JarvisPalette.CyanBright,
+                )
+                ActionTile(
+                    glyph = HudGlyph.BRAIN,
+                    label = "Memory",
+                    onClick = { onSelectTab(JarvisTab.MEMORY) },
+                    modifier = Modifier.weight(1f),
+                    accent = JarvisPalette.Cyan,
+                )
+            }
         }
     }
 }

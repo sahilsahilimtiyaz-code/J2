@@ -15,8 +15,43 @@ class PersonaBuilder(context: Context) {
 
     private val appContext = context.applicationContext
     private val cachedDefaultPrompt: String by lazy { loadDefaultPrompt() }
+    private val cachedChiefOfStaffPrompt: String by lazy { loadChiefOfStaffPrompt() }
 
     fun defaultPrompt(): String = cachedDefaultPrompt
+
+    fun chiefOfStaffPrompt(): String = cachedChiefOfStaffPrompt
+
+    fun buildChiefOfStaffCallPrompt(
+        settings: AppSettings,
+        briefingBlock: String,
+        actionLedgerBlock: String,
+        contextSignalsBlock: String,
+        oneMoreThingUsed: Boolean = false,
+    ): String {
+        val profile = settings.profile
+        val ownerName = profile.name.ifBlank { "the owner" }
+        val title = profile.title.ifBlank { "sir" }
+        return buildString {
+            appendLine(cachedChiefOfStaffPrompt.trim())
+            appendLine()
+            appendLine("## Owner Identity")
+            appendLine("- Phone Owner Name: $ownerName")
+            appendLine("- Preferred form of address: $title")
+            appendLine()
+            appendLine("## Live Call Context Signals")
+            appendLine(contextSignalsBlock.ifBlank { "- Standard call context (stationary, DND off)" })
+            appendLine()
+            appendLine("## Verified Ground-Truth Incident Briefing (DO NOT ADD UNVERIFIED FACTS)")
+            appendLine(briefingBlock)
+            appendLine()
+            appendLine("## Verified Action Ledger (ONLY claim actions listed as VERIFIED_SUCCESS below)")
+            appendLine(actionLedgerBlock.ifBlank { "- No automated actions have been executed yet." })
+            appendLine()
+            appendLine("## Call Session Constraints")
+            appendLine("- One-more-thing already used in this call: $oneMoreThingUsed (if true, DO NOT introduce another 'One more thing')")
+            appendLine("- Strictly 1–2 short sentences per turn, target <=20 words, max <=35 words unless asked for detail. No markdown, no emojis, no exclamation marks.")
+        }
+    }
 
     fun build(
         settings: AppSettings,
@@ -55,6 +90,9 @@ class PersonaBuilder(context: Context) {
             append("order when a request needs more than one step.\n")
             append("- Tools that place calls or send messages already ask the owner for a yes, ")
             append("so call them and let the confirmation happen.\n")
+            append("- Always maintain immediate conversational continuity: remember what you just said and ")
+            append("what app, target, contact, or search query you just interacted with so follow-ups like ")
+            append("'now open that', 'send the same thing to Rahul', or 'do the next step' work seamlessly.\n")
             if (memoryContext.isNotBlank()) {
                 append("\n## Retrieved memory notes\n\n")
                 append(memoryContext.trim())
@@ -87,12 +125,24 @@ class PersonaBuilder(context: Context) {
         FALLBACK_PROMPT
     }
 
+    private fun loadChiefOfStaffPrompt(): String = runCatching {
+        appContext.assets.open(CHIEF_OF_STAFF_ASSET).bufferedReader().use { it.readText() }
+    }.getOrElse {
+        FALLBACK_CHIEF_OF_STAFF_PROMPT
+    }
+
     companion object {
         const val CREATOR_NAME = "Octavian"
         const val PROMPT_ASSET = "persona/jarvis_prompt.md"
+        const val CHIEF_OF_STAFF_ASSET = "persona/jarvis_chief_of_staff.md"
         val DATE_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("EEEE, d MMMM yyyy", Locale.UK)
         val DATE_TIME_FORMAT: DateTimeFormatter =
             DateTimeFormatter.ofPattern("EEEE, d MMMM yyyy 'at' HH:mm z", Locale.UK)
+        val FALLBACK_CHIEF_OF_STAFF_PROMPT = """
+            You are Jarvis, the owner's proactive AI chief of staff. Speak in 1-2 short sentences,
+            target 20 words or fewer, never exceed 35 words unless asked for detail. Never claim an action
+            succeeded unless it is recorded in the ActionLedger.
+        """.trimIndent()
 
         val SAFETY_RULES = """
             ## Non-negotiable identity, tool, and safety rules

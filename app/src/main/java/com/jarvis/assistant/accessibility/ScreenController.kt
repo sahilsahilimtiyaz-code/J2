@@ -1026,14 +1026,18 @@ class ScreenController(private val service: AccessibilityService) {
             // Never match Shorts / Reels / Create button unless explicitly requested
             if (!wantsShortsOrReels) {
                 val combinedCheck = "$label $normViewId"
-                if (combinedCheck == "shorts" ||
-                    combinedCheck.startsWith("shorts ") ||
+                if (Regex("\\bshorts?\\b").containsMatchIn(combinedCheck) ||
                     combinedCheck.contains("reel pivot") ||
                     combinedCheck.contains("shorts container") ||
                     combinedCheck == "create"
                 ) {
                     return@walk true
                 }
+            }
+
+            // Reject full-width container bars (e.g. YouTube pivot_bar spanning 0..1080) when targeting a tab or profile
+            if ((isNavTabIntent || isProfileIntent) && screenWidth > 0 && bounds.width() > (screenWidth * 0.45f).toInt()) {
+                return@walk true
             }
 
             if (label.isNotBlank() || normViewId.isNotBlank()) {
@@ -1046,17 +1050,20 @@ class ScreenController(private val service: AccessibilityService) {
                     queryWords = queryWords,
                 )
 
-                // Boost bottom navigation bar or top-right avatar for tab/profile intents
+                // Boost bottom navigation bar or top-right avatar for tab/profile intents, and penalize mid-screen feed items
                 if (score > 0 && isNavTabIntent) {
                     val centerY = bounds.exactCenterY()
                     val centerX = bounds.exactCenterX()
-                    if (centerY >= screenHeight * 0.84f) {
-                        score += 40
+                    if (centerY >= screenHeight * 0.82f) {
+                        score += 55
                         if (isProfileIntent && centerX >= screenWidth * 0.72f) {
-                            score += 35
+                            score += 50
                         }
-                    } else if (isProfileIntent && centerY <= screenHeight * 0.16f && centerX >= screenWidth * 0.72f) {
-                        score += 35
+                    } else if (isProfileIntent && centerY <= screenHeight * 0.18f && centerX >= screenWidth * 0.70f) {
+                        score += 45
+                    } else if (isProfileIntent && centerY in (screenHeight * 0.19f)..(screenHeight * 0.81f)) {
+                        // Mid-screen feed item is not the app's Profile/You navigation tab
+                        score -= 75
                     }
                 }
 
@@ -1086,14 +1093,14 @@ class ScreenController(private val service: AccessibilityService) {
                     val cx = b.exactCenterX()
                     val cy = b.exactCenterY()
                     val combined = normalize(
-                        "${node.text.orEmpty()} ${node.contentDescription.orEmpty()} ${node.viewIdResourceName.orEmpty()} ${collectChildLabels(node, 2)}",
+                        "${node.text?.toString().orEmpty()} ${node.contentDescription?.toString().orEmpty()} ${node.viewIdResourceName.orEmpty()} ${collectChildLabels(node, 2)}",
                     )
                     val isShortsOrCreate = combined.contains("shorts") || combined.contains("create") || combined.contains("reel")
                     if (!isShortsOrCreate &&
-                        b.width() in 40..(screenWidth / 2) &&
+                        b.width() in 40..(screenWidth * 0.42f).toInt().coerceAtLeast(380) &&
                         b.height() in 36..260 &&
-                        cy >= screenHeight * 0.85f &&
-                        cx >= screenWidth * 0.75f
+                        cy >= screenHeight * 0.82f &&
+                        cx >= screenWidth * 0.74f
                     ) {
                         rawMatches += Triple(135, node, combined.ifBlank { "Profile Tab" })
                     }
@@ -1104,10 +1111,20 @@ class ScreenController(private val service: AccessibilityService) {
 
         val deduplicated = mutableListOf<CandidateTarget>()
         for ((score, node, resolvedLabel) in rawMatches.sortedByDescending { it.first }) {
-            val clickable = clickableTarget(node)
+            val nodeBounds = Rect()
+            runCatching { node.getBoundsInScreen(nodeBounds) }
+            val clickable = clickableTarget(node, maxAllowedWidth = if (screenWidth > 0) (screenWidth * 0.48f).toInt() else Int.MAX_VALUE)
             val targetNode = clickable ?: node
-            val bounds = Rect()
-            runCatching { targetNode.getBoundsInScreen(bounds) }
+            val targetBounds = Rect()
+            runCatching { targetNode.getBoundsInScreen(targetBounds) }
+            // Keep the child node's compact bounds if the clickable parent is an oversized container bar
+            val bounds = if (nodeBounds.width() > 0 && nodeBounds.height() > 0 &&
+                (targetBounds.width() <= 0 || (screenWidth > 0 && targetBounds.width() > (screenWidth * 0.48f).toInt() && nodeBounds.width() <= (screenWidth * 0.42f).toInt()))
+            ) {
+                nodeBounds
+            } else {
+                targetBounds
+            }
             if (bounds.width() <= 0 || bounds.height() <= 0) continue
             val alreadyPresent = deduplicated.any { existing ->
                 kotlin.math.abs(existing.bounds.centerX() - bounds.centerX()) < 18 &&
@@ -1161,6 +1178,20 @@ class ScreenController(private val service: AccessibilityService) {
         var best = 0
         for ((idx, syn) in synonyms.withIndex()) {
             val priorityPenalty = (idx * 2).coerceAtMost(14)
+            // Special guard for "you": never match "you" inside feed titles like "recommended for you" or "shorts for you"
+            if (syn == "you") {
+                val isGenuineYouLabel = label == "you" || label == "you tab" ||
+                    (label.startsWith("you ") && label.split(' ').size <= 3 && !label.contains("for you"))
+                val isGenuineYouId = normViewId == "you" || normViewId == "tab you" || normViewId == "pivot you"
+                val s = when {
+                    label == "you" -> 120 - priorityPenalty
+                    isGenuineYouLabel -> 108 - priorityPenalty
+                    isGenuineYouId -> 100 - priorityPenalty
+                    else -> 0
+                }
+                if (s > best) best = s
+                continue
+            }
             val s = when {
                 label.isNotBlank() && label == syn -> 120 - priorityPenalty
                 label.isNotBlank() && Regex("\\b${Regex.escape(syn)}\\b").containsMatchIn(label) -> 102 - priorityPenalty
@@ -1174,7 +1205,8 @@ class ScreenController(private val service: AccessibilityService) {
             if (s > best) best = s
         }
         if (best == 0 && queryWords.isNotEmpty() && label.isNotBlank()) {
-            val matchedWords = queryWords.count { word ->
+            val nonGenericWords = queryWords.filter { it != "you" }
+            val matchedWords = nonGenericWords.count { word ->
                 Regex("\\b${Regex.escape(word)}\\b").containsMatchIn(label) || label.contains(word)
             }
             if (matchedWords > 0) {
@@ -1726,12 +1758,21 @@ class ScreenController(private val service: AccessibilityService) {
         return finalState.isAudioPlaying || finalState.hasPauseControl
     }
 
-    private fun clickableTarget(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+    private fun clickableTarget(
+        node: AccessibilityNodeInfo,
+        maxAllowedWidth: Int = Int.MAX_VALUE,
+    ): AccessibilityNodeInfo? {
         if (node.isClickable && node.isEnabled) return node
         var parent = runCatching { node.parent }.getOrNull()
         var depth = 0
         while (parent != null && depth < 6) {
-            if (parent.isClickable && parent.isEnabled) return parent
+            if (parent.isClickable && parent.isEnabled) {
+                val pBounds = Rect()
+                runCatching { parent.getBoundsInScreen(pBounds) }
+                if (pBounds.width() <= maxAllowedWidth) {
+                    return parent
+                }
+            }
             parent = runCatching { parent?.parent }.getOrNull()
             depth++
         }

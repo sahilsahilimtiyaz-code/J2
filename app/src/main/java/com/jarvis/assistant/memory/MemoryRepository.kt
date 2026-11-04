@@ -423,17 +423,19 @@ class MemoryRepository(private val dao: MemoryDao) {
                 )
                 convIdMap[c.id] = newId
             }
-            val fallbackConvId by lazy {
-                convIdMap.values.firstOrNull() ?: dao.insertConversation(
-                    ConversationEntity(
-                        startedAt = System.currentTimeMillis(),
-                        updatedAt = System.currentTimeMillis(),
-                        title = "Restored Google Chat History",
-                    ),
-                )
-            }
+            var fallbackConvId: Long? = null
             export.messages.sortedBy { it.createdAt }.forEach { m ->
-                val targetConvId = convIdMap[m.conversationId] ?: fallbackConvId
+                val targetConvId = convIdMap[m.conversationId] ?: (
+                    fallbackConvId ?: (
+                        convIdMap.values.firstOrNull() ?: dao.insertConversation(
+                            ConversationEntity(
+                                startedAt = System.currentTimeMillis(),
+                                updatedAt = System.currentTimeMillis(),
+                                title = "Restored Google Chat History",
+                            ),
+                        )
+                    ).also { fallbackConvId = it }
+                )
                 val duplicate = dao.messageExists(targetConvId, m.author, m.text, m.createdAt) > 0
                 if (!duplicate && m.text.isNotBlank()) {
                     dao.insertMessage(

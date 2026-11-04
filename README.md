@@ -192,3 +192,87 @@ The only new image added to the workspace was the app showcase poster. Its arc-r
 mark was cropped cleanly (no caption) into the 1024 px app logo, an adaptive-icon
 foreground, round icons and legacy mipmap sizes; `ic_launcher.xml` and the manifest now
 use it.
+
+---
+
+## Proactive Chief-of-Staff Call Engine ("Jarvis Calls You With a Problem")
+
+Jarvis includes an autonomous **Chief-of-Staff Proactive Incident Call Engine** (`ProactiveIncidentCallEngine.kt` + `assets/persona/jarvis_chief_of_staff.md`) that watches your phone, catches urgent problems, executes safe pre-call mitigations (`GREEN` / `AMBER`), and calls you with a crisp, spoken executive briefing before asking permission for any high-impact (`RED`) action.
+
+### 1. How to Add an `IncidentWatcher`
+
+All incident sources implement the pluggable `IncidentWatcher` interface in `com.jarvis.assistant.service.ProactiveIncidentCallEngine`:
+
+```kotlin
+interface IncidentWatcher {
+    val sourceId: String
+    suspend fun poll(): List<ProactiveIncidentEvent>
+}
+```
+
+Three production watchers are registered out of the box:
+1. **`NotificationIncidentWatcher`** — scans live status-bar notifications for urgent payment failures, fraud alerts, shipping holds, security lockouts, or VIP messages.
+2. **`CalendarDeadlineWatcher`** — detects imminent conflicting meetings, unconfirmed travel departures, or critical deadlines within the next 45 minutes.
+3. **`DeviceOperationsHealthWatcher`** — monitors critical battery depletion before an upcoming calendar event or connectivity failures during active tasks.
+
+To register a custom watcher (for example, a Stripe webhook watcher or CI build failure watcher), instantiate it and call:
+
+```kotlin
+proactiveCallEngine.registerWatcher(MyCustomWatcher())
+```
+
+### 2. Permission Tiers (`GREEN`, `AMBER`, `RED`) & Global Kill Switch
+
+Every tool action is governed by a strict `PermissionTier` (`ProactiveIncidentCallEngine.defaultToolTiers`):
+
+- **`GREEN` (Silent & Pre-Call Safe):** Read-only diagnostics, checking logs, pulling invoice/calendar details, opening an app, reading notifications (`check_status`, `get_notifications`, `search_memory`, `get_calendar_events`). Jarvis runs these automatically before calling you so he has the facts ready.
+- **`AMBER` (Reversible Mitigation — Logged & Reported):** Reversible containment actions such as pausing a noisy campaign, drafting (not sending) a reply, holding a queue, or setting a reminder (`pause_campaign`, `draft_message`, `create_reminder`, `hold_shipment`). Jarvis executes these before placing the call, records them in the `ActionLedger`, and reports them in the opening briefing.
+- **`RED` (Irreversible / External / Financial — Owner Approval Required):** Spending money, charging a card, sending an external message/email/voice note, placing a phone call, submitting a legal appeal, or deleting data (`charge_backup_card`, `submit_appeal`, `send_whatsapp_message`, `send_whatsapp_voice_note`, `make_phone_call`, `delete_data`).
+  - **Unknown tools automatically default to `RED`.**
+  - `RED` actions **never** run before the call and **never** run unless you explicitly approve them during the call (`"Yes, do both"`, `"Use the Visa"`, `"Send it"`).
+
+You can override any tool's tier at runtime:
+
+```kotlin
+proactiveCallEngine.setToolPermissionTier("pause_campaign", PermissionTier.RED)
+```
+
+Or disable all autonomous pre-call mitigations and proactive calls immediately via:
+- **`proactiveCallEngine.setGlobalKillSwitch(true)`**, or
+- **Settings → Master Power Card → "Shut Off J.A.R.V.I.S."**
+
+### 3. Honesty Guardrails (`HonestyGuardrail`)
+
+Before any line is spoken by TTS during a proactive call, `HonestyGuardrail.sanitizeSpokenTurn(...)` enforces:
+1. **No Phantom Actions:** Every sentence claiming a completed action (`"I've already..."`, `"I paused..."`, `"I sent..."`, `"I appealed..."`, `"I moved..."`) is verified against the cryptographic `ActionLedger` for that incident. If no matching `ExecutedLedgerEntry` (`succeeded = true`) exists, the claim is stripped before reaching TTS.
+2. **No Invented Figures:** Any spoken number (`4,200`, `18`, `40`, etc.) is cross-checked against the event's verified `facts`, `rawNumbers`, and tool results. If a number is not backed by data, Jarvis replaces it with `"I don't have that figure yet."`
+3. **Brevity & Cadence:** Strips markdown, emojis, exclamation marks, and robotic filler (`"Great question"`, `"As an AI"`), enforces `<= 35` words per turn (unless you ask for detail), and allows at most **one** `"One more thing"` pivot per call.
+
+### 4. Running the Three Reference Simulations (`simulate A`, `simulate B`, `simulate C`)
+
+You can trigger all three end-to-end reference scenarios directly from the J.A.R.V.I.S. chat box or by voice at any time:
+
+- **Type or say `simulate A` (Scenario A — Ad Campaign Policy Flag & Spend Spike):**
+  - Pre-call: Jarvis checks the ad account (`GREEN`) and pauses the flagged campaign (`AMBER`).
+  - Call opens: *"Sir."* → *"Meta flagged the summer reel for policy and ad spend jumped forty percent. I paused the campaign. Want me to appeal and shift budget to search?"*
+  - Follow-ups supported: *"How much did it burn?"* → *"Fourteen hundred over cap in two hours."* → *"Appeal it, hold the budget move."* → Executes `submit_appeal` (`RED`), confirms *"Done."*, and pivots once: *"One more thing. Stripe webhook timed out twice. Already retrying."*
+- **Type or say `simulate B` (Scenario B — Supplier Payment Declined on Primary Card):**
+  - Pre-call: Jarvis verifies the freight invoice (`GREEN`) and holds the dispatch slot (`AMBER`).
+  - Call opens: *"Sir."* → *"Amex declined the four-thousand-two-hundred-dollar freight charge and the shipment locks in twenty minutes. I held the slot. Should I put it on the Chase Visa?"*
+  - Follow-ups supported: *"Use the Visa, and set a four grand alert next time."* → Executes `charge_backup_card` (`RED`) and saves the `"Four grand"` threshold to persistent memory (`"Done. Paid on the Visa, and I'll flag anything over four grand."`).
+- **Type or say `simulate C` (Scenario C — Production Crash Loop While Driving):**
+  - Pre-call: Jarvis detects driving mode, rolls back the staging worker (`AMBER`), and pins traffic to the stable build (`AMBER`).
+  - Call opens: *"Sir. Are you driving?"* → If you say *"Yeah, keep it quick"*, Jarvis switches to ultra-brief mode (`<= 18` words) and defers non-critical details until you park.
+
+---
+
+## Human-Like Touch Automation Engine (15-State Machine)
+
+Screen control is powered by `HumanTouchEngine.kt`, `ScreenController.kt`, and `AppDestinations.kt`:
+
+- **15-State Execution Machine (`AutomationExecutionState`):** `IDLE` → `LISTENING` → `UNDERSTANDING` → `PLANNING` → `PERMISSION_CHECK` → `OBSERVING_SCREEN` → `LOCATING_TARGET` → `EXECUTING_ACTION` → `WAITING_FOR_UI` → `VERIFYING_ACTION` → `RECOVERING` → `WAITING_FOR_USER` → `TASK_COMPLETED` / `TASK_FAILED` / `CANCELLED`.
+- **Bottom-Tab & YouTube Profile Precision:** Rejects full-width bottom navigation containers (`pivot_bar` spanning `0..1080`, whose geometric center `(540, Y)` previously tapped Shorts/Create), penalizes `"Shorts"` when not requested, and distinguishes the genuine bottom-right `"You"` profile tab (`(972, 2260)`) from mid-screen `"For you"` feed headers.
+- **WhatsApp Voice Note Workflows (`WhatsAppVoiceWorkflowEngine`):**
+  - **Mode A (Native Mic Recording):** Opens the target chat, locates the bottom-right voice note mic button (`voice_note_btn`), slides up to lock recording, speaks the message acoustically, and taps Send only after owner confirmation.
+  - **Mode B (Generated Audio File Attachment):** Generates a high-clarity motivational WAV file via TTS and attaches it to the chat with transparent disclosure that it is sent as an audio file rather than a live mic recording.
+
