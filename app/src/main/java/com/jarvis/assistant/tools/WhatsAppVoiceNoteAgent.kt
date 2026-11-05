@@ -208,22 +208,55 @@ object WhatsAppVoiceNotes {
 
     /**
      * Matches a contact or chat row label against the spoken [queryName] (e.g. "Azhar"
-     * matching "Azhar", "Azhar Khan", "Md Azhar", or a row description containing the name).
+     * matching "Azhar", "Azhar Khan", "Md Azhar", "Shan Didi ❤️", emoji-only names,
+     * or "myself" matching WhatsApp's "(You)" / "Message yourself" self-chat).
      */
     fun matchesContactLabel(candidateLabel: String, queryName: String): Boolean {
         val cleanQuery = queryName.trim().lowercase()
         val cleanCandidate = candidateLabel.trim().lowercase()
         if (cleanQuery.isBlank() || cleanCandidate.isBlank()) return false
 
-        val normQuery = cleanQuery.filter { it.isLetterOrDigit() }
+        // 1. Self-chat support ("myself", "me", "self" -> "(You)" or "Message yourself")
+        if (com.jarvis.assistant.brain.IntentGate.isSelfRecipient(cleanQuery)) {
+            return cleanCandidate.contains("(you)") ||
+                cleanCandidate.contains("message yourself") ||
+                cleanCandidate == "you" ||
+                cleanCandidate.endsWith(" you")
+        }
+
+        // 2. Strip spoken emoji descriptors ("heart emoji", "emoji") before tokenizing
+        val strippedQuery = com.jarvis.assistant.brain.IntentGate.expandSpokenEmojis(cleanQuery)
+            .replace(
+                Regex("""\b(?:red\s+|pink\s+|blue\s+)?(?:heart|smile|smiling|laughing|fire|star|rose|flower|sparkles)?\s*emojis?\b"""),
+                " ",
+            )
+            .trim()
+
+        val normQuery = strippedQuery.filter { it.isLetterOrDigit() }
         val normCandidate = cleanCandidate.filter { it.isLetterOrDigit() }
-        if (normQuery.isBlank() || normCandidate.isBlank()) return false
+
+        // 3. Emoji-only contact names (e.g. "❤️❤️" or "🌸")
+        val queryEmojis = ContactResolver.extractEmojisAndSymbols(strippedQuery)
+        val candidateEmojis = ContactResolver.extractEmojisAndSymbols(cleanCandidate)
+        if (normQuery.isBlank() || normCandidate.isBlank()) {
+            return queryEmojis.isNotBlank() &&
+                candidateEmojis.isNotBlank() &&
+                (candidateEmojis == queryEmojis || candidateEmojis.contains(queryEmojis))
+        }
+
         if (normCandidate == normQuery || normCandidate.contains(normQuery)) return true
 
-        val queryTokens = cleanQuery.split(Regex("[^a-z0-9]+")).filter { it.length >= 2 }
-        val candidateTokens = cleanCandidate.split(Regex("[^a-z0-9]+")).filter { it.isNotBlank() }
-        return queryTokens.isNotEmpty() && queryTokens.all { qt ->
-            candidateTokens.any { ct -> ct == qt || ct.startsWith(qt) }
+        val queryTokens = ContactResolver.cleanAndTokenizeName(strippedQuery).filter { it.length >= 2 }
+        val candidateTokens = ContactResolver.cleanAndTokenizeName(cleanCandidate).filter { it.isNotBlank() }
+        if (queryTokens.isEmpty() || candidateTokens.isEmpty()) return false
+
+        return queryTokens.all { qt ->
+            val qPhonetic = ContactResolver.phoneticKey(qt)
+            candidateTokens.any { ct ->
+                ct == qt ||
+                    ct.startsWith(qt) ||
+                    (qPhonetic.length >= 3 && qPhonetic == ContactResolver.phoneticKey(ct))
+            }
         }
     }
 
@@ -423,6 +456,7 @@ class WhatsAppVoiceNoteSender(
     private val context: Context,
     private val controller: ScreenController,
     private val player: VoiceNotePlayer,
+    private val isCancelled: () -> Boolean = { false },
     private val onPhase: (String) -> Unit = {},
 ) {
     @Volatile
@@ -441,6 +475,9 @@ class WhatsAppVoiceNoteSender(
         displayName: String = recipient,
     ): ScreenResult {
         lastError = null
+        if (isCancelled()) {
+            return failure("Cancelled before opening WhatsApp.")
+        }
         if (note.durationMs <= 0L) {
             return failure("The rendered voice note was empty, sir.")
         }
@@ -459,12 +496,19 @@ class WhatsAppVoiceNoteSender(
             else ->
                 openChat(recipient, isNumber = false)
         }
+        if (isCancelled()) {
+            cancelRecording()
+            return failure("Cancelled WhatsApp voice message.")
+        }
         if (!chatOpened) {
             return failure(lastError ?: "I could not open the WhatsApp chat for $displayName.")
         }
         val before = countVoiceBubbles()
         val mic = findMicSpot()
             ?: return failure("WhatsApp is open, but I could not find its microphone button.")
+        if (isCancelled()) {
+            return failure("Cancelled WhatsApp voice message before recording.")
+        }
 
         // Primary path: hold the microphone button down continuously for the entire duration
         // of the rendered voice recording, then release and press Send if a draft bar remains.
@@ -693,6 +737,11 @@ class WhatsAppVoiceNoteSender(
         }
         // Let WhatsApp's touch-down handler open the audio recorder before loudspeaker playback begins.
         delay(PRE_ROLL_HOLD_MS)
+        if (isCancelled()) {
+            player.stop()
+            cancelRecording()
+            return@coroutineScope failure("Cancelled WhatsApp voice recording.")
+        }
         onPhase("Playing my voice into WhatsApp's recorder...")
         val played = player.play(
             file = note.file,
@@ -702,17 +751,25 @@ class WhatsAppVoiceNoteSender(
         // Wait until the continuous finger hold completes after the full voice recording + tail buffer.
         val gestureDone = holdDeferred.await()
 
-        if (!played) {
+        if (!played || isCancelled()) {
             cancelRecording()
             return@coroutineScope failure(
-                player.lastError
-                    ?: "I held WhatsApp's microphone, but could not play the rendered voice note.",
+                if (isCancelled()) {
+                    "Cancelled WhatsApp voice message and discarded the draft."
+                } else {
+                    player.lastError
+                        ?: "I held WhatsApp's microphone, but could not play the rendered voice note."
+                },
             )
         }
 
         // Give WhatsApp a moment after finger release to auto-send the PTT bubble
         // and transition from the recording bar back to the normal chat composer.
         delay(1_200L)
+        if (isCancelled()) {
+            cancelRecording()
+            return@coroutineScope failure("Cancelled WhatsApp voice message.")
+        }
 
         // In WhatsApp, releasing a continuous press-and-hold on the mic button (without sliding up
         // to lock) AUTOMATICALLY sends the voice message and restores the normal chat composer

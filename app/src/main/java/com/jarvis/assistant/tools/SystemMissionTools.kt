@@ -244,8 +244,10 @@ class SendWhatsAppTool : Tool {
     override val category = ToolCategory.CONTACTS
 
     override suspend fun execute(arguments: JsonObject, context: ToolContext): ToolResult {
-        val recipient = arguments.argString("recipient")?.trim().orEmpty()
-        val message = arguments.argString("message")?.trim().orEmpty().take(1_000)
+        val rawRecipient = arguments.argString("recipient")?.trim().orEmpty()
+        val rawMessage = arguments.argString("message")?.trim().orEmpty().take(1_000)
+        val recipient = com.jarvis.assistant.brain.IntentGate.expandSpokenEmojis(rawRecipient)
+        val message = com.jarvis.assistant.brain.IntentGate.expandSpokenEmojis(rawMessage)
         if (recipient.isBlank() || message.isBlank()) {
             return ToolResult(false, "Provide both the recipient and the WhatsApp message text.")
         }
@@ -277,24 +279,24 @@ class SendWhatsAppTool : Tool {
  * drives WhatsApp's recorder and sends the voice note.
  *
  * Also supports replying to the latest incoming WhatsApp notification when `recipient`
- * is `"last"`, `"latest"`, `"reply"`, or omitted.
+ * is explicitly `"last"`, `"latest"`, or `"reply"`.
  */
 class SendWhatsAppVoiceNoteTool : Tool {
 
     override val definition: ToolDefinition = ToolDefinition(
         name = "send_whatsapp_voice_note",
         description = "Send or reply with a real WhatsApp voice message in Jarvis's own voice. " +
-            "Pass a contact name, phone number, or 'last' to reply to the most recent incoming " +
-            "WhatsApp message. If 'message' is set to 'auto' when replying, Jarvis drafts a " +
-            "contextual spoken reply to what they wrote. The owner confirms before sending.",
+            "Pass an explicit contact name, phone number, 'myself' for the owner's own chat, or 'last' ONLY when " +
+            "the owner explicitly asked to reply to the most recent incoming WhatsApp message. " +
+            "The owner confirms before sending.",
         parameters = objectSchema(
-            required = listOf("message"),
+            required = listOf("recipient", "message"),
             properties = mapOf(
                 "recipient" to stringProperty(
-                    "Contact name, phone number with country code, or 'last' to reply to the latest WhatsApp sender.",
+                    "Explicit contact name, phone number with country code, 'myself' for self-chat, or 'last' ONLY when explicitly replying.",
                 ),
                 "message" to stringProperty(
-                    "What Jarvis should say in the voice note (1-2 short sentences), or 'auto' to draft a reply to their last message.",
+                    "What Jarvis should say in the voice note (1-2 short sentences), or 'auto' ONLY when explicitly replying to their last message.",
                 ),
             ),
         ),
@@ -312,8 +314,17 @@ class SendWhatsAppVoiceNoteTool : Tool {
     }
 
     override suspend fun execute(arguments: JsonObject, context: ToolContext): ToolResult {
-        val rawRecipient = arguments.argString("recipient")?.trim().orEmpty()
+        val rawRecipient = com.jarvis.assistant.brain.IntentGate.expandSpokenEmojis(
+            arguments.argString("recipient")?.trim().orEmpty(),
+        )
         val rawMessage = arguments.argString("message")?.trim().orEmpty().take(700)
+
+        if (rawRecipient.isBlank()) {
+            return ToolResult(
+                false,
+                "Please specify who you would like me to send the WhatsApp voice message to.",
+            )
+        }
 
         val core = runCatching {
             com.jarvis.assistant.core.JarvisCore.get(context.appContext)
@@ -327,25 +338,32 @@ class SendWhatsAppVoiceNoteTool : Tool {
             )
         }
 
-        // 1. Resolve latest incoming WhatsApp message if replying
-        val isReplyToLast = rawRecipient.isBlank() ||
-            rawRecipient.lowercase() in setOf("last", "latest", "recent", "reply", "them", "him", "her", "sender")
+        // 1. Resolve latest incoming WhatsApp message ONLY if explicitly replying
+        val isReplyToLast = rawRecipient.lowercase() in setOf("last", "latest", "recent", "reply", "sender")
+        val isSelfTarget = com.jarvis.assistant.brain.IntentGate.isSelfRecipient(rawRecipient)
         val latestIncoming = com.jarvis.assistant.service.JarvisNotificationListenerService
             .latestWhatsAppMessage(if (isReplyToLast) null else rawRecipient)
 
-        val targetName = if (isReplyToLast) {
-            latestIncoming?.sender ?: return ToolResult(
-                false,
-                "I do not see a recent incoming WhatsApp message to reply to. Tell me the contact's name or number.",
-            )
-        } else {
-            rawRecipient
+        val targetName = when {
+            isReplyToLast -> {
+                latestIncoming?.sender ?: return ToolResult(
+                    false,
+                    "I do not see a recent incoming WhatsApp message to reply to. Tell me the contact's name or number.",
+                )
+            }
+            else -> rawRecipient
         }
 
-        // 2. Resolve spoken message (draft automatically if 'auto' or blank on a reply)
+        // 2. Resolve spoken message (draft automatically ONLY if 'auto' on an explicit reply)
         val wantAutoDraft = rawMessage.isBlank() ||
             rawMessage.lowercase() in setOf("auto", "reply", "draft")
         val spokenMessage = if (wantAutoDraft) {
+            if (!isReplyToLast && latestIncoming == null) {
+                return ToolResult(
+                    false,
+                    "Tell me what you would like me to say in the WhatsApp voice note to $targetName.",
+                )
+            }
             val incomingBody = latestIncoming?.body
                 ?: return ToolResult(
                     false,
@@ -366,16 +384,24 @@ class SendWhatsAppVoiceNoteTool : Tool {
             resolvedTarget = digitsOnly
         } else {
             val contactMatch = if (context.permissions.isGranted(android.Manifest.permission.READ_CONTACTS)) {
-                runCatching { resolveTarget(context, targetName) }.getOrNull()
+                runCatching { ContactResolver.resolve(context.appContext, targetName, preferWhatsApp = true) }.getOrNull()
             } else {
                 null
             }
-            if (contactMatch != null) {
-                resolvedName = contactMatch.name
-                resolvedTarget = contactMatch.number
-            } else {
-                resolvedName = targetName
-                resolvedTarget = targetName
+            when (contactMatch) {
+                is ContactMatchResult.Found -> {
+                    resolvedName = if (isSelfTarget) "Yourself (${contactMatch.contactName})" else contactMatch.contactName
+                    resolvedTarget = contactMatch.normalizedNumber
+                }
+                is ContactMatchResult.Ambiguous -> {
+                    val best = contactMatch.candidates.firstOrNull { it.hasWhatsApp } ?: contactMatch.candidates.first()
+                    resolvedName = best.contactName
+                    resolvedTarget = best.normalizedNumber
+                }
+                else -> {
+                    resolvedName = if (isSelfTarget) "Yourself (You)" else targetName
+                    resolvedTarget = if (isSelfTarget) "myself" else targetName
+                }
             }
         }
 

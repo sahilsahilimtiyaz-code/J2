@@ -113,15 +113,54 @@ object ContactResolver {
             )
         }
 
-        val cleanedQueryTokens = cleanAndTokenizeName(cleanQuery)
+        // Support "myself" / "me" / "self" by matching the owner's profile name or self-contact entry
+        if (com.jarvis.assistant.brain.IntentGate.isSelfRecipient(cleanQuery)) {
+            val ownerProfileName = runCatching {
+                com.jarvis.assistant.core.JarvisCore.get(context).settings.value.profile.name.trim()
+            }.getOrDefault("")
+            val selfCandidates = listOfNotNull(
+                ownerProfileName.takeIf { it.isNotBlank() },
+                "Myself",
+                "Me",
+                "Self",
+                "My Number",
+            )
+            for (candidate in selfCandidates) {
+                val tokens = cleanAndTokenizeName(candidate)
+                val base = tokens.joinToString(" ")
+                val matched = allContacts
+                    .map { entry ->
+                        entry to computeContactMatchScore(
+                            queryRaw = candidate,
+                            queryBase = base,
+                            queryTokens = tokens,
+                            contactName = entry.contactName,
+                            hasWhatsApp = entry.hasWhatsApp,
+                            preferWhatsApp = preferWhatsApp,
+                        )
+                    }
+                    .filter { it.second >= 0.85 }
+                    .maxByOrNull { it.second }
+                if (matched != null) {
+                    return@withContext matched.first
+                }
+            }
+            return@withContext ContactMatchResult.NotFound(
+                query = cleanQuery,
+                reason = "Self chat requested; opening WhatsApp '(You)' self conversation.",
+            )
+        }
+
+        val expandedQuery = com.jarvis.assistant.brain.IntentGate.expandSpokenEmojis(cleanQuery)
+        val cleanedQueryTokens = cleanAndTokenizeName(expandedQuery)
         val queryBase = cleanedQueryTokens.joinToString(" ")
 
-        Log.d(TAG, "ContactResolver: Resolving '$cleanQuery' (base: '$queryBase') across ${allContacts.size} contacts...")
+        Log.d(TAG, "ContactResolver: Resolving '$expandedQuery' (base: '$queryBase') across ${allContacts.size} contacts...")
 
         // Score each contact candidate
         val scored = allContacts.map { entry ->
             val score = computeContactMatchScore(
-                queryRaw = cleanQuery,
+                queryRaw = expandedQuery,
                 queryBase = queryBase,
                 queryTokens = cleanedQueryTokens,
                 contactName = entry.contactName,
@@ -155,7 +194,8 @@ object ContactResolver {
             if (distinctNumbers.size > 1 && topMatches[0].second - topMatches[1].second < 0.03) {
                 // If user gave a single first name and one contact is an exact 1.0 match, pick it
                 val exactMatch = topMatches.firstOrNull {
-                    it.first.contactName.equals(cleanQuery, ignoreCase = true)
+                    it.first.contactName.equals(cleanQuery, ignoreCase = true) ||
+                        cleanAndTokenizeName(it.first.contactName).joinToString(" ") == queryBase
                 }
                 if (exactMatch != null) {
                     return@withContext exactMatch.first
@@ -174,12 +214,23 @@ object ContactResolver {
     }
 
     /**
-     * Cleans spoken name, removes suffixes like "bhai", "ji", and tokenizes.
+     * Extracts non-alphanumeric emoji/symbol characters from a string so emoji-annotated
+     * contacts (e.g. "Shan Didi ❤️" or "❤️❤️") can be compared accurately.
+     */
+    internal fun extractEmojisAndSymbols(raw: String): String =
+        raw.filter { ch ->
+            !ch.isLetterOrDigit() && !ch.isWhitespace() && ch !in charArrayOf('.', ',', '-', '_', '+', '(', ')', '\'', '"')
+        }
+
+    /**
+     * Cleans spoken name, removes suffixes like "bhai", "ji" and spoken "emoji" descriptors,
+     * preserves all Unicode letters/numbers, and tokenizes.
      */
     internal fun cleanAndTokenizeName(raw: String): List<String> {
-        val lower = raw.lowercase(Locale.ROOT)
-            .replace(Regex("""[^a-z0-9\s]"""), " ")
-        val tokens = lower.split(Regex("""\s+""")).filter { it.isNotBlank() }
+        val withoutEmojiWords = raw.lowercase(Locale.ROOT)
+            .replace(Regex("""\b(?:red\s+|pink\s+|blue\s+)?(?:heart|smile|smiling|laughing|fire|star|rose|flower|sparkles)?\s*emojis?\b"""), " ")
+            .replace(Regex("""[^\p{L}\p{N}\s]"""), " ")
+        val tokens = withoutEmojiWords.split(Regex("""\s+""")).filter { it.isNotBlank() }
         val filtered = tokens.filterNot { token ->
             NAME_SUFFIXES.contains(token)
         }
@@ -188,6 +239,8 @@ object ContactResolver {
 
     /**
      * Computes similarity score [0.0..1.0] between query and contact name.
+     * Supports contacts with emojis in their saved name (e.g. "Shan Didi ❤️", "❤️ Mom")
+     * as well as emoji-only contact names.
      */
     internal fun computeContactMatchScore(
         queryRaw: String,
@@ -199,12 +252,22 @@ object ContactResolver {
     ): Double {
         val contactTokens = cleanAndTokenizeName(contactName)
         val contactBase = contactTokens.joinToString(" ")
+        val queryEmojis = extractEmojisAndSymbols(queryRaw)
+        val contactEmojis = extractEmojisAndSymbols(contactName)
 
-        if (queryBase.isBlank() || contactBase.isBlank()) return 0.0
+        // Handle emoji-only contact names (e.g. "❤️❤️")
+        if (queryBase.isBlank() || contactBase.isBlank()) {
+            if (queryEmojis.isNotBlank() && contactEmojis.isNotBlank() &&
+                (queryEmojis == contactEmojis || contactEmojis.contains(queryEmojis) || queryEmojis.contains(contactEmojis))
+            ) {
+                return if (preferWhatsApp && hasWhatsApp) 1.0 else 0.96
+            }
+            return 0.0
+        }
 
         var baseScore = 0.0
 
-        // 1. Exact string match (ignoring case & punctuation)
+        // 1. Exact string match (ignoring case, emojis & punctuation)
         if (queryBase == contactBase) {
             baseScore = 1.0
         } else if (contactBase.startsWith("$queryBase ") || contactBase.endsWith(" $queryBase") || contactBase.contains(" $queryBase ")) {
@@ -235,6 +298,13 @@ object ContactResolver {
             val phoneticSim = fuzzyStringSimilarity(phoneticKey(queryBase), phoneticKey(contactBase)) * 0.88
 
             baseScore = max(max(tokenRatio * 0.90, overallSim), phoneticSim)
+        }
+
+        // Bonus if both query and contact share the same emoji (e.g. "Shan Didi ❤️")
+        if (queryEmojis.isNotBlank() && contactEmojis.isNotBlank() &&
+            contactEmojis.any { it in queryEmojis }
+        ) {
+            baseScore = min(1.0, baseScore + 0.05)
         }
 
         // WhatsApp preference bonus (up to +0.08)

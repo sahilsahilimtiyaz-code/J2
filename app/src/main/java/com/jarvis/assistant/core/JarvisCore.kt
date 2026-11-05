@@ -264,26 +264,37 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
     }
 
     fun stopAll() {
+        val cancelGen = missionGeneration.incrementAndGet()
+        lastCancelTimestampMs = System.currentTimeMillis()
         stopAutomation()
+        planExecutionJob?.cancel()
+        planExecutionJob = null
         interruptSpeech()
         stopListening(reason = "User tapped Stop All", stopBackgroundService = true)
         turnJob?.cancel()
         turnJob = null
+        rejectConfirmation()
+        permissionDeferred?.complete(false)
+        permissionDeferred = null
+        whatsappCallJob?.cancel()
+        whatsappCallJob = null
+        whatsappReplyJob?.cancel()
+        whatsappReplyJob = null
+        voiceNotePlayer.stop()
         _state.update {
             it.copy(
                 generating = false,
                 speaking = false,
                 listening = false,
                 toolActivity = null,
+                activePlan = null,
+                pendingConfirmation = null,
+                pendingPermission = null,
                 partialTranscript = "",
                 audioLevel = 0f,
+                notice = if (cancelGen > 0) "All operations stopped." else it.notice,
             )
         }
-        whatsappCallJob?.cancel()
-        whatsappCallJob = null
-        whatsappReplyJob?.cancel()
-        whatsappReplyJob = null
-        voiceNotePlayer.stop()
     }
 
     fun startManualListening() {
@@ -379,6 +390,20 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
 
     @Volatile
     private var currentSpeechText = ""
+
+    @Volatile
+    private var recentSpokenHistory = ""
+
+    @Volatile
+    private var lastAcceptedSttText = ""
+
+    @Volatile
+    private var lastAcceptedSttAtMs = 0L
+
+    private val missionGeneration = java.util.concurrent.atomic.AtomicLong(0L)
+
+    @Volatile
+    private var lastCancelTimestampMs = 0L
 
     /**
      * Microphone opens only when explicitly requested by the owner or when the
@@ -981,6 +1006,13 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
 
     private fun handleInstantDeviceOrThemeVoiceCommand(clean: String, lowerTrim: String): Boolean {
         val ownerTitle = settings.value.profile.title.ifBlank { "sir" }
+        val intentAnalysis = com.jarvis.assistant.brain.IntentGate.classify(clean, ownerTitle)
+
+        // Never trigger instant settings or WhatsApp call pickup on capability questions,
+        // informational questions, hypotheticals, or cancellations/corrections!
+        if (!intentAnalysis.isExecutableCommand) {
+            return false
+        }
 
         // 1. Orb & Bottom Bar Color Theme voice command
         val mentionsThemeTarget = lowerTrim.contains("orb") ||
@@ -1151,10 +1183,54 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                 approveConfirmation()
                 return
             }
-            if (isNegativeConfirmation(clean)) {
+            if (isNegativeConfirmation(clean) || com.jarvis.assistant.brain.IntentGate.classify(clean).isCancellationOrCorrection) {
                 rejectConfirmation()
                 return
             }
+        }
+
+        // 1.1. Immediate terminal cancellation / correction gate ("Stop. I didn't ask you to send anything.")
+        val ownerTitle = current.profile.title.ifBlank { "sir" }
+        val intentAnalysis = com.jarvis.assistant.brain.IntentGate.classify(clean, ownerTitle)
+        if (intentAnalysis.isCancellationOrCorrection) {
+            missionGeneration.incrementAndGet()
+            lastCancelTimestampMs = System.currentTimeMillis()
+            stopScreenAutomation()
+            planExecutionJob?.cancel()
+            planExecutionJob = null
+            turnJob?.cancel()
+            turnJob = null
+            whatsappReplyJob?.cancel()
+            whatsappReplyJob = null
+            whatsappCallJob?.cancel()
+            whatsappCallJob = null
+            voiceNotePlayer.stop()
+            rejectConfirmation()
+            interruptSpeech()
+            val ack = intentAnalysis.capabilityExplanation
+                ?: "Understood, $ownerTitle. I have stopped all active operations and cleared the queue."
+            _state.update { state ->
+                state.copy(
+                    messages = state.messages.map {
+                        if (it.streaming) it.copy(streaming = false) else it
+                    } + listOf(
+                        CoreMessage(id = newId("user"), author = ChatAuthor.USER, text = clean),
+                        CoreMessage(
+                            id = newId("reply"),
+                            author = ChatAuthor.JARVIS,
+                            text = ack,
+                            providerName = "Safety Gate",
+                        ),
+                    ),
+                    generating = false,
+                    toolActivity = null,
+                    activePlan = null,
+                    pendingConfirmation = null,
+                    error = null,
+                )
+            }
+            speak(ack)
+            return
         }
 
         // 1.2. Fast-path voice commands for Orb/Bottom Bar Color, Voice Gender, and WhatsApp Call Pickup
@@ -1420,10 +1496,16 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             )
         }
 
-        turnJob = scope.launch { runTurn(effectiveCommand, assistantId, current) }
+        val turnGeneration = missionGeneration.incrementAndGet()
+        turnJob = scope.launch { runTurn(effectiveCommand, assistantId, current, turnGeneration) }
     }
 
-    private suspend fun runTurn(userText: String, assistantId: String, current: AppSettings) {
+    private suspend fun runTurn(
+        userText: String,
+        assistantId: String,
+        current: AppSettings,
+        turnGeneration: Long = missionGeneration.get(),
+    ) {
         var conversationId: Long? = null
         try {
             conversationId = withContext(Dispatchers.IO) {
@@ -1541,8 +1623,10 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                     userMessage = userText,
                     providers = providers,
                     tools = selectedTools,
+                    isCancelled = { missionGeneration.get() != turnGeneration },
                 ),
             ).collect { event ->
+                if (missionGeneration.get() != turnGeneration) return@collect
                 when (event) {
                     is AgentEvent.TextDelta -> onTextDelta(assistantId, event)
                     is AgentEvent.ProviderFallback -> _state.update {
@@ -1742,15 +1826,30 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
     }
 
     fun stop() {
+        missionGeneration.incrementAndGet()
+        lastCancelTimestampMs = System.currentTimeMillis()
         stopScreenAutomation()
+        planExecutionJob?.cancel()
+        planExecutionJob = null
         val job = turnJob
         turnJob = null
         job?.cancel()
+        whatsappReplyJob?.cancel()
+        whatsappReplyJob = null
+        whatsappCallJob?.cancel()
+        whatsappCallJob = null
+        voiceNotePlayer.stop()
         rejectConfirmation()
         permissionDeferred?.complete(false)
         permissionDeferred = null
         _state.update {
-            it.copy(generating = false, toolActivity = null, pendingPermission = null, audioLevel = 0f)
+            it.copy(
+                generating = false,
+                toolActivity = null,
+                activePlan = null,
+                pendingPermission = null,
+                audioLevel = 0f,
+            )
         }
         interruptSpeech()
         stopListening()
@@ -1966,9 +2065,16 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
     private fun onReplySpoken() {
         lastSpeechEndedAt = System.currentTimeMillis()
         currentSpeechText = ""
-        sttEngine.setMutedForTts(false)
         abandonAudioFocus()
         _state.update { it.copy(speaking = false, audioLevel = 0f, spokenCaption = null) }
+        // Keep STT muted across the loudspeaker room-reverb decay tail (950 ms)
+        // so Jarvis never transcribes the end of his own sentence!
+        scope.launch {
+            delay(950L)
+            if (!_state.value.speaking) {
+                sttEngine.setMutedForTts(false)
+            }
+        }
         // Mid-call the microphone belongs to the call capture, never to the
         // owner command loop; do not re-arm the main recogniser here.
         if (whatsappCallSessionActive) return
@@ -1978,10 +2084,13 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         }
         if (_conversationMode.value) {
             scope.launch {
-                com.jarvis.assistant.voice.SoundFxEngine.play(com.jarvis.assistant.voice.SoundFxEngine.SoundType.DUPLEX_CHIRP)
-            }
-            if (isGranted(Manifest.permission.RECORD_AUDIO)) {
-                ensureForegroundMicIfLocked(immediate = true)
+                delay(950L)
+                if (!_state.value.speaking) {
+                    com.jarvis.assistant.voice.SoundFxEngine.play(com.jarvis.assistant.voice.SoundFxEngine.SoundType.DUPLEX_CHIRP)
+                    if (isGranted(Manifest.permission.RECORD_AUDIO)) {
+                        ensureForegroundMicIfLocked(immediate = true)
+                    }
+                }
             }
             return
         }
@@ -1989,7 +2098,12 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         if (!uiVisible && !serviceActive) return
         if (_state.value.generating) return
         if (isGranted(Manifest.permission.RECORD_AUDIO)) {
-            ensureForegroundMicIfLocked(immediate = true)
+            scope.launch {
+                delay(950L)
+                if (!_state.value.speaking && !_state.value.generating && !userPausedMic) {
+                    ensureForegroundMicIfLocked(immediate = true)
+                }
+            }
         }
     }
 
@@ -2006,19 +2120,71 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
 
     /**
      * True when [text] looks like the recognizer transcribing the reply Jarvis
-     * is currently speaking rather than the owner interrupting him.
+     * is currently speaking (or just finished speaking within the acoustic tail)
+     * rather than the owner giving a command.
      */
-    private fun isLikelyTtsEcho(text: String): Boolean {
+    internal fun isLikelyTtsEcho(text: String): Boolean {
         val spoken = normalizeEchoText(text)
-        val source = normalizeEchoText(currentSpeechText)
-        if (spoken.length < 4 || source.isBlank()) return false
-        return source.contains(spoken)
+        if (spoken.length < 3) return false
+
+        // 1. Known self-assistant phrases from greetings & status lines that often echo back through speakers
+        val selfEchoPhrases = listOf(
+            "how can i help you",
+            "functioning well",
+            "unfunctioning well",
+            "thank you for asking",
+            "all systems are online",
+            "at your service",
+            "good morning sir",
+            "good afternoon sir",
+            "good evening sir",
+            "welcome back sir",
+            "the day is yours",
+            "shall we begin",
+        )
+        if (selfEchoPhrases.any { spoken.contains(it) }) {
+            return true
+        }
+
+        val now = System.currentTimeMillis()
+        // 2. Duplicate STT final emission within 2.5s
+        if (spoken == lastAcceptedSttText && now - lastAcceptedSttAtMs < 2_500L) {
+            return true
+        }
+
+        val activeSource = normalizeEchoText(currentSpeechText)
+        val recentSource = if (now - lastSpeechEndedAt < 10_000L) {
+            normalizeEchoText(recentSpokenHistory)
+        } else {
+            ""
+        }
+        val combinedSource = "$activeSource $recentSource".trim()
+        if (combinedSource.isBlank()) return false
+        if (combinedSource.contains(spoken)) return true
+
+        // 3. Token overlap check (catches misheard TTS echoes like "unfunctioning well thank you for asking")
+        val spokenTokens = spoken.split(' ').filter { it.length >= 3 }
+        val sourceTokens = combinedSource.split(' ').filter { it.length >= 3 }.toSet()
+        if (spokenTokens.size >= 2 && sourceTokens.isNotEmpty()) {
+            val matched = spokenTokens.count { token ->
+                token in sourceTokens ||
+                    sourceTokens.any { src ->
+                        (src.length >= 5 && token.endsWith(src)) ||
+                            (token.length >= 5 && src.endsWith(token))
+                    }
+            }
+            if (matched.toDouble() / spokenTokens.size.toDouble() >= 0.60) {
+                return true
+            }
+        }
+        return false
     }
 
     /** Tracks every sentence actually queued for TTS, including voice tests. */
     private fun rememberSpoken(text: String) {
         if (text.isBlank()) return
         currentSpeechText = (currentSpeechText + " " + text).trim()
+        recentSpokenHistory = (recentSpokenHistory + " " + text).trim().takeLast(600)
     }
 
     private fun normalizeEchoText(text: String): String =
@@ -2028,22 +2194,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             .trim()
 
     private fun isStopCommand(text: String): Boolean =
-        normalizeEchoText(text) in setOf(
-            "stop",
-            "stop it",
-            "cancel",
-            "cancel that",
-            "quiet",
-            "be quiet",
-            "silence",
-            "never mind",
-            "nevermind",
-            "enough",
-            "shut up",
-            "please stop",
-            "stop please",
-            "stop now",
-        )
+        com.jarvis.assistant.brain.IntentGate.classify(text).isCancellationOrCorrection
 
     /** Speaks a line in the configured voice. Safe to call from any thread. */
     fun speak(text: String) {
@@ -2278,15 +2429,17 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             }
             try {
                 while (isActive && shouldHoldHotMic()) {
-                    // Keep the anchor recording while Jarvis thinks or speaks, but do not
-                    // run the recognizer against his own voice.
+                    // Keep the anchor recording while Jarvis thinks, speaks, or finishes acoustic decay,
+                    // so the recognizer never captures Jarvis's own voice from the loudspeaker.
                     while (isActive && shouldHoldHotMic() &&
-                        (_state.value.generating || _state.value.speaking)
+                        (_state.value.generating || _state.value.speaking ||
+                            (System.currentTimeMillis() - lastSpeechEndedAt < 950L))
                     ) {
                         delay(100L)
                     }
                     if (!isActive || !shouldHoldHotMic()) break
 
+                    sttEngine.setMutedForTts(false)
                     sttEngine.ensureLiveCallAnchor()
                     micStateMachine.setHotHold(true, "Continuous voice link")
                     micStateMachine.tryBeginSession("Continuous voice link re-arm")
@@ -2297,7 +2450,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                         sttEngine.listen(localeFor(settings.value.voice.language)).collect { event ->
                             when (event) {
                                 is SttEvent.Partial -> {
-                                    if (!_state.value.speaking && !_state.value.generating) {
+                                    if (!_state.value.speaking && !_state.value.generating && !isLikelyTtsEcho(event.text)) {
                                         _state.update { it.copy(listening = true, partialTranscript = event.text) }
                                     }
                                 }
@@ -2343,6 +2496,8 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                     val text = captured
                     if (!text.isNullOrBlank() && !fatal) {
                         if (!_state.value.speaking && !isLikelyTtsEcho(text)) {
+                            lastAcceptedSttText = normalizeEchoText(text)
+                            lastAcceptedSttAtMs = System.currentTimeMillis()
                             dispatchHotMicUtterance(text)
                         }
                     }
@@ -3153,10 +3308,26 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
     }
 
     fun cancelActivePlan() {
+        missionGeneration.incrementAndGet()
+        lastCancelTimestampMs = System.currentTimeMillis()
         planExecutionJob?.cancel()
         planExecutionJob = null
+        turnJob?.cancel()
+        turnJob = null
+        whatsappReplyJob?.cancel()
+        whatsappReplyJob = null
+        whatsappCallJob?.cancel()
+        whatsappCallJob = null
+        voiceNotePlayer.stop()
+        stopScreenAutomation()
+        rejectConfirmation()
+        interruptSpeech()
         _state.update { state ->
-            val currentPlan = state.activePlan ?: return@update state
+            val currentPlan = state.activePlan ?: return@update state.copy(
+                generating = false,
+                toolActivity = null,
+                notice = "Mission cancelled.",
+            )
             val updatedSteps = currentPlan.steps.map { step ->
                 if (step.status == com.jarvis.assistant.brain.PlanStepStatus.RUNNING ||
                     step.status == com.jarvis.assistant.brain.PlanStepStatus.PENDING
@@ -3173,6 +3344,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                     isCancelled = true,
                     summary = "Plan cancelled by owner (${currentPlan.completedCount}/${currentPlan.steps.size} completed).",
                 ),
+                generating = false,
                 toolActivity = null,
                 notice = "Task plan cancelled.",
             )
@@ -5316,10 +5488,12 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             _state.update {
                 it.copy(toolActivity = "Recording the WhatsApp voice message for $cleanDisplayName...")
             }
+            val voiceGen = missionGeneration.get()
             val sender = WhatsAppVoiceNoteSender(
                 context = appContext,
                 controller = controller,
                 player = voiceNotePlayer,
+                isCancelled = { missionGeneration.get() != voiceGen || screenAutomationCancelled },
             ) { phase ->
                 _state.update { it.copy(toolActivity = phase) }
             }
@@ -5645,12 +5819,21 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
      * state, safety gates and rate limits before a single token is spent.
      */
     private fun handleIncomingWhatsAppMessage(event: WhatsAppIncomingMessage) {
-        if (_state.value.generating || _state.value.speaking || whatsappCallSessionActive) return
+        val now = System.currentTimeMillis()
+        // Never trigger auto-reply while a turn is active, speaking, in a call, recording a voice note,
+        // or within 20 seconds of a user cancellation!
+        if (_state.value.generating ||
+            _state.value.speaking ||
+            whatsappCallSessionActive ||
+            voiceNoteActive ||
+            now - lastCancelTimestampMs < 20_000L
+        ) {
+            return
+        }
         val current = settings.value
         val safety = current.safety
         val powerManager = appContext.getSystemService(PowerManager::class.java)
         val keyguard = appContext.getSystemService(KeyguardManager::class.java)
-        val now = System.currentTimeMillis()
         val today = LocalDate.now().toString()
         val senderKey = WhatsAppReplyPolicy.normalize(event.sender)
         val lastReply: Long

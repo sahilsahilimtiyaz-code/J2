@@ -14,6 +14,7 @@ data class AgentRequest(
     val userMessage: String,
     val providers: List<ProviderConfig>,
     val tools: List<ToolDefinition>,
+    val isCancelled: () -> Boolean = { false },
 )
 
 sealed interface AgentEvent {
@@ -41,6 +42,27 @@ class AgentLoop(
 ) {
 
     fun run(request: AgentRequest): Flow<AgentEvent> = flow {
+        if (request.isCancelled()) return@flow
+
+        val intentAnalysis = IntentGate.classify(request.userMessage)
+        val firstProviderName = request.providers.firstOrNull()?.name ?: "Jarvis Safety Gate"
+
+        // Immediate handling for cancellations/corrections or incomplete commands needing clarification
+        if (intentAnalysis.isCancellationOrCorrection) {
+            val text = intentAnalysis.capabilityExplanation
+                ?: "Understood, sir. I have stopped all active operations and cleared the queue."
+            emit(AgentEvent.TextDelta(text, firstProviderName))
+            emit(AgentEvent.Completed(firstProviderName))
+            return@flow
+        }
+        if (intentAnalysis.kind == UserIntentKind.CLARIFICATION_NEEDED &&
+            !intentAnalysis.clarificationPrompt.isNullOrBlank()
+        ) {
+            emit(AgentEvent.TextDelta(intentAnalysis.clarificationPrompt, firstProviderName))
+            emit(AgentEvent.Completed(firstProviderName))
+            return@flow
+        }
+
         if (request.providers.isEmpty()) {
             emit(
                 AgentEvent.Error(
@@ -62,20 +84,35 @@ class AgentLoop(
         /** Latest screenshot produced by a tool (e.g. see_screen) awaiting attachment. */
         var pendingImage: AttachedImage? = null
 
+        // Never expose automation tools when the user is asking a capability, how-to, or hypothetical question
+        val allowToolsForTurn = intentAnalysis.isExecutableCommand && request.tools.isNotEmpty()
+
         var round = 0
         while (round < MAX_TOOL_ROUNDS) {
+            if (request.isCancelled()) return@flow
             round++
-            val rawResult = streamRound(messages, request, includeTools = true, images = pendingImage?.let { listOf(it) })
+            val rawResult = streamRound(
+                messages = messages,
+                request = request,
+                includeTools = allowToolsForTurn,
+                images = pendingImage?.let { listOf(it) },
+            )
             pendingImage = null
+            if (request.isCancelled()) return@flow
 
-            // Deterministic Tool Guarantee on Round 1:
+            // Deterministic Tool Guarantee on Round 1 (ONLY when allowToolsForTurn is true):
             // 1. If all cloud providers failed with HTTP/rate-limit errors, check if OfflineTaskRouter
-            //    can execute the phone command directly so the owner never gets blocked by provider errors!
-            // 2. If the cloud model returned text without calling a tool (e.g. hallucinated "I did it" or
-            //    asked "Shall I proceed?") for an explicit phone action command, inject the matched tool call!
+            //    can execute the explicit phone command directly.
+            // 2. If the cloud model returned empty text without calling a tool for an explicit command,
+            //    route via OfflineTaskRouter.
             val result: RoundResult = when (rawResult) {
                 is RoundResult.Failure -> {
-                    if (round == 1 && request.tools.isNotEmpty()) {
+                    if (round == 1 && intentAnalysis.isNonExecutionInquiry && !intentAnalysis.capabilityExplanation.isNullOrBlank()) {
+                        emit(AgentEvent.TextDelta(intentAnalysis.capabilityExplanation, firstProviderName))
+                        emit(AgentEvent.Completed(firstProviderName))
+                        return@flow
+                    }
+                    if (round == 1 && allowToolsForTurn) {
                         val rescuedCalls = OfflineTaskRouter.routeUserCommand(request.userMessage, request.tools)
                         if (rescuedCalls.isNotEmpty()) {
                             RoundResult.Success(
@@ -91,13 +128,18 @@ class AgentLoop(
                     }
                 }
                 is RoundResult.Success -> {
-                    if (rawResult.toolCalls.isEmpty() && request.tools.isNotEmpty()) {
-                        val routedCalls = if (round == 1) {
+                    if (!allowToolsForTurn) {
+                        // Force zero tool calls on capability / informational / hypothetical questions
+                        rawResult.copy(toolCalls = emptyList())
+                    } else if (rawResult.toolCalls.isEmpty() && request.tools.isNotEmpty()) {
+                        val routedCalls = if (round == 1 && rawResult.text.isBlank()) {
                             OfflineTaskRouter.routeUserCommand(request.userMessage, request.tools)
-                        } else {
+                        } else if (round > 1) {
                             val priorToolCalls = messages.filter { it.role == LlmRole.ASSISTANT }.flatMap { it.toolCalls }
                             val trailingTools = messages.takeLastWhile { it.role == LlmRole.TOOL }
                             OfflineTaskRouter.routeFollowUpAction(request.userMessage, priorToolCalls, trailingTools, request.tools)
+                        } else {
+                            emptyList()
                         }
                         if (routedCalls.isNotEmpty()) {
                             RoundResult.Success(
@@ -125,6 +167,7 @@ class AgentLoop(
                     if (result.toolCalls.isEmpty()) {
                         if (result.text.isBlank()) {
                             val fallbackText = lastToolSummary?.let { "Done. $it" }
+                                ?: intentAnalysis.capabilityExplanation
                             if (!fallbackText.isNullOrBlank()) {
                                 emit(AgentEvent.TextDelta(fallbackText, result.providerName))
                                 emit(AgentEvent.Completed(result.providerName))
@@ -140,6 +183,27 @@ class AgentLoop(
                     messages += LlmMessage.assistant(result.text, result.toolCalls)
                     var allDuplicatesThisRound = true
                     for (call in result.toolCalls) {
+                        if (request.isCancelled()) return@flow
+
+                        // Deterministic Safety Gate check before every tool execution
+                        when (val decision = IntentGate.validateToolCall(request.userMessage, call.name, call.argumentsJson)) {
+                            is SafetyGateDecision.BlockedNonCommand -> {
+                                if (result.text.isBlank()) {
+                                    emit(AgentEvent.TextDelta(decision.explanation, result.providerName))
+                                }
+                                emit(AgentEvent.Completed(result.providerName))
+                                return@flow
+                            }
+                            is SafetyGateDecision.NeedsClarification -> {
+                                if (result.text.isBlank()) {
+                                    emit(AgentEvent.TextDelta(decision.prompt, result.providerName))
+                                }
+                                emit(AgentEvent.Completed(result.providerName))
+                                return@flow
+                            }
+                            SafetyGateDecision.Allowed -> Unit
+                        }
+
                         val signature = "${call.name}:${call.argumentsJson.trim()}"
                         val priorOutput = executedCalls[signature]
                         if (priorOutput != null) {
@@ -157,6 +221,7 @@ class AgentLoop(
                             ),
                         )
                         val toolResult = toolExecutor.execute(call.name, call.argumentsJson)
+                        if (request.isCancelled()) return@flow
                         val summary = toolResult.content.take(240)
                         if (toolResult.success && summary.isNotBlank()) {
                             lastToolSummary = summary

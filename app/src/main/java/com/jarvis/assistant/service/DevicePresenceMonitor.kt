@@ -246,11 +246,17 @@ class DevicePresenceMonitor(
             val cleanText = SecurityShield.sanitizeUntrustedText(top.text, "notification")
             fallbackRotationIndex++
             val detail = "Owner has ${unread.size} active notification(s). Latest is from ${top.appLabel}: \"$cleanTitle — $cleanText\"."
+            val exactSpeech = buildString {
+                append("$title, new ${top.appLabel} alert")
+                if (cleanTitle.isNotBlank()) append(" from $cleanTitle")
+                if (cleanText.isNotBlank()) append(": ${cleanText.take(160)}")
+                append(".")
+            }
             return AutonomousThoughtSeed(
                 kind = AutonomousThoughtKind.NOTIFICATION_INSIGHT,
                 contextSummary = detail,
                 prompt = buildAutonomousPrompt(snapshot, profile, AutonomousThoughtKind.NOTIFICATION_INSIGHT, currentApp, detail),
-                fallbackSpeech = generateDynamicFallback(AutonomousThoughtKind.NOTIFICATION_INSIGHT, title, activeMin, snapshot.batteryPercent, currentApp),
+                fallbackSpeech = exactSpeech,
             )
         }
 
@@ -289,7 +295,7 @@ class DevicePresenceMonitor(
         val sinceLastThought = now - lastThoughtMs
         val currentApp = resolveActiveApp()
 
-        // 1. Check for important newly arrived notifications (8-minute gap)
+        // 1. Check for important newly arrived notifications
         val notifications = JarvisNotificationListenerService.snapshot()
         val newest = notifications.firstOrNull()
         if (newest != null &&
@@ -301,11 +307,17 @@ class DevicePresenceMonitor(
             val safeTitle = SecurityShield.sanitizeUntrustedText(newest.title, "notification")
             val safeText = SecurityShield.sanitizeUntrustedText(newest.text, "notification")
             val detail = "A new notification just arrived from ${newest.appLabel}: \"$safeTitle — $safeText\". Total unread: ${notifications.size}."
+            val exactSpeech = buildString {
+                append("$title, new ${newest.appLabel} alert")
+                if (safeTitle.isNotBlank()) append(" from $safeTitle")
+                if (safeText.isNotBlank()) append(": ${safeText.take(160)}")
+                append(".")
+            }
             return AutonomousThoughtSeed(
                 kind = AutonomousThoughtKind.NOTIFICATION_INSIGHT,
                 contextSummary = detail,
                 prompt = buildAutonomousPrompt(snapshot, profile, AutonomousThoughtKind.NOTIFICATION_INSIGHT, currentApp, detail),
-                fallbackSpeech = generateDynamicFallback(AutonomousThoughtKind.NOTIFICATION_INSIGHT, title, snapshot.continuousActiveMinutes, snapshot.batteryPercent, currentApp),
+                fallbackSpeech = exactSpeech,
             )
         }
 

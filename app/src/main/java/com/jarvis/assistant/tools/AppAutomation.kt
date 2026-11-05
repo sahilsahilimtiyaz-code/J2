@@ -342,7 +342,9 @@ internal object AppAutomation {
             val minY = 200
             val maxY = (screenHeight - 150).coerceAtLeast(900)
             val normTarget = normalized(contactName)
-            if (normTarget.isBlank()) return@withContext null
+            val targetEmojis = ContactResolver.extractEmojisAndSymbols(contactName)
+            val isSelf = com.jarvis.assistant.brain.IntentGate.isSelfRecipient(contactName)
+            if (normTarget.isBlank() && targetEmojis.isBlank() && !isSelf) return@withContext null
 
             var bestSpot: Rect? = null
             var bestScore = 0
@@ -544,12 +546,24 @@ internal object AppAutomation {
             return ScreenResult(true, "Opened WhatsApp chat with $contactName.", verified = true)
         }
 
+        val cleanSearchQuery = when {
+            com.jarvis.assistant.brain.IntentGate.isSelfRecipient(contactName) -> "You"
+            else -> com.jarvis.assistant.brain.IntentGate.expandSpokenEmojis(contactName)
+                .replace(
+                    Regex("""(?i)\b(?:red\s+|pink\s+|blue\s+)?(?:heart|smile|smiling|laughing|fire|star|rose|flower|sparkles)?\s*emojis?\b"""),
+                    " ",
+                )
+                .replace(Regex("""\s+"""), " ")
+                .trim()
+                .ifBlank { contactName.trim() }
+        }
+
         // Stage 4: Modern Search Bar ("Ask Meta AI or Search" pill or magnifying glass icon) BEFORE scrolling
         val searchSpot = findWhatsAppSearchSpot()
         if (whatsappInForeground() && searchSpot != null && tapSpotOrAncestor(searchSpot)) {
             delay(1_100L)
             val searchField = findWhatsAppSearchInputSpot() ?: searchSpot
-            if (typeIntoEditable(searchField, contactName)) {
+            if (typeIntoEditable(searchField, cleanSearchQuery)) {
                 delay(1_900L)
                 if (tryOpenVisibleRow()) {
                     return ScreenResult(true, "Opened WhatsApp chat with $contactName.", verified = true)
@@ -581,7 +595,7 @@ internal object AppAutomation {
                 tapSpotOrAncestor(innerSearch)
                 delay(900L)
                 val field = findWhatsAppSearchInputSpot() ?: innerSearch
-                if (typeIntoEditable(field, contactName)) {
+                if (typeIntoEditable(field, cleanSearchQuery)) {
                     delay(1_800L)
                     if (tryOpenVisibleRow()) {
                         return ScreenResult(true, "Opened WhatsApp chat with $contactName.", verified = true)

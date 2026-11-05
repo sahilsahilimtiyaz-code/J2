@@ -223,6 +223,8 @@ object TaskPlanner {
      * that benefits from a structured execution timeline.
      */
     fun shouldCreatePlan(userMessage: String): Boolean {
+        val analysis = IntentGate.classify(userMessage)
+        if (!analysis.isExecutableCommand) return false
         val lower = userMessage.trim().lowercase(Locale.ROOT)
         if (lower.length < 18) return false
         val triggerPhrases = listOf(
@@ -255,6 +257,14 @@ object TaskPlanner {
         objective: String,
         availableTools: Set<String>,
     ): TaskPlan {
+        if (!IntentGate.classify(objective).isExecutableCommand) {
+            return TaskPlan(
+                id = "plan_${System.currentTimeMillis()}",
+                objective = objective.trim(),
+                steps = emptyList(),
+                isRunning = false,
+            )
+        }
         val lower = objective.trim().lowercase(Locale.ROOT)
         val steps = mutableListOf<PlanStep>()
 

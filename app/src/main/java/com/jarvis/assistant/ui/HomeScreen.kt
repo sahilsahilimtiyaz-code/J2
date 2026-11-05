@@ -61,9 +61,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -117,6 +119,7 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
@@ -163,8 +166,33 @@ fun HomeScreen(
 ) {
     val context = LocalContext.current
     val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
     var deviceStatus by remember { mutableStateOf<DeviceStatus?>(null) }
     var showModelModal by remember { mutableStateOf(false) }
+    var scrollControlsRecentlyActive by remember { mutableStateOf(false) }
+
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (listState.isScrollInProgress) {
+            scrollControlsRecentlyActive = true
+        } else if (scrollControlsRecentlyActive) {
+            delay(2800)
+            scrollControlsRecentlyActive = false
+        }
+    }
+
+    val canJumpToTop by remember {
+        derivedStateOf {
+            listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 140
+        }
+    }
+    val canJumpToBottom by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val total = info.totalItemsCount
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+            total > 2 && (listState.canScrollForward || lastVisible < total - 2)
+        }
+    }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -282,63 +310,134 @@ fun HomeScreen(
                         .fillMaxWidth(),
                 )
             } else {
-                // Screen 2 (Home HUD) + Screen 4 (AI Response / Chat)
-                LazyColumn(
-                    state = listState,
+                // Screen 2 (Home HUD) + Screen 4 (AI Response / Chat) with floating scroll-to-top & bottom popups
+                Box(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    item(key = "home_hud") {
-                        HomeHudHero(
-                            state = state,
-                            deviceStatus = deviceStatus,
-                            onOpenModelPicker = {
-                                onFetchModels()
-                                showModelModal = true
-                            },
-                            onOpenSettings = { onSelectTab(JarvisTab.SETTINGS) },
-                            onOpenVoiceOverlay = onOpenVoiceOverlay,
-                            onToggleMic = onToggleMic,
-                            onSelectTab = onSelectTab,
-                            onQuickPrompt = { prompt -> onSend(prompt) },
-                            onSelectColorTheme = onSelectColorTheme,
-                        )
-                    }
-
-                    state.sharedPayload?.let { payload ->
-                        item(key = "shared_payload_banner") {
-                            SharedContentBanner(
-                                payload = payload,
-                                onAction = onActOnSharedContent,
-                                onDismiss = onClearSharedContent,
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        item(key = "home_hud") {
+                            HomeHudHero(
+                                state = state,
+                                deviceStatus = deviceStatus,
+                                onOpenModelPicker = {
+                                    onFetchModels()
+                                    showModelModal = true
+                                },
+                                onOpenSettings = { onSelectTab(JarvisTab.SETTINGS) },
+                                onOpenVoiceOverlay = onOpenVoiceOverlay,
+                                onToggleMic = onToggleMic,
+                                onSelectTab = onSelectTab,
+                                onQuickPrompt = { prompt -> onSend(prompt) },
+                                onSelectColorTheme = onSelectColorTheme,
                             )
                         }
-                    }
 
-                    state.activePlan?.let { plan ->
-                        item(key = "active_task_plan") {
-                            TaskExecutionTimelineCard(
-                                plan = plan,
-                                onCancel = onCancelPlan,
-                                onRetryFailed = onRetryFailedPlanSteps,
-                                onDismiss = onDismissPlan,
+                        state.sharedPayload?.let { payload ->
+                            item(key = "shared_payload_banner") {
+                                SharedContentBanner(
+                                    payload = payload,
+                                    onAction = onActOnSharedContent,
+                                    onDismiss = onClearSharedContent,
+                                )
+                            }
+                        }
+
+                        state.activePlan?.let { plan ->
+                            item(key = "active_task_plan") {
+                                TaskExecutionTimelineCard(
+                                    plan = plan,
+                                    onCancel = onCancelPlan,
+                                    onRetryFailed = onRetryFailedPlanSteps,
+                                    onDismiss = onDismissPlan,
+                                )
+                            }
+                        }
+
+                        items(state.messages, key = { it.id }) { message ->
+                            MessageCard(
+                                message = message,
+                                isLastAssistant = message.id == state.messages.lastOrNull()?.id,
+                                onRetry = onRetry,
+                                onQuickPrompt = { prompt -> onSend(prompt) },
                             )
                         }
+
+                        item(key = "tail") { Spacer(Modifier.height(4.dp)) }
                     }
 
-                    items(state.messages, key = { it.id }) { message ->
-                        MessageCard(
-                            message = message,
-                            isLastAssistant = message.id == state.messages.lastOrNull()?.id,
-                            onRetry = onRetry,
-                            onQuickPrompt = { prompt -> onSend(prompt) },
-                        )
+                    // Floating quick-jump Up / Down arrow popups when scrolling or away from chat bounds
+                    val showJumpUp = canJumpToTop && (scrollControlsRecentlyActive || state.messages.size > 2)
+                    val showJumpDown = canJumpToBottom && (scrollControlsRecentlyActive || state.messages.size > 1)
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(end = 14.dp, bottom = 14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalAlignment = Alignment.End,
+                    ) {
+                        AnimatedVisibility(
+                            visible = showJumpUp,
+                            enter = fadeIn(tween(180)) + slideInVertically(tween(180)) { it / 3 },
+                            exit = fadeOut(tween(180)) + slideOutVertically(tween(180)) { it / 3 },
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(JarvisPalette.Deep.copy(alpha = 0.92f))
+                                    .border(1.2.dp, JarvisPalette.CyanBright.copy(alpha = 0.72f), CircleShape)
+                                    .clickable {
+                                        coroutineScope.launch {
+                                            runCatching { listState.animateScrollToItem(0) }
+                                        }
+                                    },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = "↑",
+                                    color = JarvisPalette.CyanBright,
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                        }
+                        AnimatedVisibility(
+                            visible = showJumpDown,
+                            enter = fadeIn(tween(180)) + slideInVertically(tween(180)) { it / 3 },
+                            exit = fadeOut(tween(180)) + slideOutVertically(tween(180)) { it / 3 },
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(JarvisPalette.Deep.copy(alpha = 0.92f))
+                                    .border(1.2.dp, JarvisPalette.CyanBright.copy(alpha = 0.72f), CircleShape)
+                                    .clickable {
+                                        coroutineScope.launch {
+                                            val total = listState.layoutInfo.totalItemsCount
+                                            if (total > 0) {
+                                                runCatching { listState.animateScrollToItem(total - 1) }
+                                            }
+                                        }
+                                    },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = "↓",
+                                    color = JarvisPalette.CyanBright,
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                        }
                     }
-
-                    item(key = "tail") { Spacer(Modifier.height(4.dp)) }
                 }
 
                 AnimatedVisibility(
@@ -755,7 +854,21 @@ private fun HomeHudHero(
         else -> latestGreetingSubtitle
     }
 
-    val toolActive = state.toolActivity != null || state.screenAutomationActive
+    val activePlanRunningStep = state.activePlan?.steps?.firstOrNull { it.status.name == "RUNNING" }?.title
+    val liveAgentActivityLabel = when {
+        state.toolActivity != null -> state.toolActivity
+        state.screenAutomationActive -> state.screenAutomationStatus ?: "Controlling screen..."
+        activePlanRunningStep != null -> "Mission: $activePlanRunningStep"
+        state.generating -> "Neural synthesis in progress..."
+        state.speaking -> "Vocal transmission active..."
+        state.listening && state.partialTranscript.isNotBlank() -> "Hearing: “${state.partialTranscript}”"
+        state.listening -> "Acoustic array listening..."
+        else -> null
+    }
+    val toolActive = state.toolActivity != null ||
+        state.screenAutomationActive ||
+        state.activePlan?.isRunning == true ||
+        state.generating
     val isChatting = state.messages.size > 1
 
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -889,7 +1002,7 @@ private fun HomeHudHero(
                 )
             }
 
-            // Central 100% Iron Man 3 J.A.R.V.I.S. Second Screen Experience Orb
+            // Central 100% Iron Man 3 J.A.R.V.I.S. Second Screen Experience Orb connected to live agent activity
             Box(
                 modifier = Modifier.size(if (isChatting) 172.dp else 292.dp),
                 contentAlignment = Alignment.Center,
@@ -897,10 +1010,42 @@ private fun HomeHudHero(
                 ArcReactor(
                     state = state.reactorState,
                     modifier = Modifier.fillMaxSize(),
-                    audioLevel = state.audioLevel,
+                    audioLevel = if (toolActive && state.audioLevel < 0.35f) 0.48f else state.audioLevel,
                     toolActive = toolActive,
                     onTap = onOpenVoiceOverlay,
                 )
+
+                if (liveAgentActivityLabel != null) {
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 4.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(JarvisPalette.Deep.copy(alpha = 0.88f))
+                            .border(
+                                width = 1.dp,
+                                color = if (toolActive) JarvisPalette.Amber.copy(alpha = 0.72f) else JarvisPalette.CyanBright.copy(alpha = 0.55f),
+                                shape = RoundedCornerShape(50),
+                            )
+                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        StatusDot(
+                            color = if (toolActive) JarvisPalette.Amber else JarvisPalette.CyanBright,
+                            pulsing = true,
+                        )
+                        Text(
+                            text = liveAgentActivityLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (toolActive) JarvisPalette.Amber else JarvisPalette.Ice,
+                            fontSize = 9.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(max = 190.dp),
+                        )
+                    }
+                }
             }
         }
 

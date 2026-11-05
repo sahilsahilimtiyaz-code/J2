@@ -724,7 +724,16 @@ object OfflineTaskRouter {
     ): List<ToolCall> {
         val clean = userText.trim()
         if (clean.isBlank()) return emptyList()
-        val lower = clean.lowercase(Locale.ROOT)
+
+        // Semantic Intent Gate: never route capability questions, how-to questions,
+        // hypotheticals, cancellations/corrections, or incomplete commands to tools!
+        val intentAnalysis = IntentGate.classify(clean)
+        if (!intentAnalysis.isExecutableCommand) {
+            return emptyList()
+        }
+
+        val expandedClean = IntentGate.expandSpokenEmojis(clean)
+        val lower = expandedClean.lowercase(Locale.ROOT)
         val toolNames = availableTools.map { it.name }.toSet()
 
         fun hasTool(name: String): Boolean = toolNames.isEmpty() || name in toolNames
@@ -737,19 +746,22 @@ object OfflineTaskRouter {
             ),
         )
 
-        // 1. WhatsApp voice note / voice message
+        // 1. WhatsApp voice note / voice message (requires explicit recipient + message or explicit reply)
         if ((lower.contains("voice message") || lower.contains("voice note") || lower.contains("audio message")) &&
-            (lower.contains("whatsapp") || lower.contains("to ") || lower.contains("reply")) &&
             hasTool("send_whatsapp_voice_note")
         ) {
-            val (recipient, message) = extractWhatsAppVoiceTargetAndMessage(clean)
-            return call(
-                "send_whatsapp_voice_note",
-                buildJsonObject {
+            val parsedVoice = extractWhatsAppVoiceTargetAndMessage(expandedClean)
+            if (parsedVoice != null) {
+                val (recipient, message) = parsedVoice
+                val argsJson = buildJsonObject {
                     put("recipient", recipient)
                     put("message", message)
-                }.toString(),
-            )
+                }.toString()
+                if (IntentGate.validateToolCall(expandedClean, "send_whatsapp_voice_note", argsJson) is SafetyGateDecision.Allowed) {
+                    return call("send_whatsapp_voice_note", argsJson)
+                }
+            }
+            return emptyList()
         }
 
         // 2. WhatsApp text message
@@ -758,22 +770,24 @@ object OfflineTaskRouter {
             !lower.contains("open whatsapp only") &&
             hasTool("send_whatsapp_message")
         ) {
-            val parsed = extractRecipientAndMessage(clean, isWhatsApp = true)
+            val parsed = extractRecipientAndMessage(expandedClean, isWhatsApp = true)
             if (parsed != null) {
-                return call(
-                    "send_whatsapp_message",
-                    buildJsonObject {
-                        put("recipient", parsed.first)
-                        put("message", parsed.second)
-                    }.toString(),
-                )
+                val argsJson = buildJsonObject {
+                    put("recipient", parsed.first)
+                    put("message", parsed.second)
+                }.toString()
+                if (IntentGate.validateToolCall(expandedClean, "send_whatsapp_message", argsJson) is SafetyGateDecision.Allowed) {
+                    return call("send_whatsapp_message", argsJson)
+                }
             }
+            return emptyList()
         }
 
         // 3. Answer / end WhatsApp call
         if (lower.contains("whatsapp") && lower.contains("call")) {
             if ((lower.contains("answer") || lower.contains("pick up") || lower.contains("accept")) &&
-                hasTool("answer_whatsapp_call")
+                hasTool("answer_whatsapp_call") &&
+                IntentGate.validateToolCall(expandedClean, "answer_whatsapp_call", "{}") is SafetyGateDecision.Allowed
             ) {
                 return call("answer_whatsapp_call", "{}")
             }
@@ -1550,16 +1564,25 @@ object OfflineTaskRouter {
             .trimEnd('?', '.')
     }
 
-    private fun extractWhatsAppVoiceTargetAndMessage(raw: String): Pair<String, String> {
-        val clean = raw.replace(Regex("(?i)^(jarvis\\s*,?\\s*)?(please\\s+)?"), "").trim()
+    private fun extractWhatsAppVoiceTargetAndMessage(raw: String): Pair<String, String>? {
+        val clean = IntentGate.expandSpokenEmojis(
+            raw.replace(Regex("(?i)^(jarvis\\s*,?\\s*)?(please\\s+)?"), "").trim(),
+        )
+        if (!IntentGate.classify(clean).isExecutableCommand) return null
+
         val lower = clean.lowercase(Locale.ROOT)
-        if (lower.contains("reply") && !lower.contains(" to ")) {
-            return "last" to "auto"
+        // Explicit reply to the latest incoming WhatsApp message
+        if (Regex("""\b(reply|respond)\b""").containsMatchIn(lower) &&
+            !Regex("""\bto\s+(?!the\s+last|last|latest|recent|message|that)\S+""").containsMatchIn(lower)
+        ) {
+            val explicitMsg = Regex("""(?i)\b(?:saying|that|with\s+message|:)\s+(.+)$""")
+                .find(clean)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+            return "last" to explicitMsg.ifBlank { "auto" }
         }
-        // Match patterns like: "send a voice message on WhatsApp to Azhar as introducing yourself"
-        // or "send a voice note to Azhar on WhatsApp saying hello there"
+
+        // Match explicit voice-note command with a recipient after "to <recipient>" (excluding infinitive verbs like "able to send")
         val regexTo = Regex(
-            """(?i)(?:to)\s+([A-Za-z0-9+_.\- ]+?)(?:\s+on\s+whatsapp)?(?:\s+(?:saying|as|that|telling\s+him|telling\s+her|telling\s+them|with\s+message|about|:)\s+(.+))?$""",
+            """(?i)(?:voice\s+message|voice\s+note|audio\s+message)(?:\s+on\s+whatsapp)?\s+to\s+([^\n:]+?)(?:\s+on\s+whatsapp)?(?:\s+(?:saying|as|that|telling\s+him|telling\s+her|telling\s+them|with\s+message|about|:)\s+(.+))?$""",
         )
         val match = regexTo.find(clean)
         if (match != null) {
@@ -1567,20 +1590,22 @@ object OfflineTaskRouter {
                 .replace(Regex("(?i)\\s+on\\s+whatsapp.*$"), "")
                 .trim()
             val rawIntent = match.groupValues.getOrNull(2)?.trim().orEmpty()
+            if (rawTarget.isBlank() || rawIntent.isBlank()) return null
             val spoken = buildVoiceNoteLine(rawTarget, rawIntent)
-            return rawTarget.ifBlank { "last" } to spoken
+            return rawTarget to spoken
         }
-        return "last" to "auto"
+        return null
     }
 
     private fun buildVoiceNoteLine(recipient: String, rawIntent: String): String {
+        val displayTarget = if (IntentGate.isSelfRecipient(recipient)) "sir" else recipient
         if (rawIntent.isBlank()) {
-            return "Hello $recipient, this is Jarvis, personal AI assistant. Reaching out on behalf of my owner."
+            return ""
         }
         val lowerIntent = rawIntent.lowercase(Locale.ROOT)
         return when {
             lowerIntent.contains("introduc") && (lowerIntent.contains("yourself") || lowerIntent.contains("jarvis")) ->
-                "Hello $recipient, I am Jarvis, the personal AI assistant. It is a pleasure to make your acquaintance."
+                "Hello $displayTarget, I am Jarvis, the personal AI assistant. It is a pleasure to make your acquaintance."
             lowerIntent.startsWith("saying ") -> rawIntent.substringAfter(" ").trim()
             lowerIntent.startsWith("that ") -> rawIntent.substringAfter(" ").trim()
             else -> rawIntent
@@ -1588,10 +1613,30 @@ object OfflineTaskRouter {
     }
 
     private fun extractRecipientAndMessage(raw: String, isWhatsApp: Boolean): Pair<String, String>? {
-        val clean = raw.replace(Regex("(?i)^(jarvis\\s*,?\\s*)?(please\\s+)?"), "").trim()
+        val clean = IntentGate.expandSpokenEmojis(
+            raw.replace(Regex("(?i)^(jarvis\\s*,?\\s*)?(please\\s+)?"), "").trim(),
+        )
+        if (!IntentGate.classify(clean).isExecutableCommand) return null
 
-        // Match with colon: e.g. "message Azhar on WhatsApp: hi" or "message 9876543210: hello"
-        val colonMatch = Regex("""(?i)^(?:send\s+(?:a\s+)?message\s+(?:to\s+)?|message\s+|text\s+|whatsapp\s+)?([A-Za-z0-9+_.\- ]+?)(?:\s+on\s+whatsapp)?\s*:\s*(.+)$""").find(clean)
+        // 1. Match "send <emoji/text> to <contact> on WhatsApp" (e.g. "send ❤️ to Shan Didi on WhatsApp")
+        val sendPayloadToTarget = Regex(
+            """(?i)^send\s+(?:a\s+|an\s+)?(.+?)\s+to\s+([^\n:]+?)\s+on\s+whatsapp$""",
+        ).find(clean)
+        if (sendPayloadToTarget != null) {
+            val payload = sendPayloadToTarget.groupValues[1].trim()
+            val target = sendPayloadToTarget.groupValues[2].trim()
+            val normPayload = payload.lowercase(Locale.ROOT)
+            if (normPayload !in setOf("message", "whatsapp message", "text", "text message", "voice message", "voice note") &&
+                target.isNotBlank() && payload.isNotBlank()
+            ) {
+                return target to payload
+            }
+        }
+
+        // 2. Match with colon: e.g. "message Azhar on WhatsApp: hi ❤️" or "message Shan Didi ❤️ on WhatsApp: hello"
+        val colonMatch = Regex(
+            """(?i)^(?:send\s+(?:a\s+)?(?:whatsapp\s+)?message\s+(?:to\s+)?|message\s+|text\s+|whatsapp\s+)?([^\n:]+?)(?:\s+on\s+whatsapp)?\s*:\s*(.+)$""",
+        ).find(clean)
         if (colonMatch != null) {
             val target = colonMatch.groupValues[1]
                 .replace(Regex("(?i)^(?:to|message|text|whatsapp)\\s+"), "")
@@ -1601,20 +1646,25 @@ object OfflineTaskRouter {
             if (target.isNotBlank() && msg.isNotBlank()) return target to msg
         }
 
+        // 3. Match "send a WhatsApp message to <contact> saying <message>" (supports emojis in contact name and message)
         val pattern = if (isWhatsApp) {
-            Regex("""(?i)(?:to|message|text|whatsapp)\s+([A-Za-z0-9+_.\- ]+?)(?:\s+on\s+whatsapp)?\s+(?:saying|that|:|-)\s+(.+)$""")
+            Regex("""(?i)(?:to|message|text|whatsapp)\s+([^\n:]+?)(?:\s+on\s+whatsapp)?\s+(?:saying|that|with\s+message|:|-)\s+(.+)$""")
         } else {
-            Regex("""(?i)(?:to|text|message)\s+([A-Za-z0-9+_.\- ]+?)\s+(?:saying|that|:|-)\s+(.+)$""")
+            Regex("""(?i)(?:to|text|message)\s+([^\n:]+?)\s+(?:saying|that|with\s+message|:|-)\s+(.+)$""")
         }
         val m = pattern.find(clean)
         if (m != null) {
-            val target = m.groupValues[1].replace(Regex("(?i)\\s+on\\s+whatsapp$"), "").trim()
+            val target = m.groupValues[1]
+                .replace(Regex("(?i)\\s+on\\s+whatsapp$"), "")
+                .trim()
             val msg = m.groupValues[2].trim()
             if (target.isNotBlank() && msg.isNotBlank()) return target to msg
         }
 
-        // Catch "message Azhar on WhatsApp hello"
-        val onWaMatch = Regex("""(?i)^(?:message|text|send\s+(?:a\s+)?message\s+to)\s+([A-Za-z0-9+_.\- ]+?)\s+on\s+whatsapp\s+(.+)$""").find(clean)
+        // 4. Catch "message <contact> on WhatsApp <message>"
+        val onWaMatch = Regex(
+            """(?i)^(?:message|text|send\s+(?:a\s+)?(?:whatsapp\s+)?message\s+to)\s+([^\n:]+?)\s+on\s+whatsapp\s+(.+)$""",
+        ).find(clean)
         if (onWaMatch != null) {
             val target = onWaMatch.groupValues[1].trim()
             val msg = onWaMatch.groupValues[2].trim()
@@ -1881,6 +1931,15 @@ class LocalLlmProvider(
         // Check if this is a background JSON extraction request
         if (systemText.contains("JSON only", ignoreCase = true) || userText.contains("Reply with ONLY a JSON array")) {
             return "[]"
+        }
+
+        // Check IntentGate for capability questions, informational questions, hypotheticals, cancellations, or clarifications
+        val intentAnalysis = IntentGate.classify(userText, title)
+        if (intentAnalysis.isCancellationOrCorrection || intentAnalysis.isNonExecutionInquiry) {
+            intentAnalysis.capabilityExplanation?.let { return it }
+        }
+        if (intentAnalysis.kind == UserIntentKind.CLARIFICATION_NEEDED) {
+            intentAnalysis.clarificationPrompt?.let { return it }
         }
 
         // Math evaluation
