@@ -4487,6 +4487,12 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
 
     private fun pauseMainListeningForCall() {
         releaseMicrophoneBeforeProcessing("Paused main microphone for WhatsApp call/voice note")
+        manualListenJob?.cancel()
+        manualListenJob = null
+        hotMicJob?.cancel()
+        runCatching {
+            sttEngine.forceDestroyActive("Paused main microphone for WhatsApp call/voice note", releaseLiveAnchor = true)
+        }
         runCatching { ListeningServiceController.stop(appContext) }
         _state.update {
             it.copy(listening = false, partialTranscript = "", audioLevel = 0f)
@@ -5708,6 +5714,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                 )
             }
             voiceNoteActive = true
+            screenAutomationCancelled = false
         }
 
         var resumeListening = false
@@ -5759,12 +5766,13 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             _state.update {
                 it.copy(toolActivity = "Recording the WhatsApp voice message for $cleanDisplayName...")
             }
+            screenAutomationCancelled = false
             val voiceGen = missionGeneration.get()
             val sender = WhatsAppVoiceNoteSender(
                 context = appContext,
                 controller = controller,
                 player = voiceNotePlayer,
-                isCancelled = { missionGeneration.get() != voiceGen || screenAutomationCancelled },
+                isCancelled = { (missionGeneration.get() != voiceGen) || screenAutomationCancelled },
             ) { phase ->
                 _state.update { it.copy(toolActivity = phase) }
             }
@@ -5897,6 +5905,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                 )
             }
             voiceNoteActive = true
+            screenAutomationCancelled = false
         }
 
         var rendered: RenderedVoiceNote? = null

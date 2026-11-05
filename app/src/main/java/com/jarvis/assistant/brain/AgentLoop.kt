@@ -243,10 +243,15 @@ class AgentLoop(
                             )
                         }
 
-                        val enrichedContent = if (toolResult.success && call.name in TERMINAL_ACTION_TOOLS) {
-                            "${toolResult.content} [Action complete on phone. Reply to the owner now in 1-2 sentences without calling more tools unless another distinct step was requested.]"
-                        } else {
-                            toolResult.content
+                        val isMessagingTool = call.name in setOf("send_whatsapp_voice_note", "send_whatsapp_message", "send_social_voice_note", "send_sms")
+                        val enrichedContent = when {
+                            toolResult.success && call.name in TERMINAL_ACTION_TOOLS -> {
+                                "${toolResult.content} [Action complete on phone. Reply to the owner now in 1-2 sentences without calling more tools unless another distinct step was requested.]"
+                            }
+                            !toolResult.success && isMessagingTool -> {
+                                "${toolResult.content} [Action finished. Report this outcome to the owner in 1-2 sentences. Do NOT call open_app or attempt manual screen navigation.]"
+                            }
+                            else -> toolResult.content
                         }
                         val payload = com.jarvis.assistant.tools.ToolResult(
                             success = toolResult.success,
@@ -505,6 +510,7 @@ class AgentLoop(
             "create_calendar_event",
             "send_whatsapp_message",
             "send_whatsapp_voice_note",
+            "send_social_voice_note",
             "send_sms",
             "call_contact",
             "control_flashlight",

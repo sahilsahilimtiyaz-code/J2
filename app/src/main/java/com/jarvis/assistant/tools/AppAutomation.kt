@@ -339,7 +339,7 @@ internal object AppAutomation {
                 ?: return@withContext null
             val root = service.rootInActiveWindow ?: return@withContext null
             val (_, screenHeight) = service.getScreenDimensions()
-            val minY = 200
+            val minY = 120
             val maxY = (screenHeight - 150).coerceAtLeast(900)
             val normTarget = normalized(contactName)
             val targetEmojis = ContactResolver.extractEmojisAndSymbols(contactName)
@@ -444,7 +444,7 @@ internal object AppAutomation {
             val isHeaderId = shortId == "conversation_contact_name" ||
                 shortId == "toolbar_title" ||
                 shortId == "conversation_contact"
-            if ((bounds != null && bounds.centerY() in 20..440) || isHeaderId) {
+            if ((bounds != null && bounds.centerY() in 20..580) || isHeaderId) {
                 val text = node.text?.toString()?.trim().orEmpty()
                 val desc = node.contentDescription?.toString()?.trim().orEmpty()
                 if (text.isNotBlank()) labels += text
@@ -558,16 +558,29 @@ internal object AppAutomation {
                 .ifBlank { contactName.trim() }
         }
 
+        val searchQueriesToTry = listOf(
+            cleanSearchQuery,
+            cleanSearchQuery.split(Regex("""\s+""")).distinct().joinToString(" "),
+            cleanSearchQuery.split(Regex("""\s+""")).firstOrNull().orEmpty(),
+        ).filter { it.isNotBlank() }.distinct()
+
         // Stage 4: Modern Search Bar ("Ask Meta AI or Search" pill or magnifying glass icon) BEFORE scrolling
         val searchSpot = findWhatsAppSearchSpot()
         if (whatsappInForeground() && searchSpot != null && tapSpotOrAncestor(searchSpot)) {
             delay(1_100L)
             val searchField = findWhatsAppSearchInputSpot() ?: searchSpot
-            if (typeIntoEditable(searchField, cleanSearchQuery)) {
-                delay(1_900L)
-                if (tryOpenVisibleRow()) {
-                    return ScreenResult(true, "Opened WhatsApp chat with $contactName.", verified = true)
+            var found = false
+            for (query in searchQueriesToTry) {
+                if (typeIntoEditable(searchField, query)) {
+                    delay(1_900L)
+                    if (tryOpenVisibleRow()) {
+                        found = true
+                        break
+                    }
                 }
+            }
+            if (found) {
+                return ScreenResult(true, "Opened WhatsApp chat with $contactName.", verified = true)
             }
             // Back out of search if it didn't open the chat so we can check scrolled rows or New Chat
             runCatching { controller.press("back") }
@@ -595,11 +608,18 @@ internal object AppAutomation {
                 tapSpotOrAncestor(innerSearch)
                 delay(900L)
                 val field = findWhatsAppSearchInputSpot() ?: innerSearch
-                if (typeIntoEditable(field, cleanSearchQuery)) {
-                    delay(1_800L)
-                    if (tryOpenVisibleRow()) {
-                        return ScreenResult(true, "Opened WhatsApp chat with $contactName.", verified = true)
+                var found = false
+                for (query in searchQueriesToTry) {
+                    if (typeIntoEditable(field, query)) {
+                        delay(1_800L)
+                        if (tryOpenVisibleRow()) {
+                            found = true
+                            break
+                        }
                     }
+                }
+                if (found) {
+                    return ScreenResult(true, "Opened WhatsApp chat with $contactName.", verified = true)
                 }
             }
         }

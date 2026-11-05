@@ -250,13 +250,34 @@ object WhatsAppVoiceNotes {
         val candidateTokens = ContactResolver.cleanAndTokenizeName(cleanCandidate).filter { it.isNotBlank() }
         if (queryTokens.isEmpty() || candidateTokens.isEmpty()) return false
 
-        return queryTokens.all { qt ->
+        val distinctQuery = queryTokens.distinct()
+        val distinctCandidate = candidateTokens.distinct()
+
+        // 1. All distinct query words are represented in candidate (e.g. query "Sahil Sahil" -> distinct "sahil" matches candidate "Sahil")
+        val allQueryInCandidate = distinctQuery.all { qt ->
             val qPhonetic = ContactResolver.phoneticKey(qt)
-            candidateTokens.any { ct ->
+            distinctCandidate.any { ct ->
                 ct == qt ||
                     ct.startsWith(qt) ||
                     (qPhonetic.length >= 3 && qPhonetic == ContactResolver.phoneticKey(ct))
             }
+        }
+        if (allQueryInCandidate) return true
+
+        // 2. All candidate words are in query (e.g. contact saved as "Sahil", spoken query "Sahil Sahil")
+        val allCandidateInQuery = distinctCandidate.all { ct ->
+            val cPhonetic = ContactResolver.phoneticKey(ct)
+            distinctQuery.any { qt ->
+                qt == ct ||
+                    qt.startsWith(ct) ||
+                    (cPhonetic.length >= 3 && cPhonetic == ContactResolver.phoneticKey(qt))
+            }
+        }
+        if (allCandidateInQuery) return true
+
+        // 3. Fallback: at least one prominent name token (>= 3 chars) matches identically
+        return distinctQuery.any { qt ->
+            qt.length >= 3 && distinctCandidate.any { ct -> ct == qt || (ct.length >= 4 && ct.startsWith(qt)) }
         }
     }
 
@@ -631,10 +652,20 @@ class WhatsAppVoiceNoteSender(
         }
         val topLabels = AppAutomation.whatsAppTopHeaderLabels()
         if (topLabels.isNotEmpty() && !AppAutomation.whatsAppHeaderMatches(recipient, isNumber = false)) {
-            return failOpen(
-                "I opened a chat, but I could not confirm it belongs to \"$recipient\", " +
-                    "so I stopped before recording anything.",
-            )
+            delay(600L)
+            if (!AppAutomation.whatsAppHeaderMatches(recipient, isNumber = false)) {
+                val recipientTokens = ContactResolver.cleanAndTokenizeName(recipient).filter { it.length >= 2 }
+                val headerMatchesAnyToken = topLabels.any { label ->
+                    val norm = AppAutomation.normalized(label)
+                    recipientTokens.any { token -> norm.contains(token) }
+                }
+                if (!headerMatchesAnyToken && topLabels.any { it.length in 2..40 && !it.contains("call") && !it.contains("options") && !it.contains("online") }) {
+                    return failOpen(
+                        "I opened a chat, but I could not confirm it belongs to \"$recipient\", " +
+                            "so I stopped before recording anything.",
+                    )
+                }
+            }
         }
         return true
     }

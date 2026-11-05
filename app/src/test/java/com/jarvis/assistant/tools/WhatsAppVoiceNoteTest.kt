@@ -236,6 +236,16 @@ class WhatsAppVoiceNoteTest {
     }
 
     @Test
+    fun `contact label matcher handles repeated and multi-token queries like sahil sahil`() {
+        assertTrue(WhatsAppVoiceNotes.matchesContactLabel("Sahil", "sahil sahil"))
+        assertTrue(WhatsAppVoiceNotes.matchesContactLabel("Sahil Sahil", "sahil sahil"))
+        assertTrue(WhatsAppVoiceNotes.matchesContactLabel("Sahil Sahil", "sahil"))
+        assertTrue(WhatsAppVoiceNotes.matchesContactLabel("Sahil Sharma", "sahil sahil"))
+        assertTrue(WhatsAppVoiceNotes.matchesContactLabel("Sahil Khan, online", "sahil sahil"))
+        assertTrue(WhatsAppVoiceNotes.matchesContactLabel("Sahil, 2 unread messages, 11:30 AM", "sahil sahil"))
+    }
+
+    @Test
     fun `search bar detector matches modern Ask Meta AI pill and classic search controls`() {
         assertTrue(WhatsAppVoiceNotes.isSearchBarNode("Ask Meta AI or Search", ""))
         assertTrue(WhatsAppVoiceNotes.isSearchBarNode("Search...", ""))
