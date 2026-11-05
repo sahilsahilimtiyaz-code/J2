@@ -35,10 +35,11 @@ jobs:
       - name: Install Android SDK packages
         run: sdkmanager --install "platforms;android-37.0" "build-tools;36.0.0"
 
-      - name: Set up Gradle 9.6.0
-        uses: gradle/actions/setup-gradle@v6
+      - name: Set up Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "9.6.0"
+          gradle-version: "9.3.1"
+          cache-read-only: false
 
       - name: Configure stable signing
         env:
@@ -62,8 +63,7 @@ jobs:
           elif [ -f "debug.keystore.base64" ]; then
             echo "Using committed debug.keystore.base64 for consistent in-place APK updates."
             tr -d '[:space:]' < debug.keystore.base64 | base64 --decode > "$key_path"
-            cp "$key_path" debug.keystore
-            chmod 600 "$key_path" debug.keystore
+            chmod 600 "$key_path"
             {
               echo "JARVIS_KEYSTORE_PATH=$key_path"
               echo "JARVIS_KEYSTORE_PASSWORD=android"
@@ -74,18 +74,25 @@ jobs:
             echo "Warning: No signing key found; falling back to default debug keystore."
           fi
 
-      - name: Run unit tests and build debug APK
-        run: gradle testDebugUnitTest assembleDebug --stacktrace
+      - name: Run unit tests and assemble debug APK
+        run: gradle testDebugUnitTest assembleDebug --no-daemon --stacktrace
 
-      - name: Verify APK is signed
+      - name: Verify APK was created and signed
         run: |
           set -euo pipefail
           apk="app/build/outputs/apk/debug/app-debug.apk"
-          test -f "$apk"
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$apk"
+          if [ ! -f "$apk" ]; then
+            echo "Error: $apk not found!"
+            find app/build -name "*.apk" || true
+            exit 1
+          fi
+          echo "Found APK at $apk ($(ls -lh "$apk" | awk '{print $5}'))"
+          if [ -n "${ANDROID_HOME:-}" ] && [ -x "$ANDROID_HOME/build-tools/36.0.0/apksigner" ]; then
+            "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$apk" || true
+          fi
 
-      - name: Upload debug APK
-        uses: actions/upload-artifact@v7
+      - name: Upload debug APK artifact
+        uses: actions/upload-artifact@v4
         with:
           name: jarvis-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk

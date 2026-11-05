@@ -27,7 +27,7 @@ if (!localDebugKeystore.exists() && localDebugKeystoreBase64.exists()) {
     }
 }
 
-val generatedBootAssetsDir = layout.buildDirectory.dir("generated/boot_assets")
+val generatedBootAssetsDir = layout.buildDirectory.dir("generated/boot_assets").get().asFile
 val orbLoopBase64File = file("jarvis_orb_loop.mp4.base64")
 runCatching {
     if (orbLoopBase64File.exists()) {
@@ -38,7 +38,7 @@ runCatching {
             .replace(Regex("\\s+"), "")
         if (cleanB64.length > 64) {
             val mp4Bytes = Base64.getDecoder().decode(cleanB64)
-            val bootDir = File(generatedBootAssetsDir.get().asFile, "boot").apply { mkdirs() }
+            val bootDir = File(generatedBootAssetsDir, "boot").apply { mkdirs() }
             File(bootDir, "jarvis_orb_loop.mp4").writeBytes(mp4Bytes)
             File(bootDir, "boot_intro.mp4").writeBytes(mp4Bytes)
         }
