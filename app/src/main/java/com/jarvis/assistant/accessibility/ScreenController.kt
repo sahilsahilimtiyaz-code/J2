@@ -242,11 +242,12 @@ class ScreenController(private val service: AccessibilityService) {
         val label = appLabel(pkg)
         val nodes = snapshotActionableNodes()
         val builder = StringBuilder()
-        val header = "[JARVIS_ACT] Screen Snapshot for $label ($pkg) — ${nodes.size} actionable nodes:"
+        val (screenWidth, screenHeight) = jarvisService?.getScreenDimensions() ?: (1080 to 2340)
+        val header = "[JARVIS_ACT] Screen Snapshot for $label ($pkg) [${screenWidth}x${screenHeight}px] — ${nodes.size} actionable nodes:"
         builder.appendLine(header)
         Log.i("JARVIS_ACT", header)
         for (node in nodes) {
-            val line = node.toCompactString()
+            val line = node.toCompactString(screenWidth, screenHeight)
             builder.appendLine(line)
             Log.i("JARVIS_ACT", line)
         }
@@ -369,11 +370,65 @@ class ScreenController(private val service: AccessibilityService) {
                 return ScreenResult(true, "Scrolled up", verified = true)
             }
 
+            "long_click", "long_press", "touch_and_hold", "hold" -> {
+                Log.d("JARVIS_ACT", "executeRefAction: Long-pressing $cleanRef")
+                var ok = runCatching {
+                    node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
+                }.getOrDefault(false)
+                if (!ok && bounds.width() > 0 && bounds.height() > 0) {
+                    ok = jarvisService?.dispatchLongPressGesture(bounds.exactCenterX(), bounds.exactCenterY(), durationMs = 650L) ?: false
+                }
+                delay(350L)
+                val after = captureFingerprint()
+                val verified = before.treeSignatureHash != after.treeSignatureHash
+                return ScreenResult(ok || verified, if (ok || verified) "Long-pressed $cleanRef (touch-and-hold)" else "Long press on $cleanRef failed", verified = verified)
+            }
+
+            "double_tap" -> {
+                Log.d("JARVIS_ACT", "executeRefAction: Double-tapping $cleanRef")
+                val ok = if (bounds.width() > 0 && bounds.height() > 0) {
+                    jarvisService?.dispatchDoubleTapGesture(bounds.exactCenterX(), bounds.exactCenterY()) ?: false
+                } else false
+                delay(300L)
+                val after = captureFingerprint()
+                val verified = before.treeSignatureHash != after.treeSignatureHash
+                return ScreenResult(ok || verified, if (ok || verified) "Double-tapped $cleanRef" else "Double tap on $cleanRef failed", verified = verified)
+            }
+
+            "swipe_left", "swipe_right", "swipe_up", "swipe_down", "swipe" -> {
+                val dir = when (actionType.lowercase(Locale.ROOT)) {
+                    "swipe_left" -> "left"
+                    "swipe_right" -> "right"
+                    "swipe_up" -> "up"
+                    "swipe_down" -> "down"
+                    else -> textArgument?.lowercase(Locale.ROOT) ?: "left"
+                }
+                Log.d("JARVIS_ACT", "executeRefAction: Swiping $dir on $cleanRef")
+                val cx = bounds.exactCenterX()
+                val cy = bounds.exactCenterY()
+                val spanX = bounds.width().coerceAtLeast(120).toFloat() * 0.45f
+                val spanY = bounds.height().coerceAtLeast(120).toFloat() * 0.45f
+                val (sx, sy, ex, ey) = when (dir) {
+                    "left" -> QuadrupleFloats(cx + spanX, cy, cx - spanX, cy)
+                    "right" -> QuadrupleFloats(cx - spanX, cy, cx + spanX, cy)
+                    "up" -> QuadrupleFloats(cx, cy + spanY, cx, cy - spanY)
+                    "down" -> QuadrupleFloats(cx, cy - spanY, cx, cy + spanY)
+                    else -> QuadrupleFloats(cx + spanX, cy, cx - spanX, cy)
+                }
+                val ok = jarvisService?.dispatchSwipeGesture(sx, sy, ex, ey, durationMs = 280L) ?: false
+                delay(350L)
+                val after = captureFingerprint()
+                val verified = before.treeSignatureHash != after.treeSignatureHash
+                return ScreenResult(ok || verified, if (ok || verified) "Swiped $dir on $cleanRef" else "Swipe $dir on $cleanRef failed", verified = verified)
+            }
+
             else -> {
                 return ScreenResult(false, "Unknown action \"$actionType\" on $cleanRef", verified = false)
             }
         }
     }
+
+    private data class QuadrupleFloats(val a: Float, val b: Float, val c: Float, val d: Float)
 
     /**
      * Waits for a window-state change or expected package to reach foreground, with timeout.

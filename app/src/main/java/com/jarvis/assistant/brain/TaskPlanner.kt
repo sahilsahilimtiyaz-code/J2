@@ -102,6 +102,8 @@ object ToolContextBudgeter {
         "automate_screen",
         "see_screen",
         "tap_screen",
+        "swipe_screen",
+        "scroll_screen",
         "type_on_screen",
         "run_diagnostics",
     )
@@ -144,8 +146,10 @@ object ToolContextBudgeter {
         "execute_mobile_ui_action" to setOf("action", "tap", "type", "scroll", "swipe", "screen"),
         "tap_video_item" to setOf("video", "youtube", "play", "first", "second", "watch"),
         "tap_screen_coordinates" to setOf("tap", "click", "coordinate", "x", "y", "screen"),
+        "tap_screen" to setOf("tap", "click", "touch", "press", "hold", "long press", "double tap", "button", "screen"),
+        "swipe_screen" to setOf("swipe", "swap", "flick", "slide", "carousel", "tab", "card", "dismiss", "screen"),
         "type_on_screen" to setOf("type", "write", "enter", "input", "search", "screen", "youtube"),
-        "scroll_screen" to setOf("scroll", "down", "up", "swipe", "screen"),
+        "scroll_screen" to setOf("scroll", "down", "up", "left", "right", "page", "feed", "list", "screen"),
         "press_system_key" to setOf("back", "home", "recents", "notifications", "navigate"),
     )
 

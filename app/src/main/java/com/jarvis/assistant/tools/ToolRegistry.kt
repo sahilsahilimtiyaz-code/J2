@@ -328,6 +328,7 @@ fun defaultTools(): List<Tool> = listOf(
     ExecuteMobileUiActionTool(),
     ReadScreenTool(),
     TapScreenTool(),
+    SwipeScreenTool(),
     TapVideoItemTool(),
     TapCoordinatesTool(),
     TypeOnScreenTool(),

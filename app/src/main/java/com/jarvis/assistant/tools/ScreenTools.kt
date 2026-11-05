@@ -120,14 +120,20 @@ class TapScreenTool : Tool {
 
     override val definition: ToolDefinition = ToolDefinition(
         name = "tap_screen",
-        description = "Tap a visible control on the phone screen by its label, element index (e.g. \"#1\"), " +
-            "or semantic role (e.g. \"first video\", \"video\"). Automatically falls back to physical " +
-            "coordinate touch gestures if the element is not marked clickable in accessibility. " +
-            "One tap per call.",
+        description = "Tap, touch, long-press, or double-tap a visible control on the phone screen by its label, element index (e.g. \"#1\"), " +
+            "or semantic role. Supports touch modality ('tap', 'long_press', 'touch', 'double_tap'), explicit rationale ('why'), and hold duration. " +
+            "Automatically falls back to physical coordinate touch gestures if the element is not marked clickable in accessibility.",
         parameters = objectSchema(
             required = listOf("text"),
             properties = mapOf(
-                "text" to stringProperty("The label, element index (e.g. \"#1\"), or name to tap."),
+                "text" to stringProperty("The label, element index (e.g. \"#1\"), or visual description of what to tap or touch."),
+                "action_type" to stringProperty(
+                    "Touch modality: 'tap' (default single click), 'long_press' / 'touch' (touch-and-hold for context menu or recording), or 'double_tap'. Defaults to 'tap'.",
+                    listOf("tap", "long_press", "touch", "double_tap"),
+                ),
+                "duration_ms" to integerProperty("Duration in milliseconds for 'long_press' / 'touch' (default 650ms, 400-3000ms)."),
+                "why" to stringProperty("Explicit reason explaining why this tap/touch action is being performed."),
+                "expected_outcome" to stringProperty("Expected visual change or result on screen after this action."),
             ),
         ),
     )
@@ -146,17 +152,47 @@ class TapScreenTool : Tool {
         screenUnavailable(context)?.let { return it }
         val text = arguments.argString("text")
             ?: return ToolResult(false, "Tell me what to tap.")
+        val actionType = arguments.argString("action_type")?.lowercase()?.trim() ?: "tap"
+        val durationMs = (arguments.argInt("duration_ms") ?: 650).toLong().coerceIn(400L, 3000L)
+        val why = arguments.argString("why")?.trim().orEmpty()
+        val expectedOutcome = arguments.argString("expected_outcome")?.trim().orEmpty()
 
         if (RISKY_SCREEN_LABELS.any { text.lowercase().contains(it) }) {
             val approved = context.confirmation.confirm(
-                title = "Tap \"$text\"?",
-                detail = "That control can send, pay for or delete something.",
+                title = "Perform $actionType on \"$text\"?",
+                detail = "That control can send, pay for or delete something.${if (why.isNotBlank()) " Reason: $why." else ""}",
             )
-            if (!approved) return ToolResult(false, "The owner declined the tap.")
+            if (!approved) return ToolResult(false, "The owner declined the touch action.")
         }
 
-        val result = context.screen!!.tap(text)
-        return ToolResult(result.success, result.message)
+        val screen = context.screen!!
+        val isRef = text.startsWith("#") || text.all { it.isDigit() }
+        val result = when (actionType) {
+            "long_press", "touch", "hold" -> {
+                if (isRef) {
+                    screen.executeRefAction(text, "long_click", null, why)
+                } else {
+                    screen.longPress(text, durationMs)
+                }
+            }
+            "double_tap" -> {
+                if (isRef) {
+                    screen.executeRefAction(text, "double_tap", null, why)
+                } else {
+                    screen.doubleTap(text)
+                }
+            }
+            else -> {
+                if (isRef) {
+                    screen.executeRefAction(text, "click", null, why)
+                } else {
+                    screen.tap(text)
+                }
+            }
+        }
+        val prefix = if (why.isNotBlank()) "[$why] " else ""
+        val suffix = if (expectedOutcome.isNotBlank()) " (Expected: $expectedOutcome)" else ""
+        return ToolResult(result.success, "$prefix${result.message}$suffix")
     }
 }
 
@@ -354,12 +390,69 @@ class TypeOnScreenTool : Tool {
     }
 }
 
+class SwipeScreenTool : Tool {
+
+    override val definition: ToolDefinition = ToolDefinition(
+        name = "swipe_screen",
+        description = "Perform an intentional directional swipe gesture across the screen ('left', 'right', 'up', 'down'). " +
+            "Use this to switch tabs, swipe through photo carousels, cards (e.g. Tinder/Bumble), dismiss banners/dialogs, " +
+            "or flick pages. Specify 'why' to explain the purpose of the gesture.",
+        parameters = objectSchema(
+            required = listOf("direction"),
+            properties = mapOf(
+                "direction" to stringProperty(
+                    "Direction to swipe: 'left', 'right', 'up', or 'down'. For example, swipe 'left' to view the next tab/card.",
+                    enum = listOf("left", "right", "up", "down"),
+                ),
+                "distance" to stringProperty(
+                    "Swipe distance: 'short', 'medium', or 'long'. Defaults to 'medium'.",
+                    enum = listOf("short", "medium", "long"),
+                ),
+                "target" to stringProperty("Optional reference (e.g. \"#3\") or label of the specific card or container to swipe over."),
+                "why" to stringProperty("Explicit reason explaining why this swipe gesture is being performed."),
+            ),
+        ),
+    )
+
+    override val label = "Swipe on screen"
+    override val category = ToolCategory.DEVICE
+
+    override fun availability(context: Context): ToolAvailability =
+        if (JarvisAccessibilityService.isEnabled(context)) {
+            ToolAvailability("Accessibility on", true)
+        } else {
+            ToolAvailability("Needs accessibility", false)
+        }
+
+    override suspend fun execute(arguments: JsonObject, context: ToolContext): ToolResult {
+        screenUnavailable(context)?.let { return it }
+        val direction = arguments.argString("direction")?.lowercase()?.trim() ?: "left"
+        val distance = arguments.argString("distance")?.lowercase()?.trim() ?: "medium"
+        val target = arguments.argString("target")?.trim().orEmpty()
+        val why = arguments.argString("why")?.trim().orEmpty()
+
+        val screen = context.screen!!
+        val result = if (target.isNotBlank()) {
+            if (target.startsWith("#") || target.all { it.isDigit() }) {
+                screen.executeRefAction(target, "swipe_$direction", distance, why)
+            } else {
+                screen.swipe(direction, distance)
+            }
+        } else {
+            screen.swipe(direction, distance)
+        }
+        val prefix = if (why.isNotBlank()) "[$why] " else ""
+        return ToolResult(result.success, "$prefix${result.message}")
+    }
+}
+
 class ScrollScreenTool : Tool {
 
     override val definition: ToolDefinition = ToolDefinition(
         name = "scroll_screen",
         description = "Scroll the current screen in any direction ('down', 'up', 'left', 'right'). " +
-            "Uses physical touchscreen swipe gestures and node actions to guarantee scrolling across all apps.",
+            "Uses physical touchscreen swipe gestures and node actions to guarantee scrolling across all apps. " +
+            "Specify 'why' to explain why the scroll is needed.",
         parameters = objectSchema(
             required = emptyList(),
             properties = mapOf(
@@ -371,6 +464,8 @@ class ScrollScreenTool : Tool {
                     "Scroll distance: short, medium, or long. Defaults to medium.",
                     enum = listOf("short", "medium", "long"),
                 ),
+                "target" to stringProperty("Optional label or #ref of the scrollable container or list to scroll."),
+                "why" to stringProperty("Explicit reason explaining why scrolling is being performed."),
             ),
         ),
     )
@@ -388,8 +483,17 @@ class ScrollScreenTool : Tool {
     override suspend fun execute(arguments: JsonObject, context: ToolContext): ToolResult {
         screenUnavailable(context)?.let { return it }
         val direction = arguments.argString("direction")?.lowercase() ?: "down"
-        val result = context.screen!!.scrollDirection(direction)
-        return ToolResult(result.success, result.message)
+        val target = arguments.argString("target")?.trim().orEmpty()
+        val why = arguments.argString("why")?.trim().orEmpty()
+
+        val screen = context.screen!!
+        val result = if (target.isNotBlank() && (target.startsWith("#") || target.all { it.isDigit() })) {
+            screen.executeRefAction(target, "scroll_$direction", null, why)
+        } else {
+            screen.scrollDirection(direction)
+        }
+        val prefix = if (why.isNotBlank()) "[$why] " else ""
+        return ToolResult(result.success, "$prefix${result.message}")
     }
 }
 
