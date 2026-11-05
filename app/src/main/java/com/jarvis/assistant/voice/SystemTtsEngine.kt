@@ -3,6 +3,8 @@ package com.jarvis.assistant.voice
 import android.content.Context
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.speech.tts.Voice
+import com.jarvis.assistant.settings.SystemVoiceGender
 import java.io.File
 import java.util.Locale
 import java.util.UUID
@@ -12,11 +14,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * Fallback voice built on the Android system text-to-speech engine.
+ * High-grade Android system text-to-speech engine tuned for a realistic British
+ * J.A.R.V.I.S. baritone (`SystemVoiceGender.MALE`) or F.R.I.D.A.Y. neural voice
+ * (`SystemVoiceGender.FEMALE`).
  *
- * Every utterance has its own completion slot, and [stop] completes the pending
- * one, so a barge-in or a Stop can never leave the speech loop waiting forever
- * for a callback Android will not send.
+ * - Prefers `com.google.android.tts` (Google Speech Services) so Samsung and other OEM
+ *   devices use Google's neural British English voices (`en-gb-x-rjs`, `en-gb-x-gbd`)
+ *   instead of robotic default voices.
+ * - Automatically falls back to the platform default TTS engine if Google Speech Services
+ *   is not installed.
  */
 class SystemTtsEngine(context: Context) {
     var lastError: String? = null
@@ -30,24 +36,208 @@ class SystemTtsEngine(context: Context) {
     private var pending: CompletableDeferred<Boolean>? = null
 
     private companion object {
+        const val GOOGLE_TTS_PACKAGE = "com.google.android.tts"
         const val MAX_UTTERANCE_MS = 90_000L
         const val MAX_SYNTHESIS_MS = 60_000L
         const val INIT_TIMEOUT_MS = 8_000L
+
+        /** Priority list of British & Neural Male voice IDs that sound closest to Paul Bettany's J.A.R.V.I.S. */
+        val PREFERRED_MALE_VOICE_TOKENS = listOf(
+            "en-gb-x-rjs-local",
+            "en-gb-x-rjs-network",
+            "en-gb-x-rjs",
+            "en-gb-x-gbd-local",
+            "en-gb-x-gbd-network",
+            "en-gb-x-gbd",
+            "en-gb-x-fis-local",
+            "en-gb-x-fis-network",
+            "en-gb-x-fis",
+            "en-gb-x-omp-local",
+            "en-us-x-iom-local",
+            "en-us-x-iom-network",
+            "en-us-x-tpd-local",
+            "en-au-x-aud-local",
+            "en-in-x-end-local",
+        )
+
+        /** Priority list of British & Neural Female voice IDs (F.R.I.D.A.Y. style). */
+        val PREFERRED_FEMALE_VOICE_TOKENS = listOf(
+            "en-gb-x-gba-local",
+            "en-gb-x-gba-network",
+            "en-gb-x-gba",
+            "en-gb-x-gbc-local",
+            "en-gb-x-gbc-network",
+            "en-gb-x-gbc",
+            "en-gb-x-gbg-local",
+            "en-us-x-sfg-local",
+            "en-us-x-tpf-local",
+            "en-in-x-ena-local",
+        )
     }
 
     init {
-        createEngine()
+        createEngine(preferGoogleEngine = true)
     }
 
-    private fun createEngine() {
+    private fun createEngine(preferGoogleEngine: Boolean) {
         ready = CompletableDeferred()
-        engine = TextToSpeech(appContext) { status ->
-            ready.complete(status == TextToSpeech.SUCCESS)
+        engine = if (preferGoogleEngine) {
+            TextToSpeech(
+                appContext,
+                { status ->
+                    if (status == TextToSpeech.SUCCESS) {
+                        ready.complete(true)
+                    } else {
+                        // Fall back to default system engine if Google TTS package is unavailable
+                        runCatching { engine?.shutdown() }
+                        engine = TextToSpeech(appContext) { fallbackStatus ->
+                            ready.complete(fallbackStatus == TextToSpeech.SUCCESS)
+                        }
+                    }
+                },
+                GOOGLE_TTS_PACKAGE,
+            )
+        } else {
+            TextToSpeech(appContext) { status ->
+                ready.complete(status == TextToSpeech.SUCCESS)
+            }
+        }
+    }
+
+    /**
+     * Configures the [TextToSpeech] instance with the best matching neural voice,
+     * pitch, and speech rate for [gender] (`MALE` = J.A.R.V.I.S. British baritone,
+     * `FEMALE` = F.R.I.D.A.Y.).
+     */
+    private fun applyJarvisVoiceProfile(
+        tts: TextToSpeech,
+        language: String,
+        gender: SystemVoiceGender,
+        speed: Float,
+    ) {
+        // For Male J.A.R.V.I.S., prefer British English (en-GB) when the user's language is English
+        val requestedLocale = runCatching { Locale.forLanguageTag(language) }
+            .getOrDefault(Locale.UK)
+        val targetLocale = if (requestedLocale.language.equals("en", ignoreCase = true) || language.isBlank()) {
+            Locale.UK
+        } else {
+            requestedLocale
+        }
+
+        runCatching {
+            if (tts.isLanguageAvailable(targetLocale) >= TextToSpeech.LANG_AVAILABLE) {
+                tts.language = targetLocale
+            } else if (tts.isLanguageAvailable(Locale.US) >= TextToSpeech.LANG_AVAILABLE) {
+                tts.language = Locale.US
+            }
+        }
+
+        // Scan installed voices for the highest-quality neural voice matching the requested gender
+        runCatching {
+            val allVoices = tts.voices?.toList().orEmpty()
+            if (allVoices.isNotEmpty()) {
+                val chosenVoice = pickBestVoice(allVoices, targetLocale, gender)
+                if (chosenVoice != null) {
+                    tts.voice = chosenVoice
+                }
+            }
+        }
+
+        // Apply J.A.R.V.I.S. baritone resonance vs F.R.I.D.A.Y. female timbre
+        val targetPitch = when (gender) {
+            SystemVoiceGender.MALE -> 0.90f // Deep, calm, composed Paul Bettany J.A.R.V.I.S. resonance
+            SystemVoiceGender.FEMALE -> 1.05f // Crisp, natural female assistant resonance
+        }
+        val baseRateMultiplier = when (gender) {
+            SystemVoiceGender.MALE -> 1.04f // Articulate British butler cadence
+            SystemVoiceGender.FEMALE -> 1.02f
+        }
+        runCatching { tts.setPitch(targetPitch) }
+        runCatching { tts.setSpeechRate((speed * baseRateMultiplier).coerceIn(0.6f, 2.0f)) }
+    }
+
+    private fun pickBestVoice(
+        voices: List<Voice>,
+        targetLocale: Locale,
+        gender: SystemVoiceGender,
+    ): Voice? {
+        val langPrefix = targetLocale.language.lowercase(Locale.ROOT).ifBlank { "en" }
+        val sameLangVoices = voices.filter { v ->
+            v.locale?.language?.lowercase(Locale.ROOT) == langPrefix
+        }.ifEmpty { voices }
+
+        val preferredTokens = when (gender) {
+            SystemVoiceGender.MALE -> PREFERRED_MALE_VOICE_TOKENS
+            SystemVoiceGender.FEMALE -> PREFERRED_FEMALE_VOICE_TOKENS
+        }
+
+        // 1. Exact/substring match against our curated neural J.A.R.V.I.S. / F.R.I.D.A.Y. voice IDs
+        for (token in preferredTokens) {
+            val match = sameLangVoices.firstOrNull { v ->
+                v.name.lowercase(Locale.ROOT).contains(token)
+            }
+            if (match != null) return match
+        }
+
+        // 2. Score remaining voices by gender markers, British locale preference, and quality
+        return sameLangVoices.maxByOrNull { v ->
+            val nameLower = v.name.lowercase(Locale.ROOT)
+            val featuresLower = runCatching {
+                v.features?.joinToString(" ")?.lowercase(Locale.ROOT).orEmpty()
+            }.getOrDefault("")
+            val combined = "$nameLower $featuresLower"
+
+            val isExplicitMale = combined.contains("#male") ||
+                combined.contains("_male") ||
+                combined.contains("-male") ||
+                nameLower.contains("-rjs") ||
+                nameLower.contains("-gbd") ||
+                nameLower.contains("-fis") ||
+                nameLower.contains("-iom") ||
+                nameLower.contains("-tpd") ||
+                nameLower.contains("-end")
+
+            val isExplicitFemale = combined.contains("#female") ||
+                combined.contains("_female") ||
+                combined.contains("-female") ||
+                nameLower.contains("-gba") ||
+                nameLower.contains("-gbc") ||
+                nameLower.contains("-sfg") ||
+                nameLower.contains("-tpf") ||
+                nameLower.contains("-ena")
+
+            var score = 0
+            when (gender) {
+                SystemVoiceGender.MALE -> {
+                    if (isExplicitMale) score += 500
+                    if (isExplicitFemale) score -= 500
+                }
+                SystemVoiceGender.FEMALE -> {
+                    if (isExplicitFemale) score += 500
+                    if (isExplicitMale) score -= 500
+                }
+            }
+            if (v.locale?.country.equals("GB", ignoreCase = true)) {
+                score += 180
+            } else if (v.locale?.country.equals(targetLocale.country, ignoreCase = true)) {
+                score += 120
+            }
+            if (!v.isNetworkConnectionRequired) {
+                score += 60 // Local neural voices have 0ms network jitter
+            }
+            score += (v.quality / 10)
+            score
         }
     }
 
     /** Speaks [text] and suspends until it finishes, fails or is stopped. */
-    suspend fun speak(text: String, language: String = "en", flush: Boolean = true): Boolean {
+    suspend fun speak(
+        text: String,
+        language: String = "en-GB",
+        flush: Boolean = true,
+        gender: SystemVoiceGender = SystemVoiceGender.MALE,
+        speed: Float = 1.0f,
+    ): Boolean {
         lastError = null
         if (text.isBlank()) return true
         if (!awaitReady()) {
@@ -78,19 +268,11 @@ class SystemTtsEngine(context: Context) {
                 }
 
                 override fun onStop(utteranceId: String?, interrupted: Boolean) {
-                    // Called for flush and for stop(); without this the awaiting
-                    // coroutine used to hang forever after a barge-in.
                     finish(utteranceId, false)
                 }
             })
 
-            val locale = runCatching { Locale.forLanguageTag(language) }
-                .getOrDefault(Locale.getDefault())
-            runCatching {
-                if (tts.isLanguageAvailable(locale) >= TextToSpeech.LANG_AVAILABLE) {
-                    tts.language = locale
-                }
-            }
+            applyJarvisVoiceProfile(tts, language, gender, speed)
 
             val result = runCatching {
                 tts.speak(
@@ -128,8 +310,6 @@ class SystemTtsEngine(context: Context) {
             if (pending === completion) pending = null
         }
         if (answered == null) {
-            // Some engines never deliver onDone for very long text, and a reply
-            // must never hang the whole speech pipeline on that.
             runCatching { tts.stop() }
             lastError = "The system voice did not finish in time."
             return false
@@ -145,7 +325,9 @@ class SystemTtsEngine(context: Context) {
     suspend fun synthesizeToFile(
         text: String,
         file: File,
-        language: String = "en",
+        language: String = "en-GB",
+        gender: SystemVoiceGender = SystemVoiceGender.MALE,
+        speed: Float = 1.0f,
     ): Boolean {
         lastError = null
         if (text.isBlank()) return false
@@ -181,13 +363,7 @@ class SystemTtsEngine(context: Context) {
                 }
             })
 
-            val locale = runCatching { Locale.forLanguageTag(language) }
-                .getOrDefault(Locale.getDefault())
-            runCatching {
-                if (tts.isLanguageAvailable(locale) >= TextToSpeech.LANG_AVAILABLE) {
-                    tts.language = locale
-                }
-            }
+            applyJarvisVoiceProfile(tts, language, gender, speed)
             runCatching { file.parentFile?.mkdirs() }
             val result = runCatching {
                 tts.synthesizeToFile(text, null, file, utteranceId)

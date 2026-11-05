@@ -112,22 +112,22 @@ fun JarvisBackdrop(
         label = "breathe",
     )
 
-    val seafoamBright = Color(0xFF3BF5D6)
-    val seafoamMid = Color(0xFF17BD9E)
+    val seafoamBright = JarvisPalette.CyanBright
+    val seafoamMid = JarvisPalette.Cyan
 
     Box(modifier = modifier.fillMaxSize()) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             drawRect(
                 brush = Brush.verticalGradient(
                     colors = listOf(
-                        Color(0xFF010A0B),
-                        Color(0xFF031C1B),
-                        Color(0xFF010607),
+                        JarvisPalette.Void,
+                        JarvisPalette.Panel,
+                        JarvisPalette.Void,
                     ),
                 ),
             )
 
-            // Central emerald-cyan atmospheric halo behind the J.A.R.V.I.S. orb
+            // Central atmospheric halo behind the J.A.R.V.I.S. orb
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(

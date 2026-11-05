@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import com.jarvis.assistant.settings.SystemVoiceGender
 import com.jarvis.assistant.settings.VoiceProvider
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
@@ -22,6 +23,7 @@ data class TtsConfig(
     val speed: Float = 1.0f,
     val fallbackToSystem: Boolean = true,
     val language: String = "en",
+    val systemVoiceGender: SystemVoiceGender = SystemVoiceGender.MALE,
 )
 
 /** One piece of raw 16-bit mono PCM, 24 kHz unless the provider says otherwise. */

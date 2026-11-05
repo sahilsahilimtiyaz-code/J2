@@ -101,6 +101,7 @@ class SettingsRepository(
                     // Preserve the greeting clock, or editing the persona would
                     // let Jarvis repeat himself on the next wake.
                     lastGreetingAt = current.persona.lastGreetingAt,
+                    hudColorTheme = persona.hudColorTheme,
                 ),
             )
         }
@@ -316,6 +317,7 @@ class SettingsRepository(
 
         val restoredSafety = if (needsV3Migration) {
             base.safety.copy(
+                callAssistantEnabled = true,
                 alwaysAllowActions = true,
                 confirmCalls = false,
                 confirmMessages = false,
@@ -336,6 +338,20 @@ class SettingsRepository(
             schemaMigrationVersion = CURRENT_SCHEMA_MIGRATION_VERSION,
         )
     }
+
+    suspend fun saveHudColorTheme(theme: HudColorTheme): AppSettings =
+        update { current ->
+            current.copy(
+                persona = current.persona.copy(hudColorTheme = theme),
+            )
+        }
+
+    suspend fun saveSystemVoiceGender(gender: SystemVoiceGender): AppSettings =
+        update { current ->
+            current.copy(
+                voice = current.voice.copy(systemVoiceGender = gender),
+            )
+        }
 
     private fun mergeVoicePreservingSecrets(old: VoiceSettings, next: VoiceSettings): VoiceSettings {
         val fishKey = next.fishEncryptedApiKey
@@ -466,7 +482,7 @@ class SettingsRepository(
     )
 
     private companion object {
-        const val CURRENT_SCHEMA_MIGRATION_VERSION = 3
+        const val CURRENT_SCHEMA_MIGRATION_VERSION = 4
         const val SLOT_GLOBAL_FREE_PROVIDERS_SEEDED = "seeded_global_free_providers"
         const val SLOT_MIC_LIVE_CALL_MODE_V2 = "mic_live_call_mode_v2"
         val STATE_KEY = stringPreferencesKey("settings_v1")

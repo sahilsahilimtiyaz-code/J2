@@ -143,14 +143,23 @@ object ContactResolver {
         val sorted = scored.sortedByDescending { it.second }
         val topScore = sorted.first().second
 
-        // Identify candidates within close score margin of top score (e.g. within 0.10)
-        // or having identical first names with different last names
-        val topMatches = sorted.filter { (it.second >= topScore - 0.08) && (it.second >= 0.65) }
+        // Prefer WhatsApp-enabled contact or clear winner instead of failing on minor ambiguity
+        val topMatches = sorted.filter { (it.second >= topScore - 0.05) && (it.second >= 0.72) }
 
         if (topMatches.size > 1) {
-            // Check if they are actually the exact same contact entry or different phone numbers
+            val whatsAppOnly = topMatches.filter { it.first.hasWhatsApp }
+            if (preferWhatsApp && whatsAppOnly.size == 1) {
+                return@withContext whatsAppOnly.first().first
+            }
             val distinctNumbers = topMatches.map { it.first.normalizedNumber }.distinct()
-            if (distinctNumbers.size > 1) {
+            if (distinctNumbers.size > 1 && topMatches[0].second - topMatches[1].second < 0.03) {
+                // If user gave a single first name and one contact is an exact 1.0 match, pick it
+                val exactMatch = topMatches.firstOrNull {
+                    it.first.contactName.equals(cleanQuery, ignoreCase = true)
+                }
+                if (exactMatch != null) {
+                    return@withContext exactMatch.first
+                }
                 Log.i(TAG, "ContactResolver: Ambiguous matches for '$cleanQuery': ${topMatches.map { "${it.first.contactName} (${it.first.e164Number})" }}")
                 return@withContext ContactMatchResult.Ambiguous(
                     query = cleanQuery,
@@ -198,26 +207,34 @@ object ContactResolver {
         // 1. Exact string match (ignoring case & punctuation)
         if (queryBase == contactBase) {
             baseScore = 1.0
-        } else if (contactBase.startsWith("$queryBase ") || contactBase.endsWith(" $queryBase")) {
-            baseScore = 0.92
+        } else if (contactBase.startsWith("$queryBase ") || contactBase.endsWith(" $queryBase") || contactBase.contains(" $queryBase ")) {
+            baseScore = 0.94
+        } else if (phoneticKey(queryBase) == phoneticKey(contactBase) && phoneticKey(queryBase).length >= 3) {
+            baseScore = 0.91
         } else {
-            // 2. Token match: check how many query tokens match contact tokens
-            var matchedTokens = 0
+            // 2. Token + phonetic match: check how many query tokens match contact tokens
+            var matchedTokens = 0.0
             for (qToken in queryTokens) {
-                val tokenMatch = contactTokens.any { cToken ->
-                    cToken == qToken ||
-                    (cToken.startsWith(qToken) && qToken.length >= 3) ||
-                    fuzzyStringSimilarity(qToken, cToken) >= 0.82
+                val qPhonetic = phoneticKey(qToken)
+                val bestTokenScore = contactTokens.maxOfOrNull { cToken ->
+                    when {
+                        cToken == qToken -> 1.0
+                        cToken.startsWith(qToken) && qToken.length >= 3 -> 0.92
+                        qToken.startsWith(cToken) && cToken.length >= 3 -> 0.88
+                        qPhonetic.length >= 3 && qPhonetic == phoneticKey(cToken) -> 0.90
+                        else -> fuzzyStringSimilarity(qToken, cToken)
+                    }
+                } ?: 0.0
+                if (bestTokenScore >= 0.74) {
+                    matchedTokens += bestTokenScore
                 }
-                if (tokenMatch) matchedTokens++
             }
 
-            val tokenRatio = matchedTokens.toDouble() / queryTokens.size.toDouble()
-
-            // 3. Overall fuzzy similarity between whole bases
+            val tokenRatio = matchedTokens / queryTokens.size.toDouble()
             val overallSim = fuzzyStringSimilarity(queryBase, contactBase)
+            val phoneticSim = fuzzyStringSimilarity(phoneticKey(queryBase), phoneticKey(contactBase)) * 0.88
 
-            baseScore = max(tokenRatio * 0.85, overallSim)
+            baseScore = max(max(tokenRatio * 0.90, overallSim), phoneticSim)
         }
 
         // WhatsApp preference bonus (up to +0.08)
@@ -226,6 +243,40 @@ object ContactResolver {
         }
 
         return baseScore
+    }
+
+    /**
+     * Reduces a name to its phonetic consonant/vowel skeleton so accented spellings
+     * (e.g. "Sahil" vs "Saheel", "Mohd" vs "Mohammad", "Ayesha" vs "Aisha") match reliably.
+     */
+    internal fun phoneticKey(input: String): String {
+        val lower = input.lowercase(Locale.ROOT).trim()
+            .replace("mohammad", "mohd")
+            .replace("muhammad", "mohd")
+            .replace("mohammed", "mohd")
+            .replace("ph", "f")
+            .replace("sh", "s")
+            .replace("ch", "c")
+            .replace("kh", "k")
+            .replace("gh", "g")
+            .replace("bh", "b")
+            .replace("dh", "d")
+            .replace("th", "t")
+            .replace("ee", "i")
+            .replace("oo", "u")
+            .replace("aa", "a")
+            .replace("ay", "ai")
+            .replace("ey", "e")
+        val sb = StringBuilder()
+        var prev = '\u0000'
+        for (ch in lower) {
+            if (!ch.isLetterOrDigit()) continue
+            if (ch != prev) {
+                sb.append(ch)
+                prev = ch
+            }
+        }
+        return sb.toString()
     }
 
     /**
@@ -269,21 +320,46 @@ object ContactResolver {
         val phoneUtil = PhoneNumberUtil.getInstance()
         val defaultRegion = getDeviceCountryIso(context)
 
-        // Step 1: Query WhatsApp contact raw IDs to know which contacts have WhatsApp
+        // Step 1: Query WhatsApp contact raw IDs AND extract direct WhatsApp JID numbers (e.g. 919876543210@s.whatsapp.net)
         val whatsAppContactIds = mutableSetOf<Long>()
+        val whatsAppDirectEntries = mutableListOf<ContactMatchResult.Found>()
         runCatching {
             val cursor = context.contentResolver.query(
                 ContactsContract.Data.CONTENT_URI,
-                arrayOf(ContactsContract.Data.CONTACT_ID, ContactsContract.Data.MIMETYPE),
-                "${ContactsContract.Data.MIMETYPE} = ?",
-                arrayOf("vnd.android.cursor.item/vnd.com.whatsapp.profile"),
+                arrayOf(
+                    ContactsContract.Data.CONTACT_ID,
+                    ContactsContract.Data.DISPLAY_NAME,
+                    ContactsContract.Data.MIMETYPE,
+                    ContactsContract.Data.DATA1,
+                    ContactsContract.Data.DATA3,
+                ),
+                "${ContactsContract.Data.MIMETYPE} LIKE ?",
+                arrayOf("vnd.android.cursor.item/vnd.com.whatsapp%"),
                 null,
             )
             cursor?.use {
                 val idIdx = it.getColumnIndex(ContactsContract.Data.CONTACT_ID)
+                val nameIdx = it.getColumnIndex(ContactsContract.Data.DISPLAY_NAME)
+                val data1Idx = it.getColumnIndex(ContactsContract.Data.DATA1)
+                val data3Idx = it.getColumnIndex(ContactsContract.Data.DATA3)
                 while (it.moveToNext()) {
                     if (idIdx >= 0) {
                         whatsAppContactIds.add(it.getLong(idIdx))
+                    }
+                    val waName = if (nameIdx >= 0) it.getString(nameIdx)?.trim().orEmpty() else ""
+                    val jid = if (data1Idx >= 0) it.getString(data1Idx)?.trim().orEmpty() else ""
+                    val data3 = if (data3Idx >= 0) it.getString(data3Idx)?.trim().orEmpty() else ""
+                    val rawDigits = jid.substringBefore("@").filter { ch -> ch.isDigit() }
+                        .ifBlank { data3.filter { ch -> ch.isDigit() || ch == '+' } }
+                    if (waName.isNotBlank() && rawDigits.count { ch -> ch.isDigit() } >= 7) {
+                        val (digits, e164) = normalizeWithLibPhoneNumber(phoneUtil, rawDigits, "", defaultRegion)
+                        whatsAppDirectEntries += ContactMatchResult.Found(
+                            contactName = waName,
+                            rawNumber = rawDigits,
+                            normalizedNumber = digits,
+                            e164Number = e164,
+                            hasWhatsApp = true,
+                        )
                     }
                 }
             }
@@ -334,6 +410,15 @@ object ContactResolver {
                         ),
                     )
                 }
+            }
+        }
+
+        // Merge any WhatsApp-only contacts not already in Phone.CONTENT_URI
+        val seenKeys = result.map { "${it.contactName.lowercase(Locale.ROOT)}|${it.normalizedNumber}" }.toMutableSet()
+        for (waEntry in whatsAppDirectEntries) {
+            val key = "${waEntry.contactName.lowercase(Locale.ROOT)}|${waEntry.normalizedNumber}"
+            if (seenKeys.add(key)) {
+                result.add(waEntry)
             }
         }
 

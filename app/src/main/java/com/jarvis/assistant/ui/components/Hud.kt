@@ -182,37 +182,68 @@ fun HudIconButton(
     }
 }
 
-/** The reactor glyph used as the app mark in headers, rendering the official app logo. */
+/** Miniature Iron Man 3 J.A.R.V.I.S. Orb glyph used in headers across all screens. */
 @Composable
 fun ReactorGlyph(
     modifier: Modifier = Modifier,
-    color: Color = JarvisPalette.Cyan,
+    color: Color = JarvisPalette.CyanBright,
 ) {
-    Box(
-        modifier = modifier.clip(CircleShape),
-        contentAlignment = Alignment.Center,
-    ) {
-        Canvas(modifier = Modifier.matchParentSize()) {
-            val r = size.minDimension / 2f
-            val c = Offset(size.width / 2f, size.height / 2f)
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(color.copy(alpha = 0.40f), Color.Transparent),
-                    center = c,
-                    radius = r,
+    Canvas(modifier = modifier) {
+        val r = size.minDimension / 2f
+        val c = Offset(size.width / 2f, size.height / 2f)
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    color.copy(alpha = 0.35f),
+                    JarvisPalette.Panel.copy(alpha = 0.90f),
+                    JarvisPalette.Void,
                 ),
-                radius = r,
                 center = c,
+                radius = r,
+            ),
+            radius = r,
+            center = c,
+        )
+        // Outer double-walled stippled rim
+        drawCircle(
+            color = color.copy(alpha = 0.85f),
+            radius = r * 0.92f,
+            center = c,
+            style = Stroke(width = 1.4.dp.toPx()),
+        )
+        drawCircle(
+            color = color.copy(alpha = 0.50f),
+            radius = r * 0.76f,
+            center = c,
+            style = Stroke(width = 0.9.dp.toPx()),
+        )
+        // 12-arch festoon ring
+        val archPath = Path()
+        for (i in 0..72) {
+            val theta = (i.toFloat() / 72f) * 2f * PI.toFloat()
+            val ar = r * (0.42f + 0.08f * kotlin.math.abs(sin(6f * theta)))
+            val x = c.x + ar * cos(theta)
+            val y = c.y + ar * sin(theta)
+            if (i == 0) archPath.moveTo(x, y) else archPath.lineTo(x, y)
+        }
+        drawPath(archPath, color = color.copy(alpha = 0.65f), style = Stroke(width = 0.8.dp.toPx()))
+        // Central geodesic sphere limb + struts
+        val sr = r * 0.31f
+        drawCircle(
+            color = JarvisPalette.Ice.copy(alpha = 0.92f),
+            radius = sr,
+            center = c,
+            style = Stroke(width = 1.1.dp.toPx()),
+        )
+        for (k in 0 until 3) {
+            val ang = k * (PI.toFloat() / 3f)
+            drawLine(
+                color = color.copy(alpha = 0.55f),
+                start = Offset(c.x - sr * cos(ang), c.y - sr * sin(ang)),
+                end = Offset(c.x + sr * cos(ang), c.y + sr * sin(ang)),
+                strokeWidth = 0.7.dp.toPx(),
             )
         }
-        androidx.compose.foundation.Image(
-            painter = androidx.compose.ui.res.painterResource(id = com.jarvis.assistant.R.drawable.ic_app_logo),
-            contentDescription = "J.A.R.V.I.S. Logo",
-            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-            modifier = Modifier
-                .matchParentSize()
-                .clip(CircleShape),
-        )
     }
 }
 

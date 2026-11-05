@@ -81,6 +81,8 @@ class JarvisNotificationListenerService : NotificationListenerService() {
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         recordProbeTelemetry(sbn)
         refreshSnapshot()
+        notifyRealtimeArrival(sbn)
+        notifyIncomingWhatsAppCall(sbn)
         notifyIncomingWhatsApp(sbn)
     }
 
@@ -172,6 +174,78 @@ class JarvisNotificationListenerService : NotificationListenerService() {
     }
 
     /**
+     * 0ms sub-second push notification callback so Jarvis immediately knows what arrived
+     * the exact millisecond Android posts a status-bar notification.
+     */
+    private fun notifyRealtimeArrival(sbn: StatusBarNotification?) {
+        if (sbn == null || sbn.packageName == packageName) return
+        val notification = sbn.notification ?: return
+        if ((notification.flags and Notification.FLAG_FOREGROUND_SERVICE) != 0 && !sbn.isClearable) {
+            return
+        }
+        val item = cache.firstOrNull { it.key == sbn.key } ?: return
+        if (item.title.isBlank() && item.text.isBlank()) return
+        val lowerBody = item.text.lowercase()
+        if (PLACEHOLDER_BODIES.any { lowerBody == it }) return
+
+        val dedupeKey = "${item.key}|${item.title.hashCode()}|${item.text.hashCode()}"
+        val now = System.currentTimeMillis()
+        synchronized(recentRealtimeKeys) {
+            val stale = recentRealtimeKeys.filterValues { now - it > 15_000L }.keys
+            stale.forEach { recentRealtimeKeys.remove(it) }
+            if (recentRealtimeKeys.containsKey(dedupeKey)) return
+            recentRealtimeKeys[dedupeKey] = now
+        }
+        runCatching { incomingNotificationListener?.invoke(item) }
+    }
+
+    /**
+     * Detects incoming WhatsApp / WhatsApp Business voice & video call notifications immediately
+     * when posted and fires [incomingWhatsAppCallListener] so Jarvis can answer in sub-second time.
+     */
+    private fun notifyIncomingWhatsAppCall(sbn: StatusBarNotification?) {
+        if (sbn == null) return
+        val pkg = sbn.packageName
+        if (!pkg.startsWith(WHATSAPP_PACKAGE_PREFIX)) return
+        val notification = sbn.notification ?: return
+        val extras = notification.extras
+        val title = extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
+        val text = extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim().orEmpty()
+        val actions = notification.actions?.mapNotNull { it.title?.toString()?.lowercase() }.orEmpty()
+        val lowerText = "$title $text".lowercase()
+
+        val isIncomingCall = notification.category == Notification.CATEGORY_CALL ||
+            lowerText.contains("incoming voice call") ||
+            lowerText.contains("incoming video call") ||
+            lowerText.contains("whatsapp voice call") ||
+            actions.any { it.contains("answer") || it.contains("accept") }
+
+        if (!isIncomingCall || lowerText.contains("missed") || lowerText.contains("ongoing")) return
+
+        val now = System.currentTimeMillis()
+        val callDedupeKey = "${sbn.key}|call"
+        synchronized(recentWhatsAppCalls) {
+            val stale = recentWhatsAppCalls.filterValues { now - it > 12_000L }.keys
+            stale.forEach { recentWhatsAppCalls.remove(it) }
+            if (recentWhatsAppCalls.containsKey(callDedupeKey)) return
+            recentWhatsAppCalls[callDedupeKey] = now
+        }
+        val callerName = title.ifBlank { "WhatsApp Caller" }
+        val captured = cache.firstOrNull { it.key == sbn.key } ?: CapturedNotification(
+            key = sbn.key,
+            packageName = pkg,
+            appLabel = "WhatsApp",
+            title = callerName,
+            text = text.ifBlank { "Incoming voice call" },
+            postedAt = sbn.postTime,
+            isClearable = sbn.isClearable,
+            category = notification.category.orEmpty(),
+            actionTitles = actions,
+        )
+        runCatching { incomingWhatsAppCallListener?.invoke(callerName, captured) }
+    }
+
+    /**
      * Hands a WhatsApp or social messaging text notification to the runtime once. Calls, ongoing
      * notifications, media placeholders and repeated updates are filtered here
      * so the auto-reply policy only ever sees a real incoming line.
@@ -254,12 +328,22 @@ class JarvisNotificationListenerService : NotificationListenerService() {
         private const val WHATSAPP_PACKAGE_PREFIX = "com.whatsapp"
         private const val WHATSAPP_DEDUPE_MS = 30_000L
         private val recentWhatsApp = LinkedHashMap<String, Long>()
+        private val recentRealtimeKeys = LinkedHashMap<String, Long>()
+        private val recentWhatsAppCalls = LinkedHashMap<String, Long>()
         private val whatsappHistory = CopyOnWriteArrayList<WhatsAppIncomingMessage>()
         private val probeTelemetryHistory = CopyOnWriteArrayList<NotificationProbeTelemetry>()
 
         /** Set once by JarvisCore; receives real incoming WhatsApp text messages. */
         @Volatile
         var incomingWhatsAppListener: ((WhatsAppIncomingMessage) -> Unit)? = null
+
+        /** Set by JarvisCore; receives any new user-facing notification in 0ms upon arrival. */
+        @Volatile
+        var incomingNotificationListener: ((CapturedNotification) -> Unit)? = null
+
+        /** Set by JarvisCore; receives incoming WhatsApp voice/video call notifications in 0ms. */
+        @Volatile
+        var incomingWhatsAppCallListener: ((String, CapturedNotification) -> Unit)? = null
 
         @Volatile
         var incomingProbeListener: ((NotificationProbeTelemetry) -> Unit)? = null
@@ -345,6 +429,32 @@ class JarvisNotificationListenerService : NotificationListenerService() {
                 }
             }
             return false to "No active notification action matching ${actionKeywords.joinToString("/")} for '$packageFilter'."
+        }
+
+        fun hasActiveWhatsAppCallNotification(): Boolean {
+            val svc = instance ?: return false
+            val active = runCatching { svc.activeNotifications?.toList().orEmpty() }.getOrDefault(emptyList())
+            return active.any { sbn ->
+                if (!sbn.packageName.startsWith(WHATSAPP_PACKAGE_PREFIX)) return@any false
+                val n = sbn.notification ?: return@any false
+                val extras = n.extras
+                val title = extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.lowercase().orEmpty()
+                val text = extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.lowercase().orEmpty()
+                val actions = n.actions?.mapNotNull { it.title?.toString()?.lowercase() }.orEmpty()
+                n.category == Notification.CATEGORY_CALL ||
+                    text.contains("voice call") ||
+                    text.contains("video call") ||
+                    title.contains("voice call") ||
+                    actions.any { it.contains("answer") || it.contains("accept") || it.contains("hang up") || it.contains("end") }
+            }
+        }
+
+        fun answerActiveWhatsAppCallNotification(): Boolean {
+            val (ok, _) = triggerNotificationAction(
+                packageFilter = WHATSAPP_PACKAGE_PREFIX,
+                actionKeywords = listOf("answer", "accept", "pick up"),
+            )
+            return ok
         }
 
         internal fun recordWhatsAppMessage(event: WhatsAppIncomingMessage) {

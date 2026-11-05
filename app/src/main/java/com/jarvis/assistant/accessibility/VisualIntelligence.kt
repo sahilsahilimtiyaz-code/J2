@@ -107,11 +107,18 @@ object VisualAccessibilityReconciler {
         // Modal scrims typically dim the background to luminance < 0.22 while keeping center active
         val hasModalScrim = sampledPixels > 50 && !isSecureBlackout && (darkPixelCount.toFloat() / sampledPixels.toFloat()) > 0.72f
 
+        val detectedVisualButtons = if (!isSecureBlackout) {
+            HumanVisionEyeEngine.scanVisualControls(bitmap)
+        } else {
+            emptyList()
+        }
+
         return VisualEvidence(
             width = w,
             height = h,
             isSecureBlackout = isSecureBlackout,
             hasModalScrim = hasModalScrim,
+            extractedRegions = detectedVisualButtons,
             averageLuminance = avgLuminance,
         )
     }
@@ -523,4 +530,216 @@ object VisionPrivacyGate {
         )
     }
 }
+
+/**
+ * Human Vision Eye Engine.
+ *
+ * Gives Jarvis human-like visual perception of live screen bitmaps so he can see and click
+ * colored call buttons (WhatsApp / Phone green Answer button, red Decline/End button),
+ * floating action buttons (Send, New Chat), top search icons, and bottom navigation tabs
+ * even when custom Canvas/Surface views hide or omit accessibility labels.
+ */
+object HumanVisionEyeEngine {
+
+    /**
+     * Scans a live screenshot for salient visual controls (Green Answer Call button,
+     * Red End/Decline Call button, Teal/Green Send button, high-contrast action pills)
+     * and returns labeled [VisualTextRegion]s in bitmap coordinates.
+     */
+    fun scanVisualControls(bitmap: Bitmap): List<VisualTextRegion> {
+        val regions = mutableListOf<VisualTextRegion>()
+        findGreenAnswerButton(bitmap)?.let { rect ->
+            regions += VisualTextRegion(
+                text = "answer accept call green button pick up",
+                bounds = rect,
+                confidence = 0.96f,
+            )
+        }
+        findRedEndCallButton(bitmap)?.let { rect ->
+            regions += VisualTextRegion(
+                text = "decline end call hang up red button reject",
+                bounds = rect,
+                confidence = 0.95f,
+            )
+        }
+        findSendOrFabButton(bitmap)?.let { rect ->
+            regions += VisualTextRegion(
+                text = "send message submit fab button",
+                bounds = rect,
+                confidence = 0.90f,
+            )
+        }
+        return regions
+    }
+
+    /**
+     * Locates the bright green "Answer / Accept Call" button on WhatsApp, Phone, Telegram,
+     * or Instagram call screens by scanning the lower half of the bitmap for a high-saturation
+     * green circular/pill cluster (`hue in 85..168`, `sat >= 0.42`, `val >= 0.38`).
+     */
+    fun findGreenAnswerButton(
+        bitmap: Bitmap?,
+        displayWidth: Int = bitmap?.width ?: 0,
+        displayHeight: Int = bitmap?.height ?: 0,
+    ): Rect? {
+        if (bitmap == null || bitmap.width <= 16 || bitmap.height <= 16) return null
+        val w = bitmap.width
+        val h = bitmap.height
+        val startY = (h * 0.45f).toInt()
+        val endY = (h * 0.96f).toInt()
+        val stepX = max(2, w / 90)
+        val stepY = max(2, h / 140)
+        val hsv = FloatArray(3)
+
+        var sumX = 0L
+        var sumY = 0L
+        var count = 0
+        var minX = w
+        var maxX = 0
+        var minY = h
+        var maxY = 0
+
+        for (y in startY until endY step stepY) {
+            for (x in (w * 0.08f).toInt() until (w * 0.95f).toInt() step stepX) {
+                val pixel = bitmap.getPixel(x, y)
+                Color.colorToHSV(pixel, hsv)
+                val hue = hsv[0]
+                val sat = hsv[1]
+                val v = hsv[2]
+                // WhatsApp & Android green answer call button hue range (emerald / green)
+                if (hue in 88f..166f && sat >= 0.42f && v >= 0.38f) {
+                    // Prefer the right half or center-bottom where Answer buttons live
+                    val weight = if (x >= w * 0.42f) 2 else 1
+                    sumX += x.toLong() * weight
+                    sumY += y.toLong() * weight
+                    count += weight
+                    if (x < minX) minX = x
+                    if (x > maxX) maxX = x
+                    if (y < minY) minY = y
+                    if (y > maxY) maxY = y
+                }
+            }
+        }
+
+        if (count < 8) return null
+        val cx = (sumX / count).toInt()
+        val cy = (sumY / count).toInt()
+        val scaleX = if (displayWidth > 0) displayWidth.toFloat() / w.toFloat() else 1f
+        val scaleY = if (displayHeight > 0) displayHeight.toFloat() / h.toFloat() else 1f
+        val radiusX = max(48, ((maxX - minX) / 2).coerceAtMost(w / 5))
+        val radiusY = max(48, ((maxY - minY) / 2).coerceAtMost(h / 7))
+
+        val mappedCx = (cx * scaleX).toInt()
+        val mappedCy = (cy * scaleY).toInt()
+        val mappedRx = (radiusX * scaleX).toInt()
+        val mappedRy = (radiusY * scaleY).toInt()
+        return Rect(
+            (mappedCx - mappedRx).coerceAtLeast(0),
+            (mappedCy - mappedRy).coerceAtLeast(0),
+            (mappedCx + mappedRx).coerceAtMost(max(w, displayWidth)),
+            (mappedCy + mappedRy).coerceAtMost(max(h, displayHeight)),
+        )
+    }
+
+    /**
+     * Locates the bright red "End / Decline Call" button in the lower half of the screen.
+     */
+    fun findRedEndCallButton(
+        bitmap: Bitmap?,
+        displayWidth: Int = bitmap?.width ?: 0,
+        displayHeight: Int = bitmap?.height ?: 0,
+    ): Rect? {
+        if (bitmap == null || bitmap.width <= 16 || bitmap.height <= 16) return null
+        val w = bitmap.width
+        val h = bitmap.height
+        val startY = (h * 0.50f).toInt()
+        val endY = (h * 0.96f).toInt()
+        val stepX = max(2, w / 90)
+        val stepY = max(2, h / 140)
+        val hsv = FloatArray(3)
+
+        var sumX = 0L
+        var sumY = 0L
+        var count = 0
+
+        for (y in startY until endY step stepY) {
+            for (x in (w * 0.08f).toInt() until (w * 0.92f).toInt() step stepX) {
+                val pixel = bitmap.getPixel(x, y)
+                Color.colorToHSV(pixel, hsv)
+                val hue = hsv[0]
+                val sat = hsv[1]
+                val v = hsv[2]
+                if ((hue <= 20f || hue >= 340f) && sat >= 0.50f && v >= 0.40f) {
+                    sumX += x
+                    sumY += y
+                    count++
+                }
+            }
+        }
+        if (count < 8) return null
+        val scaleX = if (displayWidth > 0) displayWidth.toFloat() / w.toFloat() else 1f
+        val scaleY = if (displayHeight > 0) displayHeight.toFloat() / h.toFloat() else 1f
+        val mappedCx = ((sumX / count) * scaleX).toInt()
+        val mappedCy = ((sumY / count) * scaleY).toInt()
+        val pad = (56 * scaleX).toInt().coerceAtLeast(44)
+        return Rect(
+            (mappedCx - pad).coerceAtLeast(0),
+            (mappedCy - pad).coerceAtLeast(0),
+            mappedCx + pad,
+            mappedCy + pad,
+        )
+    }
+
+    /**
+     * Locates a right-side floating action button or WhatsApp/Telegram Send button
+     * (teal/green/blue high-saturation circular button on the right edge).
+     */
+    fun findSendOrFabButton(
+        bitmap: Bitmap?,
+        displayWidth: Int = bitmap?.width ?: 0,
+        displayHeight: Int = bitmap?.height ?: 0,
+    ): Rect? {
+        if (bitmap == null || bitmap.width <= 16 || bitmap.height <= 16) return null
+        val w = bitmap.width
+        val h = bitmap.height
+        val startX = (w * 0.78f).toInt()
+        val endX = (w * 0.98f).toInt()
+        val startY = (h * 0.42f).toInt()
+        val endY = (h * 0.95f).toInt()
+        val stepX = max(2, w / 100)
+        val stepY = max(2, h / 140)
+        val hsv = FloatArray(3)
+
+        var sumX = 0L
+        var sumY = 0L
+        var count = 0
+        for (y in startY until endY step stepY) {
+            for (x in startX until endX step stepX) {
+                val pixel = bitmap.getPixel(x, y)
+                Color.colorToHSV(pixel, hsv)
+                val hue = hsv[0]
+                val sat = hsv[1]
+                val v = hsv[2]
+                if (hue in 95f..215f && sat >= 0.45f && v >= 0.42f) {
+                    sumX += x
+                    sumY += y
+                    count++
+                }
+            }
+        }
+        if (count < 6) return null
+        val scaleX = if (displayWidth > 0) displayWidth.toFloat() / w.toFloat() else 1f
+        val scaleY = if (displayHeight > 0) displayHeight.toFloat() / h.toFloat() else 1f
+        val mappedCx = ((sumX / count) * scaleX).toInt()
+        val mappedCy = ((sumY / count) * scaleY).toInt()
+        val pad = (44 * scaleX).toInt().coerceAtLeast(36)
+        return Rect(
+            (mappedCx - pad).coerceAtLeast(0),
+            (mappedCy - pad).coerceAtLeast(0),
+            mappedCx + pad,
+            mappedCy + pad,
+        )
+    }
+}
+
 

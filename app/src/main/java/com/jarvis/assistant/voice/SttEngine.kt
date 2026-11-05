@@ -202,6 +202,8 @@ class LiveCallAudioAnchor(
         var consecutiveVoiceFrames = 0
         var lastVoiceFrameAtMs = 0L
         var speechTriggeredAtMs = 0L
+        var prevSample = 0
+        var agcGain = 1.35f
 
         while (isLive && !Thread.currentThread().isInterrupted) {
             val activeRec = recorder ?: break
@@ -215,13 +217,36 @@ class LiveCallAudioAnchor(
                 continue
             }
 
-            var sumSq = 0.0
-            var peak = 0
+            // First pass: measure raw frame RMS & peak
+            var rawSumSq = 0.0
+            var rawPeak = 0
             for (i in 0 until read) {
                 val s = frameShorts[i].toInt()
                 val abs = kotlin.math.abs(s)
+                if (abs > rawPeak) rawPeak = abs
+                rawSumSq += (s * s).toDouble()
+            }
+            val rawRms = kotlin.math.sqrt(rawSumSq / read)
+
+            // Smooth Automatic Gain Control (AGC) + consonant pre-emphasis so soft/accented speech
+            // is crystal clear without clipping loud speech
+            if (rawRms > 35.0) {
+                val targetGain = (2400.0 / rawRms.coerceAtLeast(120.0)).toFloat().coerceIn(1.0f, 2.6f)
+                agcGain = agcGain * 0.88f + targetGain * 0.12f
+            }
+
+            var sumSq = 0.0
+            var peak = 0
+            for (i in 0 until read) {
+                val raw = frameShorts[i].toInt()
+                // Gentle high-frequency pre-emphasis (boosts crisp consonants for accented speech)
+                val emphasized = raw - ((prevSample * 16) shr 7)
+                prevSample = raw
+                val amplified = (emphasized * agcGain).toInt().coerceIn(-32767, 32767)
+                frameShorts[i] = amplified.toShort()
+                val abs = kotlin.math.abs(amplified)
                 if (abs > peak) peak = abs
-                sumSq += (s * s).toDouble()
+                sumSq += (amplified * amplified).toDouble()
             }
             val rms = kotlin.math.sqrt(sumSq / read)
             // Perceptual logarithmic audio scaling: normal speech (~35-350 RMS) gives 0.25 - 0.85 audioLevel
@@ -614,25 +639,29 @@ class AndroidSttEngine(
         fun pickBestCandidate(bundle: Bundle?): String {
             val matches = bundle
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                ?.map { it.trim() }
+                ?.map { normalizeAccentedTranscript(it.trim()) }
                 ?.filter { it.isNotBlank() }
                 .orEmpty()
             if (matches.isEmpty()) return ""
             val scores = bundle?.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES)
-            if (scores != null && scores.size == matches.size) {
-                var bestIdx = 0
-                var bestScore = -1f
-                for (i in matches.indices) {
-                    val score = scores[i]
-                    val lengthBonus = (matches[i].length.coerceAtMost(80) / 80f) * 0.08f
-                    if (score + lengthBonus > bestScore) {
-                        bestScore = score + lengthBonus
-                        bestIdx = i
-                    }
+            var bestIdx = 0
+            var bestScore = -1f
+            for (i in matches.indices) {
+                val baseScore = if (scores != null && i < scores.size && scores[i] > 0f) {
+                    scores[i]
+                } else {
+                    0.75f - (i * 0.06f)
                 }
-                return matches[bestIdx]
+                val candidate = matches[i]
+                val lengthBonus = (candidate.length.coerceAtMost(80) / 80f) * 0.10f
+                val commandBonus = scoreDomainKeywords(candidate)
+                val totalScore = baseScore + lengthBonus + commandBonus
+                if (totalScore > bestScore) {
+                    bestScore = totalScore
+                    bestIdx = i
+                }
             }
-            return matches.maxByOrNull { it.length } ?: matches.first()
+            return matches[bestIdx]
         }
 
         fun markHardwareOpened() {
@@ -979,4 +1008,58 @@ internal fun sttErrorMessage(code: Int): String = when (code) {
     SpeechRecognizer.ERROR_TOO_MANY_REQUESTS -> "Speech recognition is rate limiting. One moment."
     else -> "Speech recognition failed."
 }
+
+/**
+ * Normalizes common multi-accent phonetic misrecognitions (Indian, British, US, global English)
+ * for app names, assistant commands, and color names so accented speech works on the first try.
+ */
+internal fun normalizeAccentedTranscript(raw: String): String {
+    if (raw.isBlank()) return ""
+    var text = raw.trim()
+    val replacements = listOf(
+        Regex("""\b(what's up|whats up|watsapp|whatsap|whats app|watts app)\b""", RegexOption.IGNORE_CASE) to "WhatsApp",
+        Regex("""\b(jarvis|jervis|jarves|javis|charvis)\b""", RegexOption.IGNORE_CASE) to "Jarvis",
+        Regex("""\b(you tube|u tube|yu tube|utube)\b""", RegexOption.IGNORE_CASE) to "YouTube",
+        Regex("""\b(voilet|violat)\b""", RegexOption.IGNORE_CASE) to "violet",
+        Regex("""\b(purpal|parपल|perple)\b""", RegexOption.IGNORE_CASE) to "purple",
+        Regex("""\b(pik up|pic up|pickup)\b""", RegexOption.IGNORE_CASE) to "pick up",
+        Regex("""\b(ansar|anser)\b""", RegexOption.IGNORE_CASE) to "answer",
+    )
+    for ((pattern, replacement) in replacements) {
+        // Only replace "what's up" with "WhatsApp" when used in a call/message/open/send context
+        if (replacement == "WhatsApp" && pattern.containsMatchIn(text)) {
+            val lower = text.lowercase(Locale.ROOT)
+            val isWhatsAppContext = lower.contains("call") ||
+                lower.contains("message") ||
+                lower.contains("send") ||
+                lower.contains("open") ||
+                lower.contains("from") ||
+                lower.contains("on ") ||
+                lower.contains("pick") ||
+                lower.contains("answer") ||
+                lower.contains("chat")
+            if (isWhatsAppContext) {
+                text = pattern.replace(text, replacement)
+            }
+        } else {
+            text = pattern.replace(text, replacement)
+        }
+    }
+    return text
+}
+
+private fun scoreDomainKeywords(candidate: String): Float {
+    val lower = candidate.lowercase(Locale.ROOT)
+    var bonus = 0f
+    val highValueTokens = listOf(
+        "jarvis", "whatsapp", "youtube", "instagram", "telegram", "call",
+        "answer", "pick up", "message", "open", "search", "color", "colour",
+        "blue", "sky blue", "white", "red", "purple", "violet", "notification",
+    )
+    for (token in highValueTokens) {
+        if (lower.contains(token)) bonus += 0.04f
+    }
+    return bonus.coerceAtMost(0.16f)
+}
+
 

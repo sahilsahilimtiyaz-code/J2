@@ -44,10 +44,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.jarvis.assistant.ui.JarvisTab
 
-private val Im3HudCyan = Color(0xFF3BF5D6)
-private val Im3HudMid = Color(0xFF19A895)
-private val Im3HudDark = Color(0xFF041D1E)
-private val Im3HudVoid = Color(0xFF010B0C)
+private val Im3HudCyan: Color
+    get() = com.jarvis.assistant.ui.theme.JarvisPalette.CyanBright
+private val Im3HudMid: Color
+    get() = com.jarvis.assistant.ui.theme.JarvisPalette.Cyan
+private val Im3HudDark: Color
+    get() = com.jarvis.assistant.ui.theme.JarvisPalette.Panel
+private val Im3HudVoid: Color
+    get() = com.jarvis.assistant.ui.theme.JarvisPalette.Void
 
 /**
  * Chamfered Iron Man 3 J.A.R.V.I.S. Second Screen Experience Bottom HUD Bar
@@ -56,6 +60,7 @@ private val Im3HudVoid = Color(0xFF010B0C)
  * - Central circular medallion with glowing capsule microphone & dual soundwaves `((🎙))`
  * - 4 circular HUD medallions separated by faint vertical divider ticks (Home/Clock, Tools/Nodes,
  *   Memory/Radar, Settings/Mark 42 Helmet).
+ * - Dynamically recolors when the user changes the Orb & Bottom Bar color theme!
  */
 @Composable
 fun JarvisBottomBar(

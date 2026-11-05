@@ -250,16 +250,13 @@ class SendWhatsAppTool : Tool {
             return ToolResult(false, "Provide both the recipient and the WhatsApp message text.")
         }
 
-        // Request runtime contacts permission if not yet granted
+        // Request runtime contacts permission if not yet granted, but do not fail if declined
+        // because ActionRouter can still search WhatsApp directly by contact name!
         if (!context.permissions.isGranted(android.Manifest.permission.READ_CONTACTS)) {
-            val granted = context.permissions.ensure(
-                android.Manifest.permission.READ_CONTACTS,
-                "Jarvis needs contacts access to resolve \"$recipient\" to a phone number.",
-            )
-            if (!granted) {
-                return ToolResult(
-                    false,
-                    "Contacts permission is required to find \"$recipient\". Please grant contacts permission in Settings.",
+            runCatching {
+                context.permissions.ensure(
+                    android.Manifest.permission.READ_CONTACTS,
+                    "Jarvis uses contacts access to resolve \"$recipient\" on WhatsApp.",
                 )
             }
         }

@@ -11,9 +11,11 @@ import com.jarvis.assistant.brain.ProviderKind
 import com.jarvis.assistant.core.JarvisCore
 import com.jarvis.assistant.memory.MemoryEntity
 import com.jarvis.assistant.permissions.PermissionStatus
+import com.jarvis.assistant.settings.HudColorTheme
 import com.jarvis.assistant.settings.OwnerProfile
 import com.jarvis.assistant.settings.ProviderSettings
 import com.jarvis.assistant.settings.SafetySettings
+import com.jarvis.assistant.settings.SystemVoiceGender
 import com.jarvis.assistant.settings.VoiceProvider
 import com.jarvis.assistant.settings.VoiceSettings
 import com.jarvis.assistant.tools.TorchState
@@ -668,6 +670,28 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
         core.savePersona(tone = tone, customPrompt = null)
     }
 
+    fun setHudColorTheme(theme: HudColorTheme) {
+        viewModelScope.launch {
+            runCatching {
+                core.settingsRepository.saveHudColorTheme(theme)
+                core.setNotice("Orb & HUD color set to ${theme.label}.")
+            }.onFailure {
+                core.setError(it.message?.take(200) ?: "Could not update color theme.")
+            }
+        }
+    }
+
+    fun setSystemVoiceGender(gender: SystemVoiceGender) {
+        viewModelScope.launch {
+            runCatching {
+                core.settingsRepository.saveSystemVoiceGender(gender)
+                core.setNotice("System voice set to ${gender.label}.")
+            }.onFailure {
+                core.setError(it.message?.take(200) ?: "Could not update system voice gender.")
+            }
+        }
+    }
+
     fun saveSafety(
         screenControlEnabled: Boolean,
         blocklistText: String,
@@ -1002,6 +1026,7 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
         alwaysListening: Boolean = _ui.value.settings.voice.alwaysListening,
         requireWakeWord: Boolean = _ui.value.settings.voice.requireWakeWord,
         wakeWord: String = _ui.value.settings.voice.wakeWord,
+        systemVoiceGender: SystemVoiceGender = _ui.value.settings.voice.systemVoiceGender,
     ) {
         viewModelScope.launch {
             try {
@@ -1024,11 +1049,12 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
                         },
                         speed = speed,
                         fallbackToSystem = fallbackToSystem,
-                        language = language.trim().ifBlank { "en-US" },
+                        language = language.trim().ifBlank { "en-GB" },
                         continuousListening = continuousListening,
                         alwaysListening = alwaysListening,
                         requireWakeWord = requireWakeWord,
                         wakeWord = wakeWord.trim().ifBlank { "jarvis" },
+                        systemVoiceGender = systemVoiceGender,
                     ),
                     apiKey.trim(),
                 )
@@ -1055,6 +1081,7 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
         language: String,
         apiKey: String,
         continuousListening: Boolean,
+        systemVoiceGender: SystemVoiceGender = _ui.value.settings.voice.systemVoiceGender,
     ) {
         viewModelScope.launch {
             try {
@@ -1076,8 +1103,9 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
                         },
                         speed = speed,
                         fallbackToSystem = fallbackToSystem,
-                        language = language.trim().ifBlank { "en-US" },
+                        language = language.trim().ifBlank { "en-GB" },
                         continuousListening = continuousListening,
+                        systemVoiceGender = systemVoiceGender,
                     ),
                     apiKey.trim(),
                 )

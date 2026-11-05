@@ -12,6 +12,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -23,6 +24,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -88,15 +90,23 @@ enum class JarvisHologramMode(val title: String) {
     CALENDAR_CARDS("DATE"),
 }
 
-// Authentic Iron Man 3 J.A.R.V.I.S. Second Screen Experience Seafoam-Teal Palette
-// Sampled directly from frame_03.png, frame_05.png, frame_14.png, frame_17.png, frame_20.png, frame_24.png
-private val Im3SeafoamBright = Color(0xFF43F2D8)
-private val Im3SeafoamCyan = Color(0xFF28D8E8)
-private val Im3SeafoamMid = Color(0xFF19A895)
-private val Im3SeafoamDeep = Color(0xFF0A584F)
-private val Im3SeafoamDark = Color(0xFF042623)
-private val Im3SpecularIce = Color(0xFFD2FFF8)
-private val Im3CavernVoid = Color(0xFF010A0B)
+// Dynamic Iron Man 3 J.A.R.V.I.S. Second Screen Experience Palette
+// Defaults to 100% video-matched Seafoam-Verdigris (IM3_SEAFOAM) and adapts
+// immediately when the user switches Orb & Bottom Bar colors (Blue, Sky Blue, White, Red, Purple, Violet, etc.)
+private val Im3SeafoamBright: Color
+    get() = com.jarvis.assistant.ui.theme.JarvisPalette.CyanBright
+private val Im3SeafoamCyan: Color
+    get() = com.jarvis.assistant.ui.theme.JarvisPalette.Cyan
+private val Im3SeafoamMid: Color
+    get() = com.jarvis.assistant.ui.theme.JarvisPalette.Cyan.copy(alpha = 0.82f)
+private val Im3SeafoamDeep: Color
+    get() = com.jarvis.assistant.ui.theme.JarvisPalette.CyanDim
+private val Im3SeafoamDark: Color
+    get() = com.jarvis.assistant.ui.theme.JarvisPalette.Panel
+private val Im3SpecularIce: Color
+    get() = com.jarvis.assistant.ui.theme.JarvisPalette.Ice
+private val Im3CavernVoid: Color
+    get() = com.jarvis.assistant.ui.theme.JarvisPalette.Void
 
 /**
  * Pre-computed outer spray/dust particles that drift just outside the undulating stippled torus
@@ -367,6 +377,13 @@ fun rememberNeuralOrbPhysics(
 
 /**
  * 100% Keyframe-Matched Iron Man 3 J.A.R.V.I.S. Second Screen Experience Orb (`frame_03.png` – `frame_28.png`).
+ *
+ * Combines:
+ * 1. The embedded `boot/jarvis_orb_loop.mp4` video orb stream (cropped directly from the uploaded
+ *    Iron Man 3 trailer) when in `AUTO_CINEMATIC` mode on the default Seafoam theme.
+ * 2. The 60fps interactive 3D Canvas orb calibrated to the exact sub-pixel radial profile of the video
+ *    (`r_sphere = 0.316`, `r_arch = 0.387..0.453`, `r_inner_stipple = 0.736..0.778`, `r_outer_stipple = 0.811..0.985`),
+ *    which dynamically recolors to any selected `HudColorTheme` (Seafoam, Blue, Sky Blue, White, Red, Purple, Violet, Emerald, Gold).
  */
 @Composable
 fun ArcReactor(
@@ -395,62 +412,160 @@ fun ArcReactor(
         label = "im3_orb_audio",
     )
 
-    Canvas(
-        modifier = modifier
-            .pointerInput(physics) {
-                detectTapGestures(
-                    onPress = { offset ->
-                        val halfW = size.width / 2f
-                        val halfH = size.height / 2f
-                        val normX = if (halfW > 0) ((offset.x - halfW) / halfW).coerceIn(-1f, 1f) else 0f
-                        val normY = if (halfH > 0) ((offset.y - halfH) / halfH).coerceIn(-1f, 1f) else 0f
-                        physics.onTouchDown(normX, normY)
-                        val released = tryAwaitRelease()
-                        if (released) {
-                            physics.onTouchUp()
-                        }
-                    },
-                    onTap = { offset ->
-                        val halfW = size.width / 2f
-                        val halfH = size.height / 2f
-                        val normX = if (halfW > 0) ((offset.x - halfW) / halfW).coerceIn(-1f, 1f) else 0f
-                        val normY = if (halfH > 0) ((offset.y - halfH) / halfH).coerceIn(-1f, 1f) else 0f
-                        physics.onTap(normX, normY)
-                        onTap?.invoke()
-                    },
-                )
-            }
-            .pointerInput(physics) {
-                detectDragGestures(
-                    onDragStart = { offset ->
-                        val halfW = size.width / 2f
-                        val halfH = size.height / 2f
-                        val normX = if (halfW > 0) ((offset.x - halfW) / halfW).coerceIn(-1f, 1f) else 0f
-                        val normY = if (halfH > 0) ((offset.y - halfH) / halfH).coerceIn(-1f, 1f) else 0f
-                        physics.onTouchDown(normX, normY)
-                    },
-                    onDrag = { change, dragAmount ->
-                        change.consume()
-                        val halfW = size.width / 2f
-                        val halfH = size.height / 2f
-                        val normX = if (halfW > 0) ((change.position.x - halfW) / halfW).coerceIn(-1f, 1f) else 0f
-                        val normY = if (halfH > 0) ((change.position.y - halfH) / halfH).coerceIn(-1f, 1f) else 0f
-                        physics.onTouchDrag(dragAmount.x, dragAmount.y, normX, normY)
-                    },
-                    onDragEnd = { physics.onTouchUp() },
-                    onDragCancel = { physics.onTouchUp() },
-                )
-            },
+    val activeColorTheme = com.jarvis.assistant.ui.theme.JarvisPalette.activeTheme
+
+    androidx.compose.foundation.layout.Box(
+        modifier = modifier,
+        contentAlignment = androidx.compose.ui.Alignment.Center,
     ) {
-        drawIronMan3JarvisOrb(
-            physics = physics,
-            state = state,
-            thinking = thinking,
-            speaking = speaking,
-            listening = listening,
-            audio = smoothedAudio,
-        )
+        // Layer 0: Hardware-accelerated loop of the exact uploaded Iron Man 3 Orb video
+        // (clipped to a circle so it blends seamlessly with the interactive 3D Canvas orb!)
+        if (hologramMode == JarvisHologramMode.AUTO_CINEMATIC) {
+            Im3VideoOrbLoopLayer(
+                colorTheme = activeColorTheme,
+                alpha = if (activeColorTheme == com.jarvis.assistant.settings.HudColorTheme.IM3_SEAFOAM) 0.58f else 0.26f,
+                modifier = Modifier
+                    .fillMaxSize(0.94f)
+                    .clip(androidx.compose.foundation.shape.CircleShape),
+            )
+        }
+
+        Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(physics) {
+                    detectTapGestures(
+                        onPress = { offset ->
+                            val halfW = size.width / 2f
+                            val halfH = size.height / 2f
+                            val normX = if (halfW > 0) ((offset.x - halfW) / halfW).coerceIn(-1f, 1f) else 0f
+                            val normY = if (halfH > 0) ((offset.y - halfH) / halfH).coerceIn(-1f, 1f) else 0f
+                            physics.onTouchDown(normX, normY)
+                            val released = tryAwaitRelease()
+                            if (released) {
+                                physics.onTouchUp()
+                            }
+                        },
+                        onTap = { offset ->
+                            val halfW = size.width / 2f
+                            val halfH = size.height / 2f
+                            val normX = if (halfW > 0) ((offset.x - halfW) / halfW).coerceIn(-1f, 1f) else 0f
+                            val normY = if (halfH > 0) ((offset.y - halfH) / halfH).coerceIn(-1f, 1f) else 0f
+                            physics.onTap(normX, normY)
+                            onTap?.invoke()
+                        },
+                    )
+                }
+                .pointerInput(physics) {
+                    detectDragGestures(
+                        onDragStart = { offset ->
+                            val halfW = size.width / 2f
+                            val halfH = size.height / 2f
+                            val normX = if (halfW > 0) ((offset.x - halfW) / halfW).coerceIn(-1f, 1f) else 0f
+                            val normY = if (halfH > 0) ((offset.y - halfH) / halfH).coerceIn(-1f, 1f) else 0f
+                            physics.onTouchDown(normX, normY)
+                        },
+                        onDrag = { change, dragAmount ->
+                            change.consume()
+                            val halfW = size.width / 2f
+                            val halfH = size.height / 2f
+                            val normX = if (halfW > 0) ((change.position.x - halfW) / halfW).coerceIn(-1f, 1f) else 0f
+                            val normY = if (halfH > 0) ((change.position.y - halfH) / halfH).coerceIn(-1f, 1f) else 0f
+                            physics.onTouchDrag(dragAmount.x, dragAmount.y, normX, normY)
+                        },
+                        onDragEnd = { physics.onTouchUp() },
+                        onDragCancel = { physics.onTouchUp() },
+                    )
+                },
+        ) {
+            drawIronMan3JarvisOrb(
+                physics = physics,
+                state = state,
+                thinking = thinking,
+                speaking = speaking,
+                listening = listening,
+                audio = smoothedAudio,
+            )
+        }
     }
+}
+
+@Composable
+private fun Im3VideoOrbLoopLayer(
+    colorTheme: com.jarvis.assistant.settings.HudColorTheme,
+    alpha: Float,
+    modifier: Modifier = Modifier,
+) {
+    androidx.compose.ui.viewinterop.AndroidView(
+        modifier = modifier,
+        factory = { ctx ->
+            android.view.TextureView(ctx).apply {
+                isOpaque = false
+                this.alpha = alpha
+                var player: android.media.MediaPlayer? = null
+                surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
+                    override fun onSurfaceTextureAvailable(
+                        surfaceTexture: android.graphics.SurfaceTexture,
+                        width: Int,
+                        height: Int,
+                    ) {
+                        runCatching {
+                            val afd = ctx.assets.openFd("boot/jarvis_orb_loop.mp4")
+                            val mp = android.media.MediaPlayer()
+                            player = mp
+                            mp.setSurface(android.view.Surface(surfaceTexture))
+                            mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                            afd.close()
+                            mp.isLooping = true
+                            mp.setVolume(0f, 0f)
+                            mp.setOnPreparedListener { it.start() }
+                            mp.prepareAsync()
+                        }
+                    }
+
+                    override fun onSurfaceTextureSizeChanged(
+                        surface: android.graphics.SurfaceTexture,
+                        width: Int,
+                        height: Int,
+                    ) = Unit
+
+                    override fun onSurfaceTextureDestroyed(surface: android.graphics.SurfaceTexture): Boolean {
+                        runCatching {
+                            player?.stop()
+                            player?.release()
+                        }
+                        player = null
+                        return true
+                    }
+
+                    override fun onSurfaceTextureUpdated(surface: android.graphics.SurfaceTexture) = Unit
+                }
+            }
+        },
+        update = { view ->
+            view.alpha = alpha
+            val targetColor = Color(colorTheme.brightHex)
+            if (colorTheme == com.jarvis.assistant.settings.HudColorTheme.IM3_SEAFOAM) {
+                view.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+            } else {
+                val rScale = targetColor.red
+                val gScale = targetColor.green
+                val bScale = targetColor.blue
+                val matrix = android.graphics.ColorMatrix(
+                    floatArrayOf(
+                        0.2f * rScale, 0.5f * rScale, 0.3f * rScale, 0f, 0f,
+                        0.2f * gScale, 0.5f * gScale, 0.3f * gScale, 0f, 0f,
+                        0.2f * bScale, 0.5f * bScale, 0.3f * bScale, 0f, 0f,
+                        0f, 0f, 0f, 1f, 0f,
+                    ),
+                )
+                val paint = android.graphics.Paint().apply {
+                    colorFilter = android.graphics.ColorMatrixColorFilter(matrix)
+                }
+                view.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, paint)
+            }
+        },
+    )
 }
 
 @Composable
@@ -483,9 +598,10 @@ fun HolographicGlobe(
 /**
  * Evaluates the 3D folded wave displacement of the outer stippled membrane at normalized
  * radial coordinate [u] (`0..1` across the torus thickness) and azimuth [theta] (`0..2pi`),
- * reproducing the exact folded point-cloud ribbon caustics in `frame_03.png`, `frame_08.png`,
- * `frame_20.png`, `frame_24.png`, and `frame_28.png`, as well as the 4 cardinal cusp pinches
- * in the calm circular state (`frame_05.png` & `frame_22.png`).
+ * reproducing the exact sub-pixel radial profile measured from the uploaded Iron Man 3 trailer:
+ * - `u in 0.00..0.18` -> inner stippled ring (`r = 0.736 .. 0.778 * orbRadius`, peak at `0.760`)
+ * - Dark circular moat at `0.792 * orbRadius`
+ * - `u in 0.18..1.00` -> outer wide stippled band (`r = 0.811 .. 0.906 * orbRadius` calm, expanding to `0.985` in wave state).
  */
 private fun evaluateOuterMembraneRadius(
     theta: Float,
@@ -497,38 +613,31 @@ private fun evaluateOuterMembraneRadius(
     touchNormX: Float,
     touchNormY: Float,
 ): Float {
-    // Base radial profile in calm state (frame_05.png & frame_22.png):
-    // u in 0.00..0.18 -> inner stippled ring (r ≈ 0.720..0.742)
-    // u in 0.18..1.00 -> outer wide stippled band (r ≈ 0.774..0.928)
-    // with a dark channel gap between 0.742 and 0.774!
     val baseR = if (u < 0.18f) {
-        orbRadius * (0.718f + (u / 0.18f) * 0.024f)
+        orbRadius * (0.736f + (u / 0.18f) * 0.042f)
     } else {
         val uOuter = (u - 0.18f) / 0.82f
-        orbRadius * (0.772f + uOuter * 0.156f)
+        orbRadius * (0.811f + uOuter * 0.095f)
     }
 
     // 4 Cardinal pinch/arch cusps at 12, 3, 6, 9 o'clock visible in frame_05.png & frame_22.png
     val cardinal4 = cos(4f * theta)
     val cardinalPinch = if (cardinal4 > 0.82f) {
         val p = (cardinal4 - 0.82f) / 0.18f
-        -orbRadius * 0.012f * p * p * sin(u * PI.toFloat()) * (1f - cymaticEnvelope * 0.6f)
+        -orbRadius * 0.014f * p * p * sin(u * PI.toFloat()) * (1f - cymaticEnvelope * 0.6f)
     } else {
         0f
     }
 
     // Phase-twisted 3D cymatic wave harmonics across u:
-    // Because phase shifts with u, the outer contour rows and inner contour rows cross and fold over
-    // each other when cymaticEnvelope > 0.25, creating the exact 3D folded ribbon caustics in frame_03.png!
     val twistPhase = wavePhase + u * 2.35f
     val w9 = cos(9f * theta - twistPhase * 1.05f) * 0.42f
     val w6 = sin(6f * theta + twistPhase * 0.72f - u * 1.8f) * 0.36f
     val w13 = cos(13f * theta + twistPhase * 1.30f + u * 2.6f) * 0.24f
     val w4 = sin(4f * theta - wavePhase * 0.45f + u * 1.1f) * 0.18f
 
-    // Envelope modulation around the azimuth so wave crests form organic asymmetric folds
     val azimuthMod = 0.68f + 0.32f * cos(3f * theta + wavePhase * 0.38f - u * 1.4f)
-    var waveDelta = (w9 + w6 + w13 + w4) * azimuthMod * cymaticEnvelope * orbRadius * 0.088f
+    var waveDelta = (w9 + w6 + w13 + w4) * azimuthMod * cymaticEnvelope * orbRadius * 0.092f
 
     if (touchDeform > 0.01f) {
         val touchAngle = atan2(touchNormY, touchNormX)
@@ -554,20 +663,21 @@ private fun DrawScope.drawIronMan3JarvisOrb(
     val w = size.width
     val h = size.height
     val center = Offset(w / 2f, h / 2f)
-    val orbRadius = (size.minDimension / 2f) * 0.94f * physics.coreScale
+    val orbRadius = (size.minDimension / 2f) * 0.95f * physics.coreScale
 
-    // 1. Deep Atmospheric Seafoam-Teal Cavern & Outer Glow (frame_03.png & frame_05.png)
+    // 1. Deep Atmospheric Conical Bowl & Outer Glow (measured from video: smooth dark-teal bowl r = 0.49..0.73)
     drawCircle(
         brush = Brush.radialGradient(
             colorStops = arrayOf(
-                0.00f to Im3SeafoamDeep.copy(alpha = 0.24f),
-                0.28f to Im3SeafoamMid.copy(alpha = 0.16f),
-                0.31f to Im3CavernVoid.copy(alpha = 0.96f),
-                0.42f to Im3SeafoamDark.copy(alpha = 0.24f),
-                0.52f to Im3CavernVoid.copy(alpha = 0.95f),
-                0.70f to Im3CavernVoid.copy(alpha = 0.94f),
-                0.80f to Im3SeafoamDeep.copy(alpha = 0.30f + physics.cymaticEnvelope * 0.12f),
-                0.93f to Im3SeafoamMid.copy(alpha = 0.14f),
+                0.00f to Im3SeafoamDeep.copy(alpha = 0.28f),
+                0.31f to Im3SeafoamMid.copy(alpha = 0.20f),
+                0.33f to Im3CavernVoid.copy(alpha = 0.88f),
+                0.45f to Im3SeafoamDark.copy(alpha = 0.32f),
+                0.49f to Im3SeafoamDark.copy(alpha = 0.85f),
+                0.72f to Im3CavernVoid.copy(alpha = 0.92f),
+                0.76f to Im3SeafoamDeep.copy(alpha = 0.36f + physics.cymaticEnvelope * 0.14f),
+                0.79f to Im3CavernVoid.copy(alpha = 0.94f),
+                0.88f to Im3SeafoamMid.copy(alpha = 0.22f),
                 1.00f to Color.Transparent,
             ),
             center = center,
@@ -598,7 +708,7 @@ private fun DrawScope.drawIronMan3JarvisOrb(
         )
     }
 
-    // 4. Layer 3 — Central Frequency-3 Geodesic Triangulated Sphere (frame_03.png & frame_05.png)
+    // 4. Layer 3 — Central Frequency-3 Geodesic Triangulated Sphere (exact video limb r = 0.316 * orbRadius)
     val geodesicAlpha = when (resolvedMode) {
         JarvisHologramMode.GEODESIC_CORE -> 1.0f
         JarvisHologramMode.JARVIS_EMBLEM -> 0.48f
@@ -611,7 +721,7 @@ private fun DrawScope.drawIronMan3JarvisOrb(
     }
     drawGeodesicTriangulatedSphere(
         center = center,
-        sphereRadius = orbRadius * 0.285f,
+        sphereRadius = orbRadius * 0.316f,
         physics = physics,
         alphaScale = geodesicAlpha,
         audio = audio,
@@ -714,10 +824,10 @@ private fun DrawScope.drawCavernAnd12ScallopedArches(
     val hairline = 1.0.dp.toPx()
     val archStroke = 1.5.dp.toPx()
 
-    // Inner faint circle touching the inward cusps of the 12 arches (r = 0.412)
+    // Inner faint circle touching the inward cusps of the 12 arches (r = 0.385)
     drawCircle(
         color = Im3SeafoamMid.copy(alpha = 0.18f * dimAlpha),
-        radius = orbRadius * 0.412f,
+        radius = orbRadius * 0.385f,
         center = center,
         style = Stroke(width = hairline),
     )
@@ -725,8 +835,8 @@ private fun DrawScope.drawCavernAnd12ScallopedArches(
     // 12-Arch Concave Scalloped Festoon Ring: r(theta) = rCusp + (rArch - rCusp) * |sin(6*theta + spin)|^0.72
     val festoonPath = Path()
     val samples = 240
-    val rCusp = orbRadius * 0.414f
-    val rArch = orbRadius * 0.484f
+    val rCusp = orbRadius * 0.387f
+    val rArch = orbRadius * 0.453f
     val archSpan = rArch - rCusp
     for (i in 0..samples) {
         val theta = (i.toFloat() / samples) * 2f * PI.toFloat()
@@ -747,21 +857,21 @@ private fun DrawScope.drawCavernAnd12ScallopedArches(
     // Crisp 12-arch festoon line
     drawPath(
         path = festoonPath,
-        color = Im3SeafoamBright.copy(alpha = 0.46f * dimAlpha),
+        color = Im3SeafoamBright.copy(alpha = 0.48f * dimAlpha),
         style = Stroke(width = archStroke, cap = StrokeCap.Round, join = StrokeJoin.Round),
     )
 
-    // Thin concentric circle immediately enclosing the 12 arches (r = 0.502 in frame_05.png & frame_22.png)
+    // Thin concentric circle immediately enclosing the 12 arches (r = 0.481 measured from video)
     drawCircle(
-        color = Im3SeafoamBright.copy(alpha = 0.34f * dimAlpha),
-        radius = orbRadius * 0.502f,
+        color = Im3SeafoamBright.copy(alpha = 0.36f * dimAlpha),
+        radius = orbRadius * 0.481f,
         center = center,
         style = Stroke(width = 1.2.dp.toPx()),
     )
-    // Secondary faint outer cavern circle (r = 0.536 in frame_03.png & frame_05.png)
+    // Secondary faint outer cavern circle (r = 0.518)
     drawCircle(
         color = Im3SeafoamMid.copy(alpha = 0.22f * dimAlpha),
-        radius = orbRadius * 0.536f,
+        radius = orbRadius * 0.518f,
         center = center,
         style = Stroke(width = hairline),
     )

@@ -11,6 +11,105 @@ enum class VoiceProvider(val label: String) {
 }
 
 @Serializable
+enum class SystemVoiceGender(val label: String, val shortLabel: String) {
+    MALE("Male (J.A.R.V.I.S. British Butler)", "JARVIS (Male)"),
+    FEMALE("Female (F.R.I.D.A.Y. Neural)", "FRIDAY (Female)"),
+}
+
+@Serializable
+enum class HudColorTheme(
+    val label: String,
+    val shortLabel: String,
+    val primaryHex: Long,
+    val brightHex: Long,
+    val dimHex: Long,
+    val voidHex: Long,
+    val panelHex: Long,
+) {
+    IM3_SEAFOAM(
+        label = "Iron Man 3 Seafoam (Original Video)",
+        shortLabel = "IM3 Video",
+        primaryHex = 0xFF42C8C4L,
+        brightHex = 0xFF6EF8F0L,
+        dimHex = 0xFF125A5CL,
+        voidHex = 0xFF010A0CL,
+        panelHex = 0xFF05181CL,
+    ),
+    BLUE(
+        label = "Arc Reactor Blue",
+        shortLabel = "Blue",
+        primaryHex = 0xFF0088FFL,
+        brightHex = 0xFF4DC4FFL,
+        dimHex = 0xFF0A3D7AL,
+        voidHex = 0xFF01060FL,
+        panelHex = 0xFF051329L,
+    ),
+    SKY_BLUE(
+        label = "Sky Blue",
+        shortLabel = "Sky Blue",
+        primaryHex = 0xFF38BDF8L,
+        brightHex = 0xFF7DD3FCL,
+        dimHex = 0xFF0C4A6EL,
+        voidHex = 0xFF020810L,
+        panelHex = 0xFF061928L,
+    ),
+    WHITE(
+        label = "Pure White",
+        shortLabel = "White",
+        primaryHex = 0xFFD8E6F2L,
+        brightHex = 0xFFFFFFFFL,
+        dimHex = 0xFF475569L,
+        voidHex = 0xFF05070AL,
+        panelHex = 0xFF11161FL,
+    ),
+    RED(
+        label = "Crimson Red",
+        shortLabel = "Red",
+        primaryHex = 0xFFEF4444L,
+        brightHex = 0xFFFF7A7AL,
+        dimHex = 0xFF7F1D1DL,
+        voidHex = 0xFF0B0203L,
+        panelHex = 0xFF210709L,
+    ),
+    PURPLE(
+        label = "Quantum Purple",
+        shortLabel = "Purple",
+        primaryHex = 0xFFA855F7L,
+        brightHex = 0xFFD8B4FEL,
+        dimHex = 0xFF581C87L,
+        voidHex = 0xFF07020DL,
+        panelHex = 0xFF170726L,
+    ),
+    VIOLET(
+        label = "Neural Violet",
+        shortLabel = "Violet",
+        primaryHex = 0xFF7C3AEDL,
+        brightHex = 0xFFC4B5FDL,
+        dimHex = 0xFF4C1D95L,
+        voidHex = 0xFF05020DL,
+        panelHex = 0xFF130829L,
+    ),
+    EMERALD(
+        label = "Emerald Green",
+        shortLabel = "Emerald",
+        primaryHex = 0xFF10B981L,
+        brightHex = 0xFF6EE7B7L,
+        dimHex = 0xFF065F46L,
+        voidHex = 0xFF010A06L,
+        panelHex = 0xFF051F15L,
+    ),
+    GOLD(
+        label = "Stark Gold",
+        shortLabel = "Gold",
+        primaryHex = 0xFFF59E0BL,
+        brightHex = 0xFFFDE68AL,
+        dimHex = 0xFF78350FL,
+        voidHex = 0xFF0A0601L,
+        panelHex = 0xFF211404L,
+    ),
+}
+
+@Serializable
 data class OwnerProfile(
     val name: String = "",
     val title: String = "sir",
@@ -47,11 +146,14 @@ data class PersonaSettings(
     val lastGreetingAt: Long = 0L,
     /** Allows Jarvis to monitor device usage and rarely share spontaneous care, wit, or notification insights. */
     val autonomousThoughtsEnabled: Boolean = true,
+    /** Dynamic Orb & Bottom Bar HUD color theme (defaults to 100% Iron Man 3 Seafoam). */
+    val hudColorTheme: HudColorTheme = HudColorTheme.IM3_SEAFOAM,
 )
 
 @Serializable
 data class VoiceSettings(
     val provider: VoiceProvider = VoiceProvider.SYSTEM,
+    val systemVoiceGender: SystemVoiceGender = SystemVoiceGender.MALE,
     val encryptedApiKey: String = "",
     val fishEncryptedApiKey: String = "",
     val elevenLabsEncryptedApiKey: String = "",
@@ -127,7 +229,7 @@ data class SafetySettings(
      * WhatsApp voice calls, tells the caller sir is unavailable and engages
      * them about what they say, with his own voice.
      */
-    val callAssistantEnabled: Boolean = false,
+    val callAssistantEnabled: Boolean = true,
     /** How many caller exchanges the call assistant may hold (clamped 2..12). */
     val callAssistantMaxTurns: Int = 6,
     /**

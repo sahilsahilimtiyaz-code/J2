@@ -48,10 +48,12 @@ import com.jarvis.assistant.service.ListeningServiceController
 import com.jarvis.assistant.service.NotificationHelper
 import com.jarvis.assistant.service.WhatsAppIncomingMessage
 import com.jarvis.assistant.settings.AppSettings
+import com.jarvis.assistant.settings.HudColorTheme
 import com.jarvis.assistant.settings.OwnerProfile
 import com.jarvis.assistant.settings.PersonaSettings
 import com.jarvis.assistant.settings.ProviderSettings
 import com.jarvis.assistant.settings.SettingsRepository
+import com.jarvis.assistant.settings.SystemVoiceGender
 import com.jarvis.assistant.settings.VoiceProvider
 import com.jarvis.assistant.settings.VoiceSettings
 import com.jarvis.assistant.tools.ActionLogEntry
@@ -550,6 +552,11 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         JarvisAccessibilityService.windowStateListener = { pkg, className ->
             handleWhatsAppWindowEvent(pkg, className)
         }
+        // 0ms push callback when WhatsApp posts an incoming call notification
+        // so Jarvis clicks the Answer button and talks with the caller immediately.
+        JarvisNotificationListenerService.incomingWhatsAppCallListener = { callerName, notif ->
+            handleIncomingWhatsAppCallNotification(callerName, notif.packageName)
+        }
         // Incoming social/WhatsApp text notifications feed both the Messaging Receptionist
         // (Draft/Auto modes) and the opt-in voice auto-reply.
         JarvisNotificationListenerService.incomingWhatsAppListener = { event ->
@@ -972,6 +979,154 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
 
     // Conversation ------------------------------------------------------------
 
+    private fun handleInstantDeviceOrThemeVoiceCommand(clean: String, lowerTrim: String): Boolean {
+        val ownerTitle = settings.value.profile.title.ifBlank { "sir" }
+
+        // 1. Orb & Bottom Bar Color Theme voice command
+        val mentionsThemeTarget = lowerTrim.contains("orb") ||
+            lowerTrim.contains("color") ||
+            lowerTrim.contains("colour") ||
+            lowerTrim.contains("bottom bar") ||
+            lowerTrim.contains("theme") ||
+            lowerTrim.contains("hud")
+        if (mentionsThemeTarget) {
+            val matchedTheme: HudColorTheme? = when {
+                lowerTrim.contains("sky blue") || lowerTrim.contains("skyblue") || lowerTrim.contains("light blue") ->
+                    HudColorTheme.SKY_BLUE
+                lowerTrim.contains("original") || lowerTrim.contains("iron man") || lowerTrim.contains("im3") || lowerTrim.contains("cyan") ->
+                    HudColorTheme.IM3_SEAFOAM
+                lowerTrim.contains("white") || lowerTrim.contains("silver") ->
+                    HudColorTheme.WHITE
+                lowerTrim.contains("red") || lowerTrim.contains("crimson") ->
+                    HudColorTheme.RED
+                lowerTrim.contains("violet") || lowerTrim.contains("voilet") || lowerTrim.contains("magenta") ->
+                    HudColorTheme.VIOLET
+                lowerTrim.contains("purple") ->
+                    HudColorTheme.PURPLE
+                lowerTrim.contains("green") || lowerTrim.contains("emerald") ->
+                    HudColorTheme.EMERALD
+                lowerTrim.contains("gold") || lowerTrim.contains("amber") || lowerTrim.contains("yellow") ->
+                    HudColorTheme.GOLD
+                lowerTrim.contains("blue") ->
+                    HudColorTheme.BLUE
+                else -> null
+            }
+            if (matchedTheme != null) {
+                scope.launch {
+                    settingsRepository.update { doc ->
+                        doc.copy(persona = doc.persona.copy(hudColorTheme = matchedTheme))
+                    }
+                    val reply = "Right away, $ownerTitle. I have switched the J.A.R.V.I.S. orb and bottom bar to ${matchedTheme.label}."
+                    _state.update { state ->
+                        state.copy(
+                            messages = state.messages + listOf(
+                                CoreMessage(id = newId("user"), author = ChatAuthor.USER, text = clean),
+                                CoreMessage(
+                                    id = newId("reply"),
+                                    author = ChatAuthor.JARVIS,
+                                    text = reply,
+                                    providerName = "HUD Theme Engine",
+                                ),
+                            ),
+                            generating = false,
+                            error = null,
+                        )
+                    }
+                    speak(reply)
+                }
+                return true
+            }
+        }
+
+        // 2. System Voice Gender (Male J.A.R.V.I.S. / Female F.R.I.D.A.Y.) voice command
+        if (lowerTrim.contains("voice")) {
+            val requestedGender: SystemVoiceGender? = when {
+                lowerTrim.contains("female") || lowerTrim.contains("friday") || lowerTrim.contains("woman") || lowerTrim.contains("girl") ->
+                    SystemVoiceGender.FEMALE
+                lowerTrim.contains("male") || lowerTrim.contains("jarvis voice") || lowerTrim.contains("british male") || lowerTrim.contains("man voice") ->
+                    SystemVoiceGender.MALE
+                else -> null
+            }
+            if (requestedGender != null) {
+                scope.launch {
+                    settingsRepository.update { doc ->
+                        doc.copy(voice = doc.voice.copy(systemVoiceGender = requestedGender))
+                    }
+                    val reply = if (requestedGender == SystemVoiceGender.MALE) {
+                        "Voice profile set to Male J.A.R.V.I.S. British baritone, $ownerTitle."
+                    } else {
+                        "Voice profile switched to Female F.R.I.D.A.Y. neural synthesis, $ownerTitle."
+                    }
+                    _state.update { state ->
+                        state.copy(
+                            messages = state.messages + listOf(
+                                CoreMessage(id = newId("user"), author = ChatAuthor.USER, text = clean),
+                                CoreMessage(
+                                    id = newId("reply"),
+                                    author = ChatAuthor.JARVIS,
+                                    text = reply,
+                                    providerName = "Voice Synthesis Engine",
+                                ),
+                            ),
+                            generating = false,
+                            error = null,
+                        )
+                    }
+                    speak(reply)
+                }
+                return true
+            }
+        }
+
+        // 3. WhatsApp Call Pickup / Auto-Answer voice command
+        val mentionsWhatsAppCall = lowerTrim.contains("whatsapp") &&
+            (lowerTrim.contains("call") || lowerTrim.contains("called") || lowerTrim.contains("ringing")) &&
+            (lowerTrim.contains("pick") || lowerTrim.contains("answer") || lowerTrim.contains("attend") || lowerTrim.contains("receive") || lowerTrim.contains("take"))
+        if (mentionsWhatsAppCall) {
+            scope.launch {
+                settingsRepository.update { doc ->
+                    doc.copy(
+                        safety = doc.safety.copy(
+                            callAssistantEnabled = true,
+                            screenControlEnabled = true,
+                        ),
+                    )
+                }
+                val hasActiveCallNotif = JarvisNotificationListenerService
+                    .hasActiveWhatsAppCallNotification()
+                val reply = if (hasActiveCallNotif) {
+                    scope.launch {
+                        answerWhatsAppCallNow(note = clean)
+                    }
+                    "Answering the incoming WhatsApp call right now, $ownerTitle — clicking Answer first and switching to speakerphone."
+                } else {
+                    "Understood, $ownerTitle. Automatic WhatsApp call pickup is armed — the instant anyone calls on WhatsApp, I will click the Answer button first, enable speakerphone, and speak with them for you."
+                }
+                _state.update { state ->
+                    state.copy(
+                        messages = state.messages + listOf(
+                            CoreMessage(id = newId("user"), author = ChatAuthor.USER, text = clean),
+                            CoreMessage(
+                                id = newId("reply"),
+                                author = ChatAuthor.JARVIS,
+                                text = reply,
+                                providerName = "WhatsApp Call Receptionist",
+                            ),
+                        ),
+                        generating = false,
+                        error = null,
+                    )
+                }
+                if (!hasActiveCallNotif) {
+                    speak(reply)
+                }
+            }
+            return true
+        }
+
+        return false
+    }
+
     fun send(text: String) {
         val clean = text.trim()
         if (clean.isEmpty()) return
@@ -1002,9 +1157,14 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             }
         }
 
+        // 1.2. Fast-path voice commands for Orb/Bottom Bar Color, Voice Gender, and WhatsApp Call Pickup
+        val lowerTrim = clean.lowercase(Locale.ROOT)
+        if (handleInstantDeviceOrThemeVoiceCommand(clean, lowerTrim)) {
+            return
+        }
+
         // 1.4. Phase 0 Feasibility Probes & Simulated Caller Commands:
         // "run phase 0 probes", "run probes", "simulate caller <1..5|customer|spam|vip|otp|ivr>"
-        val lowerTrim = clean.lowercase(Locale.ROOT)
         if (lowerTrim == "run phase 0 probes" || lowerTrim == "run probes" || lowerTrim == "run feasibility probes") {
             scope.launch {
                 val p1 = feasibilityProbeEngine.runP1DeviceProbe()
@@ -1785,7 +1945,13 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                 is VoiceSink.Pcm -> audioPlayer.write(payload.bytes, payload.sampleRate, payload.fade)
                 is VoiceSink.Text -> {
                     audioPlayer.finish()
-                    systemTts.speak(payload.text, settings.value.voice.language)
+                    val v = settings.value.voice
+                    systemTts.speak(
+                        text = payload.text,
+                        language = v.language,
+                        gender = v.systemVoiceGender,
+                        speed = v.speed,
+                    )
                     audioPlayer.lastError?.let { reportVoice(it) }
                 }
 
@@ -2000,6 +2166,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             speed = voice.speed,
             fallbackToSystem = voice.fallbackToSystem,
             language = voice.language.ifBlank { "en-US" },
+            systemVoiceGender = voice.systemVoiceGender,
         )
     }
 
@@ -3547,24 +3714,59 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
     private fun handleWhatsAppWindowEvent(pkg: String, className: String) {
         val current = settings.value
         if (!current.safety.callAssistantEnabled) return
-        if (!current.safety.screenControlEnabled) return
         if (!WhatsAppCallAutomation.isIncomingCallWindow(pkg, className)) return
         val now = System.currentTimeMillis()
-        if (now - lastWhatsAppCallAttemptAt < 45_000L) return
+        if (now - lastWhatsAppCallAttemptAt < 18_000L) return
         if (!beginWhatsAppCallSession()) return
         lastWhatsAppCallAttemptAt = now
         _state.update {
             it.copy(
-                notice = "WhatsApp call detected — Jarvis is answering for you.",
+                notice = "WhatsApp call detected — Jarvis is clicking Answer and talking for you.",
                 toolActivity = "Answering the WhatsApp call...",
             )
         }
         whatsappCallJob?.cancel()
         whatsappCallJob = scope.launch {
             try {
-                // Let WhatsApp finish drawing its call screen before tapping.
-                delay(700L)
+                // Minimal settle delay so the Answer button or notification action is ready.
+                delay(280L)
                 val result = runWhatsAppCallAssistantBlocking(note = null)
+                setNotice(result.message)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                setError("The WhatsApp call assistant failed: ${e.message?.take(300) ?: "unknown error"}")
+            } finally {
+                endWhatsAppCallSession()
+                whatsappCallJob = null
+                _state.update { it.copy(toolActivity = null) }
+            }
+        }
+    }
+
+    /**
+     * 0ms notification-posted entry point when WhatsApp posts an incoming call notification.
+     * Fires immediately even before or without an Accessibility window transition.
+     */
+    private fun handleIncomingWhatsAppCallNotification(callerName: String, pkg: String) {
+        val current = settings.value
+        if (!current.safety.callAssistantEnabled) return
+        val now = System.currentTimeMillis()
+        if (now - lastWhatsAppCallAttemptAt < 18_000L) return
+        if (!beginWhatsAppCallSession()) return
+        lastWhatsAppCallAttemptAt = now
+        val callerLabel = callerName.ifBlank { "WhatsApp Caller" }
+        _state.update {
+            it.copy(
+                notice = "Incoming WhatsApp call from $callerLabel — clicking Answer first and speaking for you.",
+                toolActivity = "Answering WhatsApp call from $callerLabel...",
+            )
+        }
+        whatsappCallJob?.cancel()
+        whatsappCallJob = scope.launch {
+            try {
+                delay(220L)
+                val result = runWhatsAppCallAssistantBlocking(note = "Caller name on notification: $callerLabel")
                 setNotice(result.message)
             } catch (e: CancellationException) {
                 throw e
@@ -3580,13 +3782,6 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
 
     /** Manual entry point for the answer_whatsapp_call tool. */
     suspend fun answerWhatsAppCallNow(note: String? = null): ScreenResult {
-        if (!ready()) {
-            return ScreenResult(
-                false,
-                "Screen control is off, so I cannot reach WhatsApp's call screen. Enable it in Settings, Safety.",
-                verified = false,
-            )
-        }
         if (!beginWhatsAppCallSession()) {
             return ScreenResult(false, "I am already handling a WhatsApp call, sir.", verified = false)
         }
@@ -3615,14 +3810,31 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         val current = settings.value
         val owner = current.profile.title.ifBlank { "sir" }
         val controller = JarvisAccessibilityService.controller()
-            ?: return ScreenResult(false, "Accessibility disconnected before I could answer.", verified = false)
 
         // Free the microphone for the caller capture, remembering whether the
         // owner had his own listening session armed so it can be restored after.
         val resumeMainListening = _state.value.micLocked && !userPausedMic
         pauseMainListeningForCall()
 
-        val answer = WhatsAppCallAutomation.answerIncomingCall(controller)
+        val answer: ScreenResult = if (controller != null) {
+            WhatsAppCallAutomation.answerIncomingCall(controller)
+        } else {
+            val notifAnswered = JarvisNotificationListenerService
+                .answerActiveWhatsAppCallNotification()
+            if (notifAnswered) {
+                ScreenResult(
+                    true,
+                    "Answered the incoming WhatsApp call via Notification Answer action.",
+                    verified = true,
+                )
+            } else {
+                ScreenResult(
+                    false,
+                    "Neither Accessibility Service nor an active WhatsApp call notification Answer action was available.",
+                    verified = false,
+                )
+            }
+        }
         logCallEvent("answer_whatsapp_call", answer.message, answer.success)
         if (!answer.success) {
             _state.update { it.copy(toolActivity = null) }
@@ -3634,15 +3846,18 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
 
         _state.update { it.copy(toolActivity = "Talking with the WhatsApp caller...") }
         val speakerReady = primeCallAudio()
+        if (controller != null) {
+            runCatching { WhatsAppCallAutomation.enableSpeakerForCall() }
+        }
         if (!speakerReady) {
             logCallEvent(
                 "whatsapp_call_audio",
-                "Could not switch to the loudspeaker; the caller may struggle to hear Jarvis.",
+                "Could not switch to the loudspeaker via AudioManager; attempted UI speaker toggle.",
                 false,
             )
         }
         // Give WhatsApp a moment to settle its audio route before Jarvis talks.
-        delay(1_600L)
+        delay(950L)
         interruptSpeech()
 
         val conversation = WhatsAppCallConversation(
@@ -3663,7 +3878,9 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         } catch (e: CancellationException) {
             // The owner pressed Stop: hang up rather than leaving the call open.
             withContext(NonCancellable) {
-                runCatching { WhatsAppCallAutomation.endActiveCall(controller) }
+                if (controller != null) {
+                    runCatching { WhatsAppCallAutomation.endActiveCall(controller) }
+                }
             }
             throw e
         } finally {
@@ -4868,7 +5085,13 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                 """.trimIndent()
             }
 
-            val thoughtText = if (providers.isNotEmpty()) {
+            // Sub-second (< 1s) fast-path for newly arrived notifications:
+            // Speak the exact notification briefing immediately without waiting on a slow LLM round-trip!
+            val thoughtText = if (seed.kind == com.jarvis.assistant.service.AutonomousThoughtKind.NOTIFICATION_INSIGHT &&
+                seed.fallbackSpeech.isNotBlank()
+            ) {
+                seed.fallbackSpeech
+            } else if (providers.isNotEmpty()) {
                 runCatching {
                     val memoryContext = withContext(Dispatchers.IO) {
                         runCatching { memoryRepository.promptContext(seed.contextSummary) }.getOrDefault("")

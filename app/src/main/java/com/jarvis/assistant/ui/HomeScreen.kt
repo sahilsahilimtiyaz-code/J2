@@ -89,6 +89,7 @@ import com.jarvis.assistant.brain.LocalDownloadState
 import com.jarvis.assistant.brain.LocalModelCatalog
 import com.jarvis.assistant.brain.LocalModelDownloadStatus
 import com.jarvis.assistant.brain.ProviderKind
+import com.jarvis.assistant.settings.HudColorTheme
 import com.jarvis.assistant.tools.DeviceStatus
 import com.jarvis.assistant.tools.readDeviceStatus
 import com.jarvis.assistant.ui.components.ActionTile
@@ -157,6 +158,7 @@ fun HomeScreen(
     onRetryFailedPlanSteps: () -> Unit = {},
     onActOnSharedContent: (String) -> Unit = {},
     onClearSharedContent: () -> Unit = {},
+    onSelectColorTheme: (HudColorTheme) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -302,6 +304,7 @@ fun HomeScreen(
                             onToggleMic = onToggleMic,
                             onSelectTab = onSelectTab,
                             onQuickPrompt = { prompt -> onSend(prompt) },
+                            onSelectColorTheme = onSelectColorTheme,
                         )
                     }
 
@@ -709,6 +712,7 @@ private fun HomeHudHero(
     onToggleMic: () -> Unit,
     onSelectTab: (JarvisTab) -> Unit,
     onQuickPrompt: (String) -> Unit,
+    onSelectColorTheme: (HudColorTheme) -> Unit = {},
 ) {
     val memoryPct = deviceStatus?.memoryUsedPercent ?: 47
     val storagePct = deviceStatus?.storageUsedPercent ?: 87
@@ -817,11 +821,11 @@ private fun HomeHudHero(
 
         Spacer(Modifier.height(if (isChatting) 8.dp else 14.dp))
 
-        // Central Reactor + Left/Right Telemetry + 3D Perspective Side Panels
+        // Central Iron Man 3 J.A.R.V.I.S. Second Screen Experience Orb + Telemetry
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(if (isChatting) 172.dp else 286.dp),
+                .height(if (isChatting) 186.dp else 306.dp),
             contentAlignment = Alignment.Center,
         ) {
             if (!isChatting) {
@@ -839,7 +843,7 @@ private fun HomeHudHero(
             Column(
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .width(96.dp),
+                    .width(92.dp),
                 verticalArrangement = Arrangement.spacedBy(if (isChatting) 6.dp else 10.dp),
             ) {
                 MiniTelemetryBlock(
@@ -871,7 +875,7 @@ private fun HomeHudHero(
             Column(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .width(96.dp),
+                    .width(92.dp),
                 horizontalAlignment = Alignment.End,
                 verticalArrangement = Arrangement.spacedBy(if (isChatting) 8.dp else 12.dp),
             ) {
@@ -885,9 +889,9 @@ private fun HomeHudHero(
                 )
             }
 
-            // Central 3D Brahma Morphing Wireframe Orb (touch physics + tap to open Voice Overlay)
+            // Central 100% Iron Man 3 J.A.R.V.I.S. Second Screen Experience Orb
             Box(
-                modifier = Modifier.size(if (isChatting) 156.dp else 268.dp),
+                modifier = Modifier.size(if (isChatting) 172.dp else 292.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 ArcReactor(
@@ -897,6 +901,63 @@ private fun HomeHudHero(
                     toolActive = toolActive,
                     onTap = onOpenVoiceOverlay,
                 )
+            }
+        }
+
+        // Interactive Orb & Bottom Bar Color Selector Strip (IM3 Video, Blue, Sky Blue, White, Red, Purple, Violet, Emerald, Gold)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp)
+                .horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = "ORB & BAR COLOR:",
+                style = MaterialTheme.typography.labelSmall,
+                color = JarvisPalette.TextDim,
+                fontSize = 9.sp,
+                letterSpacing = 1.2.sp,
+                modifier = Modifier.padding(end = 2.dp),
+            )
+            HudColorTheme.entries.forEach { themeOption ->
+                val selected = state.settings.persona.hudColorTheme == themeOption
+                val swatchColor = Color(themeOption.primaryHex)
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(
+                            if (selected) {
+                                swatchColor.copy(alpha = 0.24f)
+                            } else {
+                                JarvisPalette.Panel.copy(alpha = 0.78f)
+                            },
+                        )
+                        .border(
+                            width = if (selected) 1.4.dp else 0.8.dp,
+                            color = if (selected) swatchColor else swatchColor.copy(alpha = 0.42f),
+                            shape = RoundedCornerShape(50),
+                        )
+                        .clickable { onSelectColorTheme(themeOption) }
+                        .padding(horizontal = 9.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(9.dp)
+                            .clip(CircleShape)
+                            .background(swatchColor),
+                    )
+                    Spacer(Modifier.width(5.dp))
+                    Text(
+                        text = themeOption.label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (selected) JarvisPalette.Ice else JarvisPalette.TextDim,
+                        fontSize = 10.sp,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                    )
+                }
             }
         }
 

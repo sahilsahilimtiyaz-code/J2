@@ -83,7 +83,7 @@ fun JarvisApp(vm: JarvisViewModel = viewModel()) {
         }
     }
 
-    JarvisTheme {
+    JarvisTheme(colorTheme = state.settings.persona.hudColorTheme) {
         var bootFinished by rememberSaveable { mutableStateOf(false) }
         var autoPromptedMic by rememberSaveable { mutableStateOf(false) }
 
@@ -191,6 +191,7 @@ fun JarvisApp(vm: JarvisViewModel = viewModel()) {
                                 onRetryFailedPlanSteps = vm::retryFailedPlanSteps,
                                 onActOnSharedContent = vm::actOnSharedContent,
                                 onClearSharedContent = vm::clearSharedContent,
+                                onSelectColorTheme = vm::setHudColorTheme,
                             )
 
                             JarvisTab.MEMORY -> MemoryScreen(

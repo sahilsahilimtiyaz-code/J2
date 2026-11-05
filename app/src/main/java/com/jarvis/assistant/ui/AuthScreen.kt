@@ -190,18 +190,10 @@ fun AuthScreen(
                         }
                     }
 
-                    Image(
-                        painter = painterResource(id = R.drawable.ic_app_logo),
-                        contentDescription = "J.A.R.V.I.S. Logo",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .size(136.dp)
-                            .clip(CircleShape)
-                            .border(
-                                width = 1.5.dp,
-                                color = JarvisPalette.CyanBright.copy(alpha = 0.55f),
-                                shape = CircleShape,
-                            ),
+                    com.jarvis.assistant.ui.components.ArcReactor(
+                        state = com.jarvis.assistant.ui.components.ReactorState.IDLE,
+                        modifier = Modifier.size(164.dp),
+                        audioLevel = 0.25f,
                     )
                 }
 

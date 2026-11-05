@@ -480,10 +480,10 @@ class DevicePresenceMonitor(
     }
 
     private companion object {
-        const val INITIAL_SETTLE_MS = 20_000L
-        const val TICK_INTERVAL_MS = 60_000L
+        const val INITIAL_SETTLE_MS = 5_000L
+        const val TICK_INTERVAL_MS = 15_000L
         const val SESSION_RESET_OFF_MS = 5 * 60_000L
-        const val NOTIFICATION_THOUGHT_COOLDOWN_MS = 8 * 60_000L
+        const val NOTIFICATION_THOUGHT_COOLDOWN_MS = 1_000L
         const val GENERAL_THOUGHT_COOLDOWN_MS = 10 * 60_000L
     }
 }

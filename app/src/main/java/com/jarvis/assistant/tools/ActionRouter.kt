@@ -46,31 +46,47 @@ object ActionRouter {
         val contactMatch = ContactResolver.resolve(context, recipient, preferWhatsApp = true)
 
         when (contactMatch) {
-            is ContactMatchResult.PermissionDenied -> {
-                Log.w(TAG, "ActionRouter: Contacts permission denied: ${contactMatch.reason}")
-                return ToolResult(false, contactMatch.reason)
-            }
-
-            is ContactMatchResult.NotFound -> {
-                Log.i(TAG, "ActionRouter: Contact not found for '$recipient'")
-                return ToolResult(
-                    false,
-                    "I could not find a contact called \"$recipient\" in your contacts list. Please check the spelling or give me the phone number directly.",
+            is ContactMatchResult.PermissionDenied,
+            is ContactMatchResult.NotFound,
+            -> {
+                Log.i(TAG, "ActionRouter: Contact '$recipient' not in ContactsContract; trying WhatsApp inline reply or in-app Search by name")
+                return sendWhatsAppByNameFallback(
+                    context = context,
+                    confirmation = confirmation,
+                    recipientName = recipient,
+                    message = message,
                 )
             }
 
             is ContactMatchResult.Ambiguous -> {
-                val candidateList = contactMatch.candidates.take(4).joinToString("; ") {
-                    "${it.contactName} (${it.e164Number})"
-                }
-                Log.i(TAG, "ActionRouter: Ambiguous contact for '$recipient': $candidateList")
-                return ToolResult(
-                    false,
-                    "I found multiple contacts for \"$recipient\": $candidateList. Which one shall I message? Please tell me the full name or number.",
+                // Pick the highest-scoring WhatsApp contact automatically so the user doesn't have to dictate a phone number
+                val bestCandidate = contactMatch.candidates.firstOrNull { it.hasWhatsApp }
+                    ?: contactMatch.candidates.first()
+                return sendToResolvedWhatsAppContact(
+                    context = context,
+                    confirmation = confirmation,
+                    contactMatch = bestCandidate,
+                    message = message,
                 )
             }
 
             is ContactMatchResult.Found -> {
+                return sendToResolvedWhatsAppContact(
+                    context = context,
+                    confirmation = confirmation,
+                    contactMatch = contactMatch,
+                    message = message,
+                )
+            }
+        }
+    }
+
+    private suspend fun sendToResolvedWhatsAppContact(
+        context: Context,
+        confirmation: ConfirmationGate,
+        contactMatch: ContactMatchResult.Found,
+        message: String,
+    ): ToolResult {
                 // Step 2: Safety confirmation before sending
                 val approved = confirmation.confirm(
                     title = "Send WhatsApp to ${contactMatch.contactName}?",
@@ -154,7 +170,20 @@ object ActionRouter {
                         "Sent WhatsApp message to ${contactMatch.contactName} (${contactMatch.e164Number}): \"$message\".",
                     )
                 } else {
-                    // Try IME enter action
+                    // Try Human Vision Eye Send button detector or IME enter action
+                    val service = JarvisAccessibilityService.serviceInstance()
+                    if (service != null) {
+                        val (dispW, dispH) = service.getScreenDimensions()
+                        val bmp = runCatching { service.captureScreenshotBitmap(1_000) }.getOrNull()
+                        val sendRect = com.jarvis.assistant.accessibility.HumanVisionEyeEngine
+                            .findSendOrFabButton(bmp, dispW, dispH)
+                        if (sendRect != null && AppAutomation.tapSpot(sendRect)) {
+                            return ToolResult(
+                                true,
+                                "Sent WhatsApp message to ${contactMatch.contactName} (${contactMatch.e164Number}): \"$message\".",
+                            )
+                        }
+                    }
                     Log.i(TAG, "ActionRouter [TIER 2]: Send button not directly tagged; triggering IME enter action")
                     val imeOk = JarvisAccessibilityService.serviceInstance()?.performImeAction() ?: false
                     return ToolResult(
@@ -167,7 +196,71 @@ object ActionRouter {
                     )
                 }
             }
+
+    /**
+     * Sends a WhatsApp message by **Contact Name** when the contact is not in ContactsContract
+     * or Contacts permission is unavailable:
+     *  1. Checks if there is an active WhatsApp notification from [recipientName] with an inline RemoteInput reply.
+     *  2. Otherwise uses [AppAutomation.sendToContactByName] (recent chats scan -> modern Search bar -> New chat FAB)
+     *     plus [com.jarvis.assistant.accessibility.HumanVisionEyeEngine] Send button fallback!
+     */
+    private suspend fun sendWhatsAppByNameFallback(
+        context: Context,
+        confirmation: ConfirmationGate,
+        recipientName: String,
+        message: String,
+    ): ToolResult {
+        val approved = confirmation.confirm(
+            title = "Send WhatsApp to $recipientName?",
+            detail = "Contact: $recipientName\n“$message”",
+        )
+        if (!approved) {
+            return ToolResult(false, "The owner declined sending the WhatsApp message to $recipientName.")
         }
+
+        // 1. Try 0ms Notification Inline Reply if recipientName recently messaged us on WhatsApp
+        val (inlineSent, inlineDetail) = com.jarvis.assistant.service.JarvisNotificationListenerService
+            .sendInlineReply(recipientName, message, "com.whatsapp")
+        if (inlineSent) {
+            return ToolResult(true, "Sent WhatsApp reply to $recipientName: \"$message\" ($inlineDetail).")
+        }
+
+        // 2. Open WhatsApp and search for recipientName by UI automation
+        val controller = JarvisAccessibilityService.controller()
+        if (controller == null || !JarvisAccessibilityService.isEnabled(context)) {
+            val pm = context.packageManager
+            val launchIntent = pm.getLaunchIntentForPackage(AppRegistry.PACKAGE_WHATSAPP)
+                ?: pm.getLaunchIntentForPackage(AppRegistry.PACKAGE_WHATSAPP_BUSINESS)
+                ?: return ToolResult(false, "WhatsApp is not installed on this phone.")
+            launchIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            runCatching { context.startActivity(launchIntent) }
+            return ToolResult(
+                true,
+                "Opened WhatsApp to message $recipientName. Enable Jarvis in Accessibility Settings so I can search for \"$recipientName\" and press Send automatically.",
+            )
+        }
+
+        val sent = AppAutomation.sendToContactByName(
+            controller = controller,
+            contactName = recipientName,
+            message = message,
+        )
+        if (sent.success) {
+            return ToolResult(true, sent.message)
+        }
+
+        // Vision Eye fallback if the message is typed in the chat composer and only Send needs to be tapped
+        val service = JarvisAccessibilityService.serviceInstance()
+        if (service != null) {
+            val (dispW, dispH) = service.getScreenDimensions()
+            val bmp = runCatching { service.captureScreenshotBitmap(1_000) }.getOrNull()
+            val sendSpot = com.jarvis.assistant.accessibility.HumanVisionEyeEngine
+                .findSendOrFabButton(bmp, dispW, dispH)
+            if (sendSpot != null && AppAutomation.tapSpot(sendSpot)) {
+                return ToolResult(true, "Searched WhatsApp for \"$recipientName\", opened their chat, and sent: \"$message\".")
+            }
+        }
+        return ToolResult(sent.success, sent.message)
     }
 
     /**

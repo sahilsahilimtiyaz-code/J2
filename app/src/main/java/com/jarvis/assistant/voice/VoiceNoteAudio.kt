@@ -155,7 +155,13 @@ class VoiceNoteStudio(
             }
 
             // SYSTEM provider, or the explicit fallback after a cloud failure.
-            val spoken = systemTts.synthesizeToFile(clean, file, config.language)
+            val spoken = systemTts.synthesizeToFile(
+                text = clean,
+                file = file,
+                language = config.language,
+                gender = config.systemVoiceGender,
+                speed = config.speed,
+            )
             if (spoken && file.length() > PcmWav.HEADER_BYTES) {
                 val pcmBytes = (file.length() - PcmWav.HEADER_BYTES).toInt().coerceAtLeast(0)
                 val sampleRate = readWavSampleRate(file) ?: SYSTEM_SAMPLE_RATE

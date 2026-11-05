@@ -75,9 +75,12 @@ import com.jarvis.assistant.brain.LocalModelDownloadStatus
 import com.jarvis.assistant.brain.LocalModelSpec
 import com.jarvis.assistant.brain.ProviderKind
 import java.util.Locale
+import androidx.compose.ui.graphics.Color
+import com.jarvis.assistant.settings.HudColorTheme
 import com.jarvis.assistant.settings.OwnerProfile
 import com.jarvis.assistant.settings.ProviderPreset
 import com.jarvis.assistant.settings.ProviderSettings
+import com.jarvis.assistant.settings.SystemVoiceGender
 import com.jarvis.assistant.settings.VoiceProvider
 import com.jarvis.assistant.settings.defaultPresetFor
 import com.jarvis.assistant.settings.presetsFor
@@ -1468,6 +1471,43 @@ private fun PersonaEditor(
             )
 
             Text(
+                text = "Orb & Bottom Bar Color Theme",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                text = "Instantly change the color of the J.A.R.V.I.S. Orb, Bottom Bar, and HUD accents (IM3 Video, Blue, Sky Blue, White, Red, Purple, Violet, Emerald, Gold).",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(HudColorTheme.entries.toList(), key = { it.name }) { themeOption ->
+                    val selected = persona.hudColorTheme == themeOption
+                    FilterChip(
+                        selected = selected,
+                        onClick = { viewModel.setHudColorTheme(themeOption) },
+                        leadingIcon = {
+                            Box(
+                                modifier = Modifier
+                                    .size(12.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(themeOption.primaryHex)),
+                            )
+                        },
+                        label = { Text(themeOption.label) },
+                    )
+                }
+            }
+
+            HorizontalDivider(
+                modifier = Modifier.padding(vertical = 4.dp),
+                color = MaterialTheme.colorScheme.outlineVariant,
+            )
+
+            Text(
                 text = "Voice and prompt",
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.primary,
@@ -1707,6 +1747,7 @@ private fun VoiceSettingsCard(
     var fallback by remember(voice.fallbackToSystem) { mutableStateOf(voice.fallbackToSystem) }
     var language by remember(voice.language) { mutableStateOf(voice.language) }
     var continuousListening by remember(voice.continuousListening) { mutableStateOf(voice.continuousListening) }
+    var systemVoiceGender by remember(voice.systemVoiceGender) { mutableStateOf(voice.systemVoiceGender) }
     var revealKey by remember { mutableStateOf(false) }
 
     val hasKeyForProvider = voice.hasSavedKeyFor(provider)
@@ -1808,6 +1849,29 @@ private fun VoiceSettingsCard(
                 shape = RoundedCornerShape(14.dp),
             )
 
+            Text(
+                text = "System Voice Gender (Male J.A.R.V.I.S. / Female F.R.I.D.A.Y.)",
+                style = MaterialTheme.typography.labelMedium,
+                color = JarvisPalette.CyanBright,
+            )
+            Text(
+                text = "Selects resonant British baritone neural voice for Male (real J.A.R.V.I.S. cadence) or British/Neural female voice for Female.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SystemVoiceGender.entries.forEach { genderOption ->
+                    FilterChip(
+                        selected = systemVoiceGender == genderOption,
+                        onClick = {
+                            systemVoiceGender = genderOption
+                            viewModel.setSystemVoiceGender(genderOption)
+                        },
+                        label = { Text(genderOption.label) },
+                    )
+                }
+            }
+
             Column {
                 Text("Speed: ${"%.2f".format(speed)}", style = MaterialTheme.typography.labelSmall)
                 Slider(value = speed, onValueChange = { speed = it }, valueRange = 0.5f..2.0f)
@@ -1850,6 +1914,7 @@ private fun VoiceSettingsCard(
                         language = language,
                         apiKey = apiKey,
                         continuousListening = continuousListening,
+                        systemVoiceGender = systemVoiceGender,
                     )
                     apiKey = ""
                 }) { Text("Save voice") }
@@ -1862,6 +1927,7 @@ private fun VoiceSettingsCard(
                         language = language,
                         apiKey = apiKey,
                         continuousListening = continuousListening,
+                        systemVoiceGender = systemVoiceGender,
                     )
                     apiKey = ""
                 }) { Text("Test voice") }
