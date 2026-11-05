@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -192,6 +193,11 @@ fun JarvisApp(vm: JarvisViewModel = viewModel()) {
                                 onActOnSharedContent = vm::actOnSharedContent,
                                 onClearSharedContent = vm::clearSharedContent,
                                 onSelectColorTheme = vm::setHudColorTheme,
+                                onToggleFloatingHud = vm::toggleFloatingHud,
+                                onHoldCallLine = vm::holdActiveCallLine,
+                                onTakeCallMessage = vm::takeActiveCallMessage,
+                                onSpeakIntoCall = vm::speakIntoActiveCall,
+                                onEndCallSession = vm::endActiveCallSession,
                             )
 
                             JarvisTab.MEMORY -> MemoryScreen(
@@ -299,8 +305,9 @@ fun JarvisApp(vm: JarvisViewModel = viewModel()) {
 
                     ConfirmationOverlay(
                         pending = if (state.poweredOn) state.pendingConfirmation else null,
-                        onApprove = vm::approveConfirmation,
-                        onAlwaysAllow = vm::approveAndAlwaysAllowConfirmation,
+                        onApprove = { editedDraft -> vm.approveConfirmation(editedDraft) },
+                        onAlwaysAllow = { editedDraft -> vm.approveAndAlwaysAllowConfirmation(editedDraft) },
+                        onPreviewVoice = { draftText -> vm.previewConfirmationDraft(draftText) },
                         onReject = vm::rejectConfirmation,
                     )
                 }
@@ -349,13 +356,18 @@ private fun QuickPanelEmptyDrag(
 @Composable
 private fun ConfirmationOverlay(
     pending: PendingConfirmation?,
-    onApprove: () -> Unit,
-    onAlwaysAllow: () -> Unit = onApprove,
+    onApprove: (String?) -> Unit,
+    onAlwaysAllow: (String?) -> Unit = onApprove,
+    onPreviewVoice: (String) -> Unit = {},
     onReject: () -> Unit,
 ) {
     var lastShown by remember { mutableStateOf<PendingConfirmation?>(null) }
-    LaunchedEffect(pending) {
-        if (pending != null) lastShown = pending
+    var draftMessage by remember { mutableStateOf("") }
+    LaunchedEffect(pending?.id) {
+        if (pending != null) {
+            lastShown = pending
+            draftMessage = pending.editableDraftText
+        }
     }
 
     AnimatedVisibility(
@@ -368,31 +380,54 @@ private fun ConfirmationOverlay(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.62f)),
+                    .background(Color.Black.copy(alpha = 0.66f)),
                 contentAlignment = Alignment.Center,
             ) {
                 GlassPanel(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 26.dp),
+                        .padding(horizontal = 22.dp),
                     accent = JarvisPalette.Amber,
                     corner = 24.dp,
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        HudIcon(
-                            glyph = HudGlyph.BOLT,
-                            color = JarvisPalette.Amber,
-                            modifier = Modifier.size(16.dp),
-                            weight = 1.8.dp,
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = "CONFIRMATION REQUIRED",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = JarvisPalette.Amber,
-                            letterSpacing = 2.sp,
-                        )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            HudIcon(
+                                glyph = HudGlyph.BOLT,
+                                color = JarvisPalette.Amber,
+                                modifier = Modifier.size(16.dp),
+                                weight = 1.8.dp,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = shown.actionCategory.ifBlank { "CONFIRMATION REQUIRED" },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = JarvisPalette.Amber,
+                                letterSpacing = 1.8.sp,
+                            )
+                        }
+                        if (shown.recipientLabel.isNotBlank()) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(JarvisPalette.CyanBright.copy(alpha = 0.14f))
+                                    .border(1.dp, JarvisPalette.CyanBright.copy(alpha = 0.45f), RoundedCornerShape(50))
+                                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                            ) {
+                                Text(
+                                    text = "TO: ${shown.recipientLabel}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = JarvisPalette.CyanBright,
+                                    fontSize = 10.sp,
+                                )
+                            }
+                        }
                     }
+
                     Spacer(Modifier.height(12.dp))
                     Text(
                         text = shown.title,
@@ -407,18 +442,46 @@ private fun ConfirmationOverlay(
                             color = JarvisPalette.TextDim,
                         )
                     }
-                    Spacer(Modifier.height(18.dp))
+
+                    // Interactive Editable Message / Voice Note Preview Box (Phase 2)
+                    if (shown.editableDraftText.isNotBlank()) {
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = draftMessage,
+                            onValueChange = { draftMessage = it },
+                            label = {
+                                Text(
+                                    text = if (shown.isVoiceNote) "Editable Voice Note Script" else "Editable Message Content",
+                                    fontSize = 11.sp,
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            maxLines = 4,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        ConfirmationButton(
+                            label = if (shown.isVoiceNote) "🔊 Listen Voice Note Preview" else "🔊 Speak Draft Aloud",
+                            filled = false,
+                            onClick = { onPreviewVoice(draftMessage.ifBlank { shown.editableDraftText }) },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+                    val effectiveEdited = draftMessage.trim().takeIf {
+                        shown.editableDraftText.isNotBlank() && it.isNotBlank() && it != shown.editableDraftText
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         ConfirmationButton(
-                            label = "No",
+                            label = "Cancel",
                             filled = false,
                             onClick = onReject,
                             modifier = Modifier.weight(1f),
                         )
                         ConfirmationButton(
-                            label = "Yes, do it",
+                            label = if (shown.editableDraftText.isNotBlank()) "Send Now" else "Yes, do it",
                             filled = true,
-                            onClick = onApprove,
+                            onClick = { onApprove(effectiveEdited) },
                             modifier = Modifier.weight(1f),
                         )
                     }
@@ -426,7 +489,7 @@ private fun ConfirmationOverlay(
                     ConfirmationButton(
                         label = "Always Allow (Don't Ask Again)",
                         filled = false,
-                        onClick = onAlwaysAllow,
+                        onClick = { onAlwaysAllow(effectiveEdited) },
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }

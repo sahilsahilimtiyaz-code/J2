@@ -37,6 +37,10 @@ data class PendingConfirmation(
     val id: String,
     val title: String,
     val detail: String,
+    val recipientLabel: String = "",
+    val actionCategory: String = "",
+    val editableDraftText: String = "",
+    val isVoiceNote: Boolean = false,
 )
 
 /** A runtime permission Jarvis needs before it can finish a tool call. */
@@ -101,6 +105,10 @@ data class JarvisUiState(
     val conversationSearchHits: List<com.jarvis.assistant.memory.MessageEntity> = emptyList(),
     val localModels: Map<String, com.jarvis.assistant.brain.LocalModelDownloadStatus> = emptyMap(),
     val freeStorageBytes: Long = 0L,
+    val liveCallSession: com.jarvis.assistant.core.LiveCallSessionState =
+        com.jarvis.assistant.core.LiveCallSessionState(),
+    val visionReticle: com.jarvis.assistant.core.VisionTargetReticleState =
+        com.jarvis.assistant.core.VisionTargetReticleState(),
 ) {
     val showSettings: Boolean
         get() = tab == JarvisTab.SETTINGS

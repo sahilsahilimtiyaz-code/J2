@@ -97,9 +97,11 @@ object ActionRouter {
                     return ToolResult(false, "The owner declined sending the WhatsApp message to ${contactMatch.contactName}.")
                 }
 
+                val finalMessage = confirmation.consumeEditedDraft()?.takeIf { it.isNotBlank() } ?: message
+
                 // Step 3: Tier 1 Intent - Launch wa.me deep link
                 Log.i(TAG, "ActionRouter [TIER 1]: Launching wa.me deep link for ${contactMatch.normalizedNumber}")
-                val intent = AppRegistry.createWhatsAppIntent(context, contactMatch.normalizedNumber, message)
+                val intent = AppRegistry.createWhatsAppIntent(context, contactMatch.normalizedNumber, finalMessage)
                 val launched = runCatching { context.startActivity(intent); true }.getOrDefault(false)
 
                 if (!launched) {
@@ -218,11 +220,13 @@ object ActionRouter {
             return ToolResult(false, "The owner declined sending the WhatsApp message to $recipientName.")
         }
 
+        val finalMessage = confirmation.consumeEditedDraft()?.takeIf { it.isNotBlank() } ?: message
+
         // 1. Try 0ms Notification Inline Reply if recipientName recently messaged us on WhatsApp
         val (inlineSent, inlineDetail) = com.jarvis.assistant.service.JarvisNotificationListenerService
-            .sendInlineReply(recipientName, message, "com.whatsapp")
+            .sendInlineReply(recipientName, finalMessage, "com.whatsapp")
         if (inlineSent) {
-            return ToolResult(true, "Sent WhatsApp reply to $recipientName: \"$message\" ($inlineDetail).")
+            return ToolResult(true, "Sent WhatsApp reply to $recipientName: \"$finalMessage\" ($inlineDetail).")
         }
 
         // 2. Open WhatsApp and search for recipientName by UI automation
@@ -243,7 +247,7 @@ object ActionRouter {
         val sent = AppAutomation.sendToContactByName(
             controller = controller,
             contactName = recipientName,
-            message = message,
+            message = finalMessage,
         )
         if (sent.success) {
             return ToolResult(true, sent.message)

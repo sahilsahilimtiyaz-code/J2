@@ -29,6 +29,7 @@ data class ToolAvailability(
  */
 interface ConfirmationGate {
     suspend fun confirm(title: String, detail: String): Boolean
+    fun consumeEditedDraft(): String? = null
 }
 
 /** Requests an Android runtime permission and suspends until the owner answers. */

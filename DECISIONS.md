@@ -610,3 +610,10 @@
 - **Why WhatsApp Call Pickup Needed a 5-Rung Pipeline + Vision Eye (`WhatsAppCallAgent.kt`, `VisualIntelligence.kt`):**
   - WhatsApp renders its incoming call screen differently across locked/unlocked states and One UI versions (sometimes a heads-up notification with an `"Answer"` action `PendingIntent`, sometimes a full-screen activity where the `"Answer"` label is on a non-clickable child view or a custom-drawn green canvas button that requires an upward swipe).
   - Combining (1) Notification Action `PendingIntent`, (2) View ID + ancestor click, (3) Label match + upward swipe, (4) `HumanVisionEyeEngine.findGreenAnswerButton` (HSV green cluster detection on a live `takeScreenshot()` bitmap), and (5) geometric bottom-right/center tap + upward swipe ensures the Answer button is clicked first before enabling speakerphone and greeting the caller.
+
+## 2026-11-05 (Part 2) — Deterministic Intent Safety Gate, Terminal Cancellation Tokens & Phases 1–5 Upgrades
+
+- **Semantic Intent Gate Before Tool Routing & Planning (`IntentGate.kt`, `AgentLoop.kt`, `TaskPlanner.kt`):**
+  - Capability questions (*"Are you able to..."*, *"Can you..."*), informational questions (*"How would you..."*), and hypotheticals (*"What happens if..."*) are classified by `IntentGate.classify` before `OfflineTaskRouter`, `TaskPlanner`, or `AgentLoop` tool execution. When `analysis.isNonExecutionInquiry` is true, tool declarations are withheld and `IntentGate.validateToolCall` blocks any hallucinated tool invocation.
+- **Keep Workspace Free of Build Binary Bloat for GitHub Sync (`app/build.gradle.kts`):**
+  - Decoded `debug.keystore` into `java.io.tmpdir` (`/tmp/jarvis-debug.keystore`) instead of the repository root and cleaned Gradle build outputs (`app/build`, `.build-outputs`, `.gradle`) after local verification so pushing commits to GitHub from AI Studio never hits GitHub API payload size limits.

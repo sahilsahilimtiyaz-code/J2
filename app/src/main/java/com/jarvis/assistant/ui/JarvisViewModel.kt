@@ -92,7 +92,15 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
                         notice = runtime.notice,
                         voiceStatus = runtime.voiceStatus,
                         pendingConfirmation = runtime.pendingConfirmation?.let {
-                            PendingConfirmation(it.id, it.title, it.detail)
+                            PendingConfirmation(
+                                id = it.id,
+                                title = it.title,
+                                detail = it.detail,
+                                recipientLabel = it.recipientLabel,
+                                actionCategory = it.actionCategory,
+                                editableDraftText = it.editableDraftText,
+                                isVoiceNote = it.isVoiceNote,
+                            )
                         },
                         pendingPermission = runtime.pendingPermission?.let {
                             PendingPermission(it.permission, it.rationale)
@@ -109,6 +117,8 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
                         poweredOn = runtime.poweredOn,
                         activePlan = runtime.activePlan,
                         sharedPayload = runtime.sharedPayload,
+                        liveCallSession = runtime.liveCallSession,
+                        visionReticle = runtime.visionReticle,
                     )
                 }
             }
@@ -429,11 +439,22 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
         send(prompt)
     }
 
-    fun approveConfirmation() = core.approveConfirmation()
+    fun approveConfirmation(editedDraft: String? = null) = core.approveConfirmation(editedDraft)
 
-    fun approveAndAlwaysAllowConfirmation() = core.approveAndAlwaysAllowConfirmation()
+    fun approveAndAlwaysAllowConfirmation(editedDraft: String? = null) =
+        core.approveAndAlwaysAllowConfirmation(editedDraft)
+
+    fun previewConfirmationDraft(draftText: String) = core.previewConfirmationDraft(draftText)
 
     fun rejectConfirmation() = core.rejectConfirmation()
+
+    fun holdActiveCallLine() = core.holdActiveCallLine()
+
+    fun takeActiveCallMessage() = core.takeActiveCallMessage()
+
+    fun speakIntoActiveCall(customLine: String) = core.speakIntoActiveCall(customLine)
+
+    fun endActiveCallSession() = core.endWhatsAppCallSessionFromUi()
 
     fun onPermissionResult(granted: Boolean) {
         core.onPermissionResult(granted)

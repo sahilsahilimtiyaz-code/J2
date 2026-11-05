@@ -443,6 +443,13 @@ internal class WhatsAppCallConversation(
     private val speakOut: suspend (String) -> Boolean,
     private val listenOnce: suspend () -> String,
     private val onLog: (detail: String, success: Boolean) -> Unit,
+    private val onSessionUpdate: (
+        turnIndex: Int,
+        maxTurns: Int,
+        callerUtterance: String,
+        jarvisReply: String,
+        statusText: String,
+    ) -> Unit = { _, _, _, _, _ -> },
 ) {
 
     private var silentPasses = 0
@@ -456,13 +463,13 @@ internal class WhatsAppCallConversation(
 
     suspend fun run(): ScreenResult {
         val turns = maxTurns.coerceIn(2, 12)
+        val greetingLine = "Hello, this is Jarvis, speaking for $ownerAddress. " +
+            "${ownerAddress.replaceFirstChar { char -> char.uppercase() }} " +
+            "is not available at the moment. I am happy to help: what did you wish " +
+            "to say, or shall I take a message?"
         onLog("Call connected — introducing Jarvis on sir's behalf.", true)
-        speakOut(
-            "Hello, this is Jarvis, speaking for $ownerAddress. " +
-                "${ownerAddress.replaceFirstChar { char -> char.uppercase() }} " +
-                "is not available at the moment. I am happy to help: what did you wish " +
-                "to say, or shall I take a message?",
-        )
+        onSessionUpdate(1, turns, "", greetingLine, "Introducing Jarvis on speakerphone...")
+        speakOut(greetingLine)
 
         val history = mutableListOf<String>()
         var completedTurns = 0
@@ -482,31 +489,34 @@ internal class WhatsAppCallConversation(
                 )
             }
 
+            onSessionUpdate(turn + 1, turns, "", "", "Listening to caller (Turn ${turn + 1}/$turns)...")
             val heard = listenOnce()
             val caller = WhatsAppCallAutomation.sanitizeCallerText(heard)
             if (caller.length < 2) {
                 silentPasses++
                 if (silentPasses >= 2) {
                     onLog("No caller audio heard on two passes; leaving the courtesy line.", false)
-                    speakOut(
-                        "I am still here when you are ready. " +
-                            "I will make sure $ownerAddress sees that you called. Goodbye.",
-                    )
+                    val farewell = "I am still here when you are ready. " +
+                        "I will make sure $ownerAddress sees that you called. Goodbye."
+                    onSessionUpdate(turn + 1, turns, "(Silence)", farewell, "Closing silent call politely...")
+                    speakOut(farewell)
                     break
                 }
+                onSessionUpdate(turn + 1, turns, "(Quiet line)", "Are you still there?", "Checking if caller is on the line...")
                 speakOut("Are you still there?")
                 continue
             }
             silentPasses = 0
             history += caller
             onLog("Caller: \"${caller.take(160)}\"", true)
+            onSessionUpdate(turn + 1, turns, caller, "", "Synthesizing reply to caller...")
 
             if (WhatsAppCallAutomation.isFarewell(caller)) {
                 onLog("The caller is wrapping up.", true)
-                speakOut(
-                    "Very good. I will pass that on to $ownerAddress straight away. " +
-                        "Thank you for calling. Goodbye.",
-                )
+                val closing = "Very good. I will pass that on to $ownerAddress straight away. " +
+                    "Thank you for calling. Goodbye."
+                onSessionUpdate(turn + 1, turns, caller, closing, "Wrapping up call...")
+                speakOut(closing)
                 completedTurns++
                 break
             }
@@ -518,6 +528,7 @@ internal class WhatsAppCallConversation(
                 ?: "Pardon me, the line is a touch poor. Could you say that once more?"
             history += "Jarvis: $reply"
             onLog("Jarvis: \"${reply.take(160)}\"", true)
+            onSessionUpdate(turn + 1, turns, caller, reply, "Speaking to caller (Turn ${turn + 1}/$turns)...")
             speakOut(reply)
             completedTurns++
         }
@@ -526,10 +537,10 @@ internal class WhatsAppCallConversation(
             val lastHeard = WhatsAppCallAutomation.sanitizeCallerText(listenOnce())
             if (lastHeard.length > 2 && !WhatsAppCallAutomation.isFarewell(lastHeard)) {
                 onLog("Final caller words: \"${lastHeard.take(120)}\"", true)
-                speakOut(
-                    "Understood — message taken. I will make sure $ownerAddress gets it. " +
-                        "Thank you for calling. Goodbye.",
-                )
+                val finalClosing = "Understood — message taken. I will make sure $ownerAddress gets it. " +
+                    "Thank you for calling. Goodbye."
+                onSessionUpdate(turns, turns, lastHeard, finalClosing, "Confirming message & closing call...")
+                speakOut(finalClosing)
             }
         }
 
@@ -550,3 +561,4 @@ internal class WhatsAppCallConversation(
         )
     }
 }
+

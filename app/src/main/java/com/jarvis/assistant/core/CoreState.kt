@@ -21,6 +21,30 @@ data class PendingConfirmation(
     val id: String,
     val title: String,
     val detail: String,
+    val recipientLabel: String = "",
+    val actionCategory: String = "",
+    val editableDraftText: String = "",
+    val isVoiceNote: Boolean = false,
+)
+
+data class LiveCallSessionState(
+    val active: Boolean = false,
+    val callerName: String = "",
+    val appLabel: String = "WhatsApp",
+    val turnIndex: Int = 0,
+    val maxTurns: Int = 6,
+    val lastCallerUtterance: String = "",
+    val lastJarvisReply: String = "",
+    val statusText: String = "",
+)
+
+data class VisionTargetReticleState(
+    val active: Boolean = false,
+    val x: Int = 0,
+    val y: Int = 0,
+    val targetLabel: String = "",
+    val verified: Boolean = false,
+    val timestampMs: Long = 0L,
 )
 
 data class PendingPermission(
@@ -72,4 +96,9 @@ data class CoreState(
     val activePlan: com.jarvis.assistant.brain.TaskPlan? = null,
     /** Content shared into Jarvis via Android Share Sheet or text selection. */
     val sharedPayload: com.jarvis.assistant.brain.SharedContentPayload? = null,
+    /** Phase 1: Live two-way call companion state when Jarvis is on a WhatsApp/voice call. */
+    val liveCallSession: LiveCallSessionState = LiveCallSessionState(),
+    /** Phase 3: Vision Eye live target reticle coordinates and node label during screen control. */
+    val visionReticle: VisionTargetReticleState = VisionTargetReticleState(),
 )
+

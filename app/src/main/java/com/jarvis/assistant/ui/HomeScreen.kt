@@ -162,6 +162,11 @@ fun HomeScreen(
     onActOnSharedContent: (String) -> Unit = {},
     onClearSharedContent: () -> Unit = {},
     onSelectColorTheme: (HudColorTheme) -> Unit = {},
+    onToggleFloatingHud: () -> Unit = {},
+    onHoldCallLine: () -> Unit = {},
+    onTakeCallMessage: () -> Unit = {},
+    onSpeakIntoCall: (String) -> Unit = {},
+    onEndCallSession: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -275,14 +280,61 @@ fun HomeScreen(
                     else -> JarvisPalette.Success
                 },
                 trailing = {
-                    HudIconButton(
-                        glyph = HudGlyph.GEAR,
-                        contentDescription = "Settings",
-                        onClick = { onSelectTab(JarvisTab.SETTINGS) },
-                        size = 36.dp,
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        // Phase 5: One-tap Floating Mini-Orb Overlay Bubble toggle
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(
+                                    if (state.floatingHudActive) {
+                                        JarvisPalette.CyanBright.copy(alpha = 0.22f)
+                                    } else {
+                                        JarvisPalette.Panel.copy(alpha = 0.85f)
+                                    },
+                                )
+                                .border(
+                                    1.dp,
+                                    if (state.floatingHudActive) JarvisPalette.CyanBright else JarvisPalette.Cyan.copy(alpha = 0.35f),
+                                    RoundedCornerShape(50),
+                                )
+                                .clickable(onClick = onToggleFloatingHud)
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                        ) {
+                            Text(
+                                text = if (state.floatingHudActive) "ORB HUD ON" else "ORB HUD",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (state.floatingHudActive) JarvisPalette.CyanBright else JarvisPalette.Ice,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        HudIconButton(
+                            glyph = HudGlyph.GEAR,
+                            contentDescription = "Settings",
+                            onClick = { onSelectTab(JarvisTab.SETTINGS) },
+                            size = 36.dp,
+                        )
+                    }
                 },
             )
+
+            // Phase 1: Live Two-Way Call Companion HUD Banner when Jarvis is handling a WhatsApp/voice call
+            AnimatedVisibility(
+                visible = state.liveCallSession.active,
+                enter = fadeIn(tween(180)) + slideInVertically(tween(180)) { -it / 2 },
+                exit = fadeOut(tween(150)) + slideOutVertically(tween(150)) { -it / 2 },
+            ) {
+                LiveCallCompanionBanner(
+                    session = state.liveCallSession,
+                    onHoldLine = onHoldCallLine,
+                    onTakeMessage = onTakeCallMessage,
+                    onSpeakIntoCall = onSpeakIntoCall,
+                    onEndCall = onEndCallSession,
+                )
+            }
 
             // Visible Stop Control Banner whenever multi-step screen automation is running
             AnimatedVisibility(
@@ -294,6 +346,7 @@ fun HomeScreen(
                     step = state.screenAutomationStep,
                     maxSteps = state.screenAutomationMaxSteps,
                     statusText = state.screenAutomationStatus ?: "Jarvis is controlling the screen",
+                    reticle = state.visionReticle,
                     onStop = onStopScreenAutomation,
                 )
             }
@@ -504,10 +557,102 @@ fun HomeScreen(
 }
 
 @Composable
+private fun LiveCallCompanionBanner(
+    session: com.jarvis.assistant.core.LiveCallSessionState,
+    onHoldLine: () -> Unit,
+    onTakeMessage: () -> Unit,
+    onSpeakIntoCall: (String) -> Unit,
+    onEndCall: () -> Unit,
+) {
+    GlassPanel(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        accent = JarvisPalette.Success,
+        corner = 18.dp,
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                StatusDot(color = JarvisPalette.Success, pulsing = true, size = 8.dp)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "LIVE ${session.appLabel.uppercase()} CALL BRIDGE · TURN ${session.turnIndex}/${session.maxTurns}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = JarvisPalette.Success,
+                    letterSpacing = 1.3.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                )
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(JarvisPalette.Danger)
+                        .clickable(onClick = onEndCall)
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
+                ) {
+                    Text(
+                        text = "END CALL",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 10.sp,
+                    )
+                }
+            }
+
+            Text(
+                text = "Caller: ${session.callerName.ifBlank { "Active Caller" }} · ${session.statusText}",
+                style = MaterialTheme.typography.bodySmall,
+                color = JarvisPalette.Ice,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+
+            if (session.lastCallerUtterance.isNotBlank()) {
+                Text(
+                    text = "Caller said: “${session.lastCallerUtterance}”",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = JarvisPalette.CyanBright,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (session.lastJarvisReply.isNotBlank()) {
+                Text(
+                    text = "Jarvis replied: “${session.lastJarvisReply}”",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = JarvisPalette.TextDim,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                VoiceSuggestionChip("Hold Line") { onHoldLine() }
+                VoiceSuggestionChip("Take Message") { onTakeMessage() }
+                VoiceSuggestionChip("I'm Coming Now") {
+                    onSpeakIntoCall("Sir is right here and picking up the phone now. One moment please.")
+                }
+                VoiceSuggestionChip("Call Back in 10m") {
+                    onSpeakIntoCall("Sir is in a meeting right now and will call you back in ten minutes.")
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ScreenAutomationStopBanner(
     step: Int,
     maxSteps: Int,
     statusText: String,
+    reticle: com.jarvis.assistant.core.VisionTargetReticleState = com.jarvis.assistant.core.VisionTargetReticleState(),
     onStop: () -> Unit,
 ) {
     GlassPanel(
@@ -518,49 +663,73 @@ private fun ScreenAutomationStopBanner(
         corner = 18.dp,
         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            StatusDot(color = JarvisPalette.Danger, pulsing = true, size = 8.dp)
-            Spacer(Modifier.width(10.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "JARVIS IS CONTROLLING THE SCREEN · STEP $step/$maxSteps",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = JarvisPalette.Amber,
-                    letterSpacing = 1.4.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = statusText,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = JarvisPalette.Ice,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Spacer(Modifier.width(10.dp))
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(JarvisPalette.Danger)
-                    .clickable(onClick = onStop)
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    HudIcon(
-                        glyph = HudGlyph.STOP,
-                        color = Color.White,
-                        modifier = Modifier.size(14.dp),
-                        weight = 2.dp,
-                    )
-                    Spacer(Modifier.width(5.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                StatusDot(color = JarvisPalette.Danger, pulsing = true, size = 8.dp)
+                Spacer(Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "STOP",
+                        text = "JARVIS IS CONTROLLING THE SCREEN · STEP $step/$maxSteps",
                         style = MaterialTheme.typography.labelSmall,
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.2.sp,
+                        color = JarvisPalette.Amber,
+                        letterSpacing = 1.4.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = statusText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = JarvisPalette.Ice,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(JarvisPalette.Danger)
+                        .clickable(onClick = onStop)
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        HudIcon(
+                            glyph = HudGlyph.STOP,
+                            color = Color.White,
+                            modifier = Modifier.size(14.dp),
+                            weight = 2.dp,
+                        )
+                        Spacer(Modifier.width(5.dp))
+                        Text(
+                            text = "STOP",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.2.sp,
+                        )
+                    }
+                }
+            }
+
+            // Phase 3: Vision Eye Target Reticle Telemetry readout
+            if (reticle.active && (reticle.x > 0 || reticle.y > 0)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(JarvisPalette.Deep.copy(alpha = 0.85f))
+                        .border(1.dp, JarvisPalette.CyanBright.copy(alpha = 0.45f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "🎯 VISION RETICLE LOCKED: (${reticle.x}, ${reticle.y}) · ${reticle.targetLabel}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = JarvisPalette.CyanBright,
+                        fontSize = 10.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }
@@ -1668,34 +1837,55 @@ private fun MessageCard(
                     lineHeight = 22.sp,
                 )
 
-                // Sources / Tools row matching Screen 4
+                // Phase 5: Collapsible Mission Telemetry & Sources Drawer
                 if (!message.isError && (message.tools.isNotEmpty() || message.text.length > 100)) {
+                    var toolsExpanded by remember { mutableStateOf(message.tools.size <= 2) }
                     Spacer(Modifier.height(12.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { toolsExpanded = !toolsExpanded },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         StatusDot(color = JarvisPalette.Success, pulsing = false, size = 6.dp)
                         Spacer(Modifier.width(6.dp))
                         Text(
-                            text = if (message.tools.isNotEmpty()) "Executed Tools" else "Sources & Context",
+                            text = if (message.tools.isNotEmpty()) {
+                                "Executed Tools (${message.tools.size})"
+                            } else {
+                                "Sources & Context"
+                            },
                             style = MaterialTheme.typography.labelSmall,
                             color = JarvisPalette.TextDim,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            text = if (toolsExpanded) "HIDE ▲" else "SHOW ▼",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = JarvisPalette.CyanBright,
+                            fontSize = 9.sp,
                         )
                     }
-                    Spacer(Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        if (message.tools.isNotEmpty()) {
-                            message.tools.forEach { tool ->
-                                SourceBadgeCard(
-                                    kind = "Tool",
-                                    title = tool.replace('_', ' '),
-                                )
+                    AnimatedVisibility(visible = toolsExpanded) {
+                        Column {
+                            Spacer(Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                if (message.tools.isNotEmpty()) {
+                                    message.tools.forEach { tool ->
+                                        SourceBadgeCard(
+                                            kind = "Tool",
+                                            title = tool.replace('_', ' '),
+                                        )
+                                    }
+                                } else {
+                                    SourceBadgeCard(kind = "Memory", title = "Owner Profile")
+                                    SourceBadgeCard(kind = "Engine", title = message.providerName ?: "Neural Core")
+                                    SourceBadgeCard(kind = "System", title = "Live Context")
+                                }
                             }
-                        } else {
-                            SourceBadgeCard(kind = "Memory", title = "Owner Profile")
-                            SourceBadgeCard(kind = "Engine", title = message.providerName ?: "Neural Core")
-                            SourceBadgeCard(kind = "System", title = "Live Context")
                         }
                     }
                 }

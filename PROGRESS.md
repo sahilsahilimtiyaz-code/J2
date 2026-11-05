@@ -584,3 +584,19 @@
 - [x] **Multi-Accent Speech Recognition & British Male J.A.R.V.I.S. / Female F.R.I.D.A.Y. Voices (`SttEngine.kt`, `SystemTtsEngine.kt`, `SettingsScreen.kt`):**
   - Added 16 kHz PCM Automatic Gain Control (AGC) + consonant pre-emphasis filter (`y[n] = x[n] - 0.94 * x[n-1]`) in `LiveCallAudioAnchor` and multi-accent phonetic phrase normalization in `AndroidSttEngine.pickBestCandidate()`.
   - Upgraded `SystemTtsEngine` to bind to Google Speech Services (`com.google.android.tts`), scoring British English neural baritone voices (`en-gb-x-rjs`, `en-gb-x-gbd`, `pitch = 0.90f`, `rate = speed * 1.04f`) for **Male (J.A.R.V.I.S.)** and British/Neural female voices (`en-gb-x-gba`, `en-gb-x-gbc`, `pitch = 1.05f`) for **Female (F.R.I.D.A.Y.)**, selectable in Settings → Voice Settings or by voice.
+
+## 2026-11-05 (Part 2) — Critical Voice Intelligence & Automation Repair + High-Effort Upgrade Phases 1–5
+
+- [x] **Semantic Intent Classification & Deterministic Execution Safety Gate (`IntentGate.kt`, `TaskPlanner.kt`, `LocalAiModels.kt`, `AgentLoop.kt`):**
+  - Distinguishes capability questions, informational questions, hypothetical scenarios, cancellations/corrections, and executable commands so non-command questions never trigger WhatsApp or screen automation.
+  - Enforces recipient/content validation, self-recipient (`"myself"` / `"Message yourself"`) isolation, and terminal mission cancellation tokens (`activeMissionEpoch`).
+- [x] **Phase 1 — Live Two-Way Call Conversation & Call Screening Bridge (`WhatsAppCallAgent.kt`, `CoreState.kt`, `HomeScreen.kt`, `JarvisCore.kt`):**
+  - Added `LiveCallSessionState` and `LiveCallCompanionBanner` with real-time turn tracking and bridge controls (**Hold Line**, **Take Message**, **Say "I'm Coming Now"**, **Say "Call Back in 10m"**, **End Call**).
+- [x] **Phase 2 — Interactive Confirmation & Editable Voice Note Preview (`JarvisApp.kt`, `JarvisCore.kt`, `SystemMissionTools.kt`, `ActionRouter.kt`):**
+  - Upgraded `ConfirmationOverlay` with recipient badge (`TO: <Recipient>`), editable message/voice-note draft box, and **`🔊 Listen Voice Note Preview`** button.
+- [x] **Phase 3 — Vision Eye Target Reticle & Learned Deep Navigation Shortcuts (`AppDestinations.kt`, `HomeScreen.kt`, `JarvisCore.kt`):**
+  - Added live `VisionTargetReticleState` (`🎯 VISION RETICLE LOCKED: (x, y)`) in `ScreenAutomationStopBanner` and learned navigation maps for WhatsApp (`myself`, `calls`, `updates`) and Instagram (`dm`, `profile`).
+- [x] **Phase 4 — Phonetic/Hinglish Accent Normalizer & 0ms Local Phrase Audio Cache (`VoiceIntelligenceEnhancer.kt`, `JarvisCore.kt`):**
+  - Added `PhoneticAccentNormalizer` for Indian/British English STT mishearings and `VoicePhraseAudioCache` for 0ms local playback of frequent J.A.R.V.I.S. phrases.
+- [x] **Phase 5 — Iron Man HUD Experience Upgrades (`HomeScreen.kt`, `JarvisCore.kt`):**
+  - Added top-bar **`ORB HUD`** floating overlay toggle, collapsible **`EXECUTED TOOLS`** telemetry drawer in chat cards, and voice protocol macros (*"Red Stealth Protocol"*, *"Combat HUD Protocol"*, *"Mark 42 Protocol"*).

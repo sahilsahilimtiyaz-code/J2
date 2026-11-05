@@ -18,7 +18,7 @@ val ciRunNumber = providers.environmentVariable("GITHUB_RUN_NUMBER").orNull?.toI
 val computedVersionCode = 100 + ciRunNumber
 val computedVersionName = if (ciRunNumber > 0) "1.0.$ciRunNumber" else "1.0.0"
 
-val localDebugKeystore = file("${rootDir}/debug.keystore")
+val localDebugKeystore = file("${System.getProperty("java.io.tmpdir")}/jarvis-debug.keystore")
 val localDebugKeystoreBase64 = file("${rootDir}/debug.keystore.base64")
 if (!localDebugKeystore.exists() && localDebugKeystoreBase64.exists()) {
     runCatching {
@@ -27,9 +27,33 @@ if (!localDebugKeystore.exists() && localDebugKeystoreBase64.exists()) {
     }
 }
 
+val generatedBootAssetsDir = layout.buildDirectory.dir("generated/boot_assets")
+val orbLoopBase64File = file("jarvis_orb_loop.mp4.base64")
+runCatching {
+    if (orbLoopBase64File.exists()) {
+        val cleanB64 = orbLoopBase64File.readText()
+            .lineSequence()
+            .filter { !it.startsWith("#") && !it.startsWith("HEADER") }
+            .joinToString("")
+            .replace(Regex("\\s+"), "")
+        if (cleanB64.length > 64) {
+            val mp4Bytes = Base64.getDecoder().decode(cleanB64)
+            val bootDir = File(generatedBootAssetsDir.get().asFile, "boot").apply { mkdirs() }
+            File(bootDir, "jarvis_orb_loop.mp4").writeBytes(mp4Bytes)
+            File(bootDir, "boot_intro.mp4").writeBytes(mp4Bytes)
+        }
+    }
+}
+
 android {
     namespace = "com.jarvis.assistant"
     compileSdk = 37
+
+    sourceSets {
+        named("main") {
+            assets.srcDir(generatedBootAssetsDir)
+        }
+    }
 
     defaultConfig {
         applicationId = "com.jarvis.assistant"

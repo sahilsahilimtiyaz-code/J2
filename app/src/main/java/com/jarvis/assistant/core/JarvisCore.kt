@@ -310,9 +310,18 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
     val providerTester = ProviderTester(providerRegistry)
     val modelCatalogueService = ModelCatalogueService(httpClient)
 
+    @Volatile
+    private var lastEditedConfirmationDraft: String? = null
+
     private val confirmationGate = object : ConfirmationGate {
         override suspend fun confirm(title: String, detail: String): Boolean =
             requestConfirmation(title, detail)
+
+        override fun consumeEditedDraft(): String? {
+            val draft = lastEditedConfirmationDraft
+            lastEditedConfirmationDraft = null
+            return draft
+        }
     }
 
     private val permissionGate = object : PermissionGate {
@@ -338,6 +347,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
     private val systemTts = SystemTtsEngine(appContext)
     private val fishTts = FishAudioTtsEngine(httpClient)
     private val elevenTts = ElevenLabsTtsEngine(httpClient)
+    private val voicePhraseCache = com.jarvis.assistant.voice.VoicePhraseAudioCache(appContext.cacheDir)
     private val sttEngine = AndroidSttEngine(appContext, micStateMachine)
     private val audioManager = appContext.getSystemService(AudioManager::class.java)
 
@@ -1156,11 +1166,101 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             return true
         }
 
+        // 4. Phase 5: Voice Protocol Macros ("Red Stealth Protocol", "Combat HUD Mode", "Mark 42 Protocol", "Floating Orb")
+        if (lowerTrim.contains("stealth protocol") || lowerTrim.contains("red stealth")) {
+            scope.launch {
+                settingsRepository.update { doc ->
+                    doc.copy(persona = doc.persona.copy(hudColorTheme = HudColorTheme.RED))
+                }
+                val reply = "Red Stealth Protocol engaged, $ownerTitle. HUD and Arc Reactor shifted to Crimson Red."
+                _state.update { state ->
+                    state.copy(
+                        messages = state.messages + listOf(
+                            CoreMessage(id = newId("user"), author = ChatAuthor.USER, text = clean),
+                            CoreMessage(id = newId("reply"), author = ChatAuthor.JARVIS, text = reply, providerName = "Protocol Engine"),
+                        ),
+                        generating = false,
+                        error = null,
+                    )
+                }
+                speak(reply)
+            }
+            return true
+        }
+        if (lowerTrim.contains("combat hud") || lowerTrim.contains("combat protocol") || lowerTrim.contains("combat mode")) {
+            scope.launch {
+                settingsRepository.update { doc ->
+                    doc.copy(persona = doc.persona.copy(hudColorTheme = HudColorTheme.GOLD))
+                }
+                toggleConversationMode(true)
+                val reply = "Combat HUD Protocol online, $ownerTitle. Continuous duplex telemetry and Gold Reactor overdrive active."
+                _state.update { state ->
+                    state.copy(
+                        messages = state.messages + listOf(
+                            CoreMessage(id = newId("user"), author = ChatAuthor.USER, text = clean),
+                            CoreMessage(id = newId("reply"), author = ChatAuthor.JARVIS, text = reply, providerName = "Protocol Engine"),
+                        ),
+                        generating = false,
+                        error = null,
+                    )
+                }
+                speak(reply)
+            }
+            return true
+        }
+        if (lowerTrim.contains("mark 42") || lowerTrim.contains("iron man 3 protocol") || lowerTrim.contains("classic protocol")) {
+            scope.launch {
+                settingsRepository.update { doc ->
+                    doc.copy(persona = doc.persona.copy(hudColorTheme = HudColorTheme.IM3_SEAFOAM))
+                }
+                val reply = "Mark 42 Iron Man 3 Second Screen protocol restored, $ownerTitle."
+                _state.update { state ->
+                    state.copy(
+                        messages = state.messages + listOf(
+                            CoreMessage(id = newId("user"), author = ChatAuthor.USER, text = clean),
+                            CoreMessage(id = newId("reply"), author = ChatAuthor.JARVIS, text = reply, providerName = "Protocol Engine"),
+                        ),
+                        generating = false,
+                        error = null,
+                    )
+                }
+                speak(reply)
+            }
+            return true
+        }
+        if (lowerTrim.contains("floating orb") || lowerTrim.contains("floating hud") || lowerTrim.contains("hud bubble")) {
+            val enable = !lowerTrim.contains("disable") && !lowerTrim.contains("close") && !lowerTrim.contains("stop") && !lowerTrim.contains("off")
+            if (enable) {
+                com.jarvis.assistant.service.JarvisFloatingHudService.start(appContext)
+            } else {
+                com.jarvis.assistant.service.JarvisFloatingHudService.stop(appContext)
+            }
+            val reply = if (enable) {
+                "Floating Arc Reactor bubble deployed, $ownerTitle."
+            } else {
+                "Floating Arc Reactor bubble retracted, $ownerTitle."
+            }
+            _state.update { state ->
+                state.copy(
+                    messages = state.messages + listOf(
+                        CoreMessage(id = newId("user"), author = ChatAuthor.USER, text = clean),
+                        CoreMessage(id = newId("reply"), author = ChatAuthor.JARVIS, text = reply, providerName = "Protocol Engine"),
+                    ),
+                    generating = false,
+                    error = null,
+                )
+            }
+            speakAsync(reply)
+            return true
+        }
+
         return false
     }
 
     fun send(text: String) {
-        val clean = text.trim()
+        val rawTrim = text.trim()
+        if (rawTrim.isEmpty()) return
+        val clean = com.jarvis.assistant.voice.PhoneticAccentNormalizer.normalizeTranscript(rawTrim)
         if (clean.isEmpty()) return
         if (!settings.value.masterEnabled) {
             _state.update { it.copy(error = "Jarvis is switched off. Turn the power switch on in Settings, System.") }
@@ -2009,15 +2109,29 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             return
         }
 
+        // Phase 4: Check 0ms local VoicePhraseAudioCache before making a cloud synthesis request
+        val cachedPhrase = voicePhraseCache.get(config, text)
+        if (cachedPhrase != null) {
+            outbox.send(VoiceSink.Pcm(cachedPhrase.pcmBytes, cachedPhrase.sampleRate, fade = false))
+            return
+        }
+
         var emittedChunks = 0
+        var lastSampleRate = 24_000
+        val cacheBuffer = if (voicePhraseCache.isCacheableSentence(text)) java.io.ByteArrayOutputStream() else null
         var failure: String? = null
         try {
             // Stream every PCM chunk immediately to AudioPlayer with zero buffering holdback!
             engine.synthesize(text, config).collect { chunk ->
                 emittedChunks++
+                lastSampleRate = chunk.sampleRate
+                cacheBuffer?.write(chunk.bytes)
                 outbox.send(VoiceSink.Pcm(chunk.bytes, chunk.sampleRate, fade = false))
             }
             failure = engine.lastError
+            if (failure == null && emittedChunks > 0 && cacheBuffer != null) {
+                voicePhraseCache.put(config, text, cacheBuffer.toByteArray(), lastSampleRate)
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -3033,12 +3147,37 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         if (confirmationDeferred != null) return false
         val deferred = CompletableDeferred<Boolean>()
         confirmationDeferred = deferred
+        lastEditedConfirmationDraft = null
+
+        val lowerTitle = title.lowercase(Locale.ROOT)
+        val isVoiceNote = lowerTitle.contains("voice note") || lowerTitle.contains("voice message")
+        val actionCategory = when {
+            isVoiceNote -> "VOICE NOTE PREVIEW"
+            lowerTitle.contains("whatsapp") -> "WHATSAPP MESSAGE PREVIEW"
+            lowerTitle.contains("sms") || lowerTitle.contains("text") -> "SMS PREVIEW"
+            lowerTitle.contains("call") || lowerTitle.contains("dial") -> "CALL AUTHORIZATION"
+            lowerTitle.contains("delete") || lowerTitle.contains("forget") -> "DELETION SAFETY GATE"
+            else -> "MISSION SAFETY GATE"
+        }
+        val recipientLabel = Regex("(?i)\\bto\\s+([^?]+)\\??")
+            .find(title)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.trim()
+            .orEmpty()
+        val quotedMatch = Regex("[“\"]([^”\"]+)[”\"]").find(detail)
+        val editableDraftText = quotedMatch?.groupValues?.getOrNull(1)?.trim().orEmpty()
+
         _state.update {
             it.copy(
                 pendingConfirmation = PendingConfirmation(
                     id = UUID.randomUUID().toString(),
                     title = title,
                     detail = detail,
+                    recipientLabel = recipientLabel,
+                    actionCategory = actionCategory,
+                    editableDraftText = editableDraftText,
+                    isVoiceNote = isVoiceNote,
                 ),
             )
         }
@@ -3050,14 +3189,20 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         }
     }
 
-    fun approveConfirmation() {
+    fun approveConfirmation(editedDraft: String? = null) {
+        if (!editedDraft.isNullOrBlank()) {
+            lastEditedConfirmationDraft = editedDraft.trim()
+        }
         val deferred = confirmationDeferred
         confirmationDeferred = null
         _state.update { it.copy(pendingConfirmation = null) }
         deferred?.complete(true)
     }
 
-    fun approveAndAlwaysAllowConfirmation() {
+    fun approveAndAlwaysAllowConfirmation(editedDraft: String? = null) {
+        if (!editedDraft.isNullOrBlank()) {
+            lastEditedConfirmationDraft = editedDraft.trim()
+        }
         val deferred = confirmationDeferred
         confirmationDeferred = null
         _state.update {
@@ -3084,7 +3229,14 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         deferred?.complete(true)
     }
 
+    fun previewConfirmationDraft(draftText: String) {
+        val clean = draftText.trim()
+        if (clean.isBlank()) return
+        speakAsync(clean)
+    }
+
     fun rejectConfirmation() {
+        lastEditedConfirmationDraft = null
         val deferred = confirmationDeferred
         confirmationDeferred = null
         _state.update { it.copy(pendingConfirmation = null) }
@@ -3632,6 +3784,21 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                 "Screen control is not enabled. Enable Jarvis in accessibility settings.",
                 verified = false,
             )
+        val cand = controller.findTapCandidates(text).firstOrNull()
+        if (cand != null) {
+            _state.update {
+                it.copy(
+                    visionReticle = VisionTargetReticleState(
+                        active = true,
+                        x = cand.bounds.centerX(),
+                        y = cand.bounds.centerY(),
+                        targetLabel = cand.label.ifBlank { text },
+                        verified = true,
+                        timestampMs = System.currentTimeMillis(),
+                    ),
+                )
+            }
+        }
         return runCatching { controller.tapVerified(text) }
             .getOrElse { ScreenResult(false, "That screen action failed: ${it.message}", verified = false) }
     }
@@ -3676,6 +3843,18 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                 "Screen control is not enabled. Enable Jarvis in accessibility settings.",
                 verified = false,
             )
+        _state.update {
+            it.copy(
+                visionReticle = VisionTargetReticleState(
+                    active = true,
+                    x = x,
+                    y = y,
+                    targetLabel = "Coordinate ($x, $y)",
+                    verified = true,
+                    timestampMs = System.currentTimeMillis(),
+                ),
+            )
+        }
         return runCatching { controller.tapCoordinatesVerified(x, y) }
             .getOrElse { ScreenResult(false, "Coordinate tap failed: ${it.message}", verified = false) }
     }
@@ -3829,12 +4008,13 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         automationJob = null
         NotificationHelper.cancelScreenControlNotification(appContext)
         _state.update {
-            if (it.screenAutomationActive) {
+            if (it.screenAutomationActive || it.visionReticle.active) {
                 it.copy(
                     screenAutomationActive = false,
                     screenAutomationStep = 0,
                     screenAutomationStatus = null,
                     toolActivity = null,
+                    visionReticle = VisionTargetReticleState(),
                     notice = "Screen control stopped.",
                 )
             } else {
@@ -3877,6 +4057,60 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
 
     private fun endWhatsAppCallSession() {
         synchronized(whatsappCallLock) { whatsappCallSessionActive = false }
+        _state.update { it.copy(liveCallSession = LiveCallSessionState()) }
+    }
+
+    /** Phase 1: Live Call Companion Bridge Controls from UI */
+    fun holdActiveCallLine() {
+        val owner = settings.value.profile.title.ifBlank { "sir" }
+        val line = "One moment please, I am connecting you with $owner right now."
+        _state.update {
+            it.copy(
+                liveCallSession = it.liveCallSession.copy(
+                    lastJarvisReply = line,
+                    statusText = "Holding line for $owner...",
+                ),
+            )
+        }
+        scope.launch { speakExternally(line) }
+    }
+
+    fun takeActiveCallMessage() {
+        val owner = settings.value.profile.title.ifBlank { "sir" }
+        val line = "Please state your full message and preferred callback time, and I will log it for $owner immediately."
+        _state.update {
+            it.copy(
+                liveCallSession = it.liveCallSession.copy(
+                    lastJarvisReply = line,
+                    statusText = "Taking caller message...",
+                ),
+            )
+        }
+        scope.launch { speakExternally(line) }
+    }
+
+    fun speakIntoActiveCall(customLine: String) {
+        val clean = customLine.trim()
+        if (clean.isBlank()) return
+        _state.update {
+            it.copy(
+                liveCallSession = it.liveCallSession.copy(
+                    lastJarvisReply = clean,
+                    statusText = "Speaking owner message to caller...",
+                ),
+            )
+        }
+        scope.launch { speakExternally(clean) }
+    }
+
+    fun endWhatsAppCallSessionFromUi() {
+        whatsappCallJob?.cancel()
+        whatsappCallJob = null
+        scope.launch {
+            runCatching { endWhatsAppCallNow() }
+            endWhatsAppCallSession()
+            _state.update { it.copy(toolActivity = null, notice = "Ended active WhatsApp call session.") }
+        }
     }
 
     /**
@@ -4016,7 +4250,22 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             return answer
         }
 
-        _state.update { it.copy(toolActivity = "Talking with the WhatsApp caller...") }
+        val inferredCaller = note?.substringAfter("Caller name on notification:", "")?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: "WhatsApp Caller"
+        _state.update {
+            it.copy(
+                toolActivity = "Talking with $inferredCaller...",
+                liveCallSession = LiveCallSessionState(
+                    active = true,
+                    callerName = inferredCaller,
+                    appLabel = "WhatsApp",
+                    turnIndex = 1,
+                    maxTurns = current.safety.callAssistantMaxTurns,
+                    statusText = "Connected on speakerphone...",
+                ),
+            )
+        }
         val speakerReady = primeCallAudio()
         if (controller != null) {
             runCatching { WhatsAppCallAutomation.enableSpeakerForCall() }
@@ -4043,6 +4292,23 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             speakOut = { line -> speakExternally(line) },
             listenOnce = { listenForCallerUtterance() },
             onLog = { detail, success -> logCallEvent("whatsapp_call_turn", detail, success) },
+            onSessionUpdate = { turnIdx, maxTurns, callerSaid, jarvisSaid, statusText ->
+                _state.update { state ->
+                    val prev = state.liveCallSession
+                    state.copy(
+                        toolActivity = statusText,
+                        liveCallSession = prev.copy(
+                            active = true,
+                            callerName = inferredCaller,
+                            turnIndex = turnIdx,
+                            maxTurns = maxTurns,
+                            lastCallerUtterance = callerSaid.ifBlank { prev.lastCallerUtterance },
+                            lastJarvisReply = jarvisSaid.ifBlank { prev.lastJarvisReply },
+                            statusText = statusText,
+                        ),
+                    )
+                }
+            },
         )
 
         val result = try {
@@ -4057,7 +4323,12 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
             throw e
         } finally {
             restoreCallAudio()
-            _state.update { it.copy(toolActivity = null) }
+            _state.update {
+                it.copy(
+                    toolActivity = null,
+                    liveCallSession = LiveCallSessionState(),
+                )
+            }
             if (resumeMainListening && !userPausedMic) {
                 runCatching { startListeningInternal(interrupt = false, isAutoLoop = true) }
             }

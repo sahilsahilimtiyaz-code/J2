@@ -420,9 +420,11 @@ class SendWhatsAppVoiceNoteTool : Tool {
             return ToolResult(false, "The owner declined the WhatsApp voice message.")
         }
 
+        val finalMessage = context.confirmation.consumeEditedDraft()?.takeIf { it.isNotBlank() } ?: spokenMessage
+
         val result = core.sendWhatsAppVoiceNoteNow(
             recipient = resolvedTarget,
-            message = spokenMessage,
+            message = finalMessage,
             autoReply = false,
             displayName = resolvedName,
         )
@@ -663,10 +665,12 @@ class SendSocialVoiceNoteTool : Tool {
             return ToolResult(false, "The owner declined the ${profile.displayName} voice message.")
         }
 
+        val finalMessage = context.confirmation.consumeEditedDraft()?.takeIf { it.isNotBlank() } ?: rawMessage
+
         val result = core.sendSocialVoiceNoteNow(
             appQuery = profile.appId,
             recipient = rawRecipient,
-            message = rawMessage,
+            message = finalMessage,
         )
         return ToolResult(result.success, result.message)
     }

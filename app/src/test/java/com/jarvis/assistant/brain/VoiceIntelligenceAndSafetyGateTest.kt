@@ -1,10 +1,20 @@
 package com.jarvis.assistant.brain
 
+import com.jarvis.assistant.settings.VoiceProvider
+import com.jarvis.assistant.tools.AppDestinationOpener
+import com.jarvis.assistant.tools.AppDestinations
 import com.jarvis.assistant.tools.WhatsAppVoiceNotes
+import com.jarvis.assistant.voice.PhoneticAccentNormalizer
+import com.jarvis.assistant.voice.TtsConfig
+import com.jarvis.assistant.voice.VoicePhraseAudioCache
+import java.io.File
+import java.nio.file.Files
 import kotlinx.serialization.json.buildJsonObject
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -184,4 +194,51 @@ class VoiceIntelligenceAndSafetyGateTest {
         assertTrue(WhatsAppVoiceNotes.matchesContactLabel("Shan Didi", "Shan Didi ❤️"))
         assertTrue(WhatsAppVoiceNotes.matchesContactLabel("❤️", "❤️"))
     }
+
+    @Test
+    fun `phonetic accent normalizer corrects Indian English STT mishearings`() {
+        val raw = "Jaanvis send a watsapp message to shaan didi and to my self on you tube"
+        val normalized = PhoneticAccentNormalizer.normalizeTranscript(raw)
+        assertTrue("Expected Jarvis in '$normalized'", normalized.contains("Jarvis"))
+        assertTrue("Expected WhatsApp in '$normalized'", normalized.contains("WhatsApp"))
+        assertTrue("Expected Shan Didi in '$normalized'", normalized.contains("Shan Didi"))
+        assertTrue("Expected to myself in '$normalized'", normalized.contains("to myself"))
+        assertTrue("Expected YouTube in '$normalized'", normalized.contains("YouTube"))
+    }
+
+    @Test
+    fun `voice phrase audio cache stores and retrieves cached PCM audio`() {
+        val tempDir: File = Files.createTempDirectory("jarvis_cache_test").toFile()
+        try {
+            val cache = VoicePhraseAudioCache(tempDir)
+            val config = TtsConfig(
+                provider = VoiceProvider.ELEVENLABS,
+                apiKey = "test-key",
+                voiceId = "jarvis_british",
+                speed = 1.0f,
+            )
+            val sentence = "At your service, sir."
+            assertNull(cache.get(config, sentence))
+
+            val pcm = byteArrayOf(1, 2, 3, 4, 5, 6, 7, 8)
+            cache.put(config, sentence, pcm, 24000)
+            val loaded = cache.get(config, sentence)
+            assertNotNull(loaded)
+            assertEquals(24000, loaded!!.sampleRate)
+            assertArrayEquals(pcm, loaded.pcmBytes)
+        } finally {
+            tempDir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `learned deep navigation maps cover WhatsApp and Instagram destinations`() {
+        val dest = AppDestinations.findDestination("WhatsApp", "myself")
+        assertNotNull(dest)
+        assertEquals("Message yourself (Self-Chat)", AppDestinationOpener.planTitleFor("WhatsApp", "myself"))
+        assertEquals("Calls tab", AppDestinationOpener.planTitleFor("WhatsApp", "calls"))
+        assertEquals("Direct Messages", AppDestinationOpener.planTitleFor("Instagram", "dm"))
+    }
 }
+
+

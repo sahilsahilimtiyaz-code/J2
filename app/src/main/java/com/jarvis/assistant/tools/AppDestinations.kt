@@ -276,6 +276,9 @@ object AppDestinationOpener {
         }
     }
 
+    internal fun planTitleFor(appLabel: String, rawSection: String): String =
+        planFor(appLabel, rawSection).title
+
     private fun planFor(appLabel: String, rawSection: String): Plan {
         val section = rawSection.trim().lowercase(Locale.ROOT)
         val youtube = appLabel.contains("youtube", ignoreCase = true)
@@ -374,6 +377,82 @@ object AppDestinationOpener {
 
                 section.isBlank() || section in setOf("home", "main") -> Plan("home", emptyList())
 
+                else -> Plan(
+                    title = rawSection,
+                    steps = listOf(Step(listOf(section))),
+                )
+            }
+        }
+
+        val whatsapp = appLabel.contains("whatsapp", ignoreCase = true)
+        if (whatsapp) {
+            return when {
+                section in setOf("myself", "self", "my chat", "message yourself", "me") -> Plan(
+                    title = "Message yourself (Self-Chat)",
+                    steps = listOf(
+                        Step(
+                            labels = listOf("search", "search…"),
+                            viewIdHints = listOf("menuitem_search", "search_src_text", "search_bar"),
+                            optional = true,
+                        ),
+                        Step(
+                            labels = listOf("(you)", "message yourself"),
+                            viewIdHints = listOf("conversations_row_contact_name", "contactpicker_row_name"),
+                        ),
+                    ),
+                    verifyAny = listOf("(you)", "message yourself", "type a message"),
+                )
+                section in setOf("calls", "call log", "recent calls") -> Plan(
+                    title = "Calls tab",
+                    steps = listOf(
+                        Step(
+                            labels = listOf("calls"),
+                            viewIdHints = listOf("tab_calls", "calls"),
+                        ),
+                    ),
+                    verifyAny = listOf("calls", "recent", "create call link"),
+                )
+                section in setOf("updates", "status") -> Plan(
+                    title = "Updates & Status",
+                    steps = listOf(
+                        Step(
+                            labels = listOf("updates", "status"),
+                            viewIdHints = listOf("tab_updates", "updates"),
+                        ),
+                    ),
+                    verifyAny = listOf("status", "channels", "updates"),
+                )
+                else -> Plan(
+                    title = rawSection,
+                    steps = listOf(Step(listOf(section))),
+                )
+            }
+        }
+
+        val instagram = appLabel.contains("instagram", ignoreCase = true)
+        if (instagram) {
+            return when {
+                section in setOf("dm", "dms", "messages", "direct", "inbox", "chat") -> Plan(
+                    title = "Direct Messages",
+                    steps = listOf(
+                        Step(
+                            labels = listOf("direct", "messenger", "messages", "send message"),
+                            viewIdHints = listOf("action_bar_inbox_button", "direct_tab"),
+                        ),
+                    ),
+                    verifyAny = listOf("messages", "requests", "search"),
+                )
+                section in setOf("profile", "my profile", "account", "me", "you") -> Plan(
+                    title = "Your Profile",
+                    steps = listOf(
+                        Step(
+                            labels = listOf("profile", "account"),
+                            viewIdHints = listOf("profile_tab", "tab_avatar"),
+                            preferBottomRightTab = true,
+                        ),
+                    ),
+                    verifyAny = listOf("edit profile", "share profile", "posts", "followers", "following"),
+                )
                 else -> Plan(
                     title = rawSection,
                     steps = listOf(Step(listOf(section))),
