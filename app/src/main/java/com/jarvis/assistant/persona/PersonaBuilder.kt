@@ -1,6 +1,7 @@
 package com.jarvis.assistant.persona
 
 import android.content.Context
+import com.jarvis.assistant.core.JarvisOperatingMode
 import com.jarvis.assistant.settings.AppSettings
 import com.jarvis.assistant.settings.OwnerProfile
 import java.time.ZonedDateTime
@@ -57,6 +58,7 @@ class PersonaBuilder(context: Context) {
         settings: AppSettings,
         memoryContext: String = "",
         now: ZonedDateTime = ZonedDateTime.now(),
+        operatingMode: JarvisOperatingMode = JarvisOperatingMode.DEFAULT,
     ): String {
         val profile = settings.profile
         val base = settings.persona.customPrompt
@@ -93,6 +95,36 @@ class PersonaBuilder(context: Context) {
             append("- Always maintain immediate conversational continuity: remember what you just said and ")
             append("what app, target, contact, or search query you just interacted with so follow-ups like ")
             append("'now open that', 'send the same thing to Rahul', or 'do the next step' work seamlessly.\n")
+
+            if (operatingMode != JarvisOperatingMode.DEFAULT) {
+                append("\n## Active Operational Mode: ${operatingMode.name} (${operatingMode.label})\n\n")
+                when (operatingMode) {
+                    JarvisOperatingMode.STUDY -> {
+                        append("- Frame explanations using the Feynman technique: break complex ideas into first principles, intuitive analogies, and plain language without unnecessary jargon.\n")
+                        append("- Emphasize active recall: ask Socratic check-in questions to test understanding.\n")
+                        append("- Format answers with: 1. Core Intuition, 2. Mechanism / Formula, 3. Real-world Example, 4. Practice Check.\n")
+                        append("- Help the owner stay focused and protect their study blocks.\n")
+                    }
+                    JarvisOperatingMode.RESEARCH -> {
+                        append("- Conduct thorough, multi-source investigation using `deep_research`, `fetch_web_page`, and `fact_check`.\n")
+                        append("- Synthesize diverse viewpoints, highlight methodological strengths/weaknesses, and cite exact URLs and publications.\n")
+                        append("- Format briefings with Executive Summary, Key Findings, Verified Evidence, and Follow-Up Leads.\n")
+                        append("- Never assert unverified rumors as established facts; distinguish speculation from empirical findings.\n")
+                    }
+                    JarvisOperatingMode.TASKS -> {
+                        append("- Transform high-level goals into concrete, scheduled action items with clear priorities using `schedule_task` and `list_scheduled_tasks`.\n")
+                        append("- Apply the Eisenhower urgency/importance framework (High, Medium, Low priority).\n")
+                        append("- Keep summaries concise, actionable, and milestone-oriented.\n")
+                    }
+                    JarvisOperatingMode.AGENTIC -> {
+                        append("- Operate with maximum autonomy: proactively chain tools and device automations across multiple steps.\n")
+                        append("- For non-destructive actions, do not pause to ask unnecessary permissions; execute the plan directly to completion.\n")
+                        append("- If a tool call or UI tap fails, self-heal: try alternative query formulations, fuzzy matches, or alternative intents.\n")
+                    }
+                    JarvisOperatingMode.DEFAULT -> {}
+                }
+            }
+
             if (memoryContext.isNotBlank()) {
                 append("\n## Retrieved memory notes\n\n")
                 append(memoryContext.trim())

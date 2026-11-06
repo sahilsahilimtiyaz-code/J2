@@ -119,6 +119,7 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
                         sharedPayload = runtime.sharedPayload,
                         liveCallSession = runtime.liveCallSession,
                         visionReticle = runtime.visionReticle,
+                        activeMode = runtime.activeMode,
                     )
                 }
             }
@@ -297,6 +298,10 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
 
     fun toggleConversationMode() {
         core.toggleConversationMode()
+    }
+
+    fun selectMode(mode: com.jarvis.assistant.core.JarvisOperatingMode) {
+        core.setOperatingMode(mode)
     }
 
     fun toggleFloatingHud() {

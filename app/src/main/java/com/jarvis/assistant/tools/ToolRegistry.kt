@@ -258,13 +258,21 @@ class ToolRegistry(
 }
 
 fun defaultTools(): List<Tool> = listOf(
+    // Operating Modes & Task Scheduling
+    SetOperatingModeTool(),
+    ScheduleTaskTool(),
+    ListScheduledTasksTool(),
+    CompleteScheduledTaskTool(),
     // Apps
     OpenAppTool(),
     ListInstalledAppsTool(),
     OpenUrlTool(),
-    // Media
+    // Media & Advanced Research
     YouTubeSearchTool(),
     WebSearchTool(),
+    DeepResearchTool(),
+    FetchWebPageTool(),
+    FactCheckSearchTool(),
     OpenCameraTool(),
     MediaControlTool(),
     VolumeTool(),

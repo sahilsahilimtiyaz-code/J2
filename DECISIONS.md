@@ -655,3 +655,22 @@
   4. **Geometric Motion Vectors:** `calculateDirectionalVector` computes start/end touch trajectories with display margin clamping to ensure swipe and scroll gestures stay within screen boundaries and never clip display edges.
 - **Integration:** Integrated into `ScreenController.executeNodeTrigger` and verified with comprehensive unit tests (`AccessibilityActionTriggerMapperTest`).
 
+## 2026-11-06 (Part 3) — Operational Modes, Task Scheduling, Support Developer Card & Deep Research Suite
+
+- **Operational Modes (`JarvisOperatingMode`):**
+  - Added five dedicated modes: `Standard` (⚡ default balanced assistant), `Study` (📚 Feynman technique, active recall, analogies), `Research` (🔬 multi-query web investigation & citations), `Tasks` (📋 scheduling & Eisenhower priority matrix), and `Agentic` (🤖 autonomous tool chaining & self-healing UI actions).
+  - Designed an interactive `OperatingModeSelectorBar` directly in `HomeScreen.kt` under the AI Model pill bar and above the Arc Reactor orb, providing one-tap switching with cyan visual indicators and dynamic mode taglines.
+  - Layered mode-specific prompt constraints into `PersonaBuilder.kt` so the LLM dynamically adapts its reasoning, explanations, and tool selection to the active mode.
+- **Scheduled Task System (`ScheduledTaskManager`):**
+  - Implemented `ScheduledTaskManager` with thread-safe `StateFlow<List<ScheduledTask>>` and JSON file persistence in `context.filesDir/scheduled_tasks.json`.
+  - Supports task priorities (`HIGH`, `MEDIUM`, `LOW`), recurrences (`NONE`, `DAILY`, `WEEKLY`), mode tagging, and exact `AlarmManager` wakeups targeting `JarvisAlarmReceiver`.
+  - Added tools: `set_operating_mode`, `schedule_task`, `list_scheduled_tasks`, and `complete_scheduled_task`.
+- **Support Developer Card in Settings:**
+  - Placed a prominent `SupportDeveloperCard` in `SettingsScreen.kt` under Settings → About & Feedback.
+  - Implemented YouTube crimson branding (`#FF0000`), `@octavian-codes` handle, "Octavian — Creator, Chief Architect & Lead Engineer of J.A.R.V.I.S.", and a direct subscribe action button launching `https://youtube.com/@octavian-codes?si=VpUqmvjT2ok2s7Pc` via an explicit `ACTION_VIEW` Intent.
+- **Advanced Web Search Suite (`AdvancedWebSearchTools`):**
+  - `deep_research`: Formulates multi-query research trees across subtopics, querying DuckDuckGo and Wikipedia in parallel, compiling comprehensive dossiers with executive summaries and citations.
+  - `fetch_web_page`: Fetches full web pages, strips scripts/ads/styling, parses headings and paragraphs into clean Markdown, and sanitizes untrusted content through `SecurityShield`.
+  - `fact_check`: Analyzes assertions and rumors against fact-checking and news indices, providing evidence-backed truth evaluations.
+
+

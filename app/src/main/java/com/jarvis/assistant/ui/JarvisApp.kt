@@ -198,6 +198,7 @@ fun JarvisApp(vm: JarvisViewModel = viewModel()) {
                                 onTakeCallMessage = vm::takeActiveCallMessage,
                                 onSpeakIntoCall = vm::speakIntoActiveCall,
                                 onEndCallSession = vm::endActiveCallSession,
+                                onSelectMode = vm::selectMode,
                             )
 
                             JarvisTab.MEMORY -> MemoryScreen(

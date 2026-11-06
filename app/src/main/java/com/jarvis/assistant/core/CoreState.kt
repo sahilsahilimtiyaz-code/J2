@@ -100,5 +100,29 @@ data class CoreState(
     val liveCallSession: LiveCallSessionState = LiveCallSessionState(),
     /** Phase 3: Vision Eye live target reticle coordinates and node label during screen control. */
     val visionReticle: VisionTargetReticleState = VisionTargetReticleState(),
+    /** Active operating mode: Standard, Study, Research, Tasks, or Agentic. */
+    val activeMode: JarvisOperatingMode = JarvisOperatingMode.DEFAULT,
 )
+
+/**
+ * Operating mode shaping Jarvis's behavior, prompt framing, agent loop, and tool selection.
+ */
+enum class JarvisOperatingMode(
+    val id: String,
+    val label: String,
+    val icon: String,
+    val tagline: String,
+) {
+    DEFAULT("default", "Standard", "⚡", "Everyday assistant & device control"),
+    STUDY("study", "Study", "📚", "Deep focus, Feynman learning & active recall"),
+    RESEARCH("research", "Research", "🔬", "Multi-query web synthesis & source analysis"),
+    TASKS("tasks", "Tasks", "📋", "Task scheduling, priority matrix & reminders"),
+    AGENTIC("agentic", "Agentic", "🤖", "Autonomous multi-step tool & screen execution");
+
+    companion object {
+        fun fromId(id: String): JarvisOperatingMode = values().firstOrNull {
+            it.id.equals(id, ignoreCase = true) || it.name.equals(id, ignoreCase = true)
+        } ?: DEFAULT
+    }
+}
 

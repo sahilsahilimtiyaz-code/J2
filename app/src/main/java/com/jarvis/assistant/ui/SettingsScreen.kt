@@ -3,6 +3,7 @@ package com.jarvis.assistant.ui
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -472,6 +473,7 @@ fun SettingsScreen(
                 item(key = "detail_about") {
                     AnimatedVisibility(visible = expandedSection == SettingsSection.ABOUT) {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            SupportDeveloperCard()
                             AboutCard()
                             FeedbackCard()
                         }
@@ -1931,6 +1933,158 @@ private fun VoiceSettingsCard(
                     )
                     apiKey = ""
                 }) { Text("Test voice") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SupportDeveloperCard() {
+    val context = LocalContext.current
+    val ytUrl = "https://youtube.com/@octavian-codes?si=VpUqmvjT2ok2s7Pc"
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(
+                width = 1.5.dp,
+                brush = Brush.horizontalGradient(
+                    listOf(
+                        Color(0xFFFF0000).copy(alpha = 0.85f),
+                        JarvisPalette.CyanBright.copy(alpha = 0.65f),
+                        Color(0xFFFF0000).copy(alpha = 0.85f),
+                    ),
+                ),
+                shape = RoundedCornerShape(20.dp),
+            ),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFF140A0D).copy(alpha = 0.94f),
+        ),
+        shape = RoundedCornerShape(20.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFFFF0000))
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Text(
+                                text = "▶",
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text(
+                                text = "YOUTUBE",
+                                color = Color.White,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Black,
+                                letterSpacing = 1.sp,
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "SUPPORT DEVELOPER",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color(0xFFFF4D4D),
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.2.sp,
+                    )
+                }
+
+                Surface(
+                    color = JarvisPalette.Cyan.copy(alpha = 0.16f),
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, JarvisPalette.Cyan.copy(alpha = 0.4f)),
+                ) {
+                    Text(
+                        text = "ARCHITECT",
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = JarvisPalette.CyanBright,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                    text = "Octavian (@octavian-codes)",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = "Creator, Chief Architect & Lead Engineer of J.A.R.V.I.S.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = JarvisPalette.Ice.copy(alpha = 0.85f),
+                )
+            }
+
+            Text(
+                text = "Back the ongoing engineering of Jarvis, voice models, vision automation, " +
+                    "and AI breakthrough tutorials. Subscribe to Octavian on YouTube to empower upcoming upgrades.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                lineHeight = 18.sp,
+            )
+
+            Button(
+                onClick = {
+                    runCatching {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(ytUrl)).apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        }
+                        context.startActivity(intent)
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(46.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFFF0000),
+                    contentColor = Color.White,
+                ),
+                shape = RoundedCornerShape(14.dp),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = "▶",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        text = "Subscribe to @octavian-codes",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                    )
+                }
             }
         }
     }

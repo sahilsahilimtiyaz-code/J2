@@ -86,6 +86,13 @@ object ToolContextBudgeter {
     private val ALWAYS_INCLUDED_TOOLS = setOf(
         "open_app",
         "web_search",
+        "deep_research",
+        "fetch_web_page",
+        "fact_check",
+        "set_operating_mode",
+        "schedule_task",
+        "list_scheduled_tasks",
+        "complete_scheduled_task",
         "search_youtube",
         "get_device_status",
         "get_current_time",
@@ -109,6 +116,13 @@ object ToolContextBudgeter {
     )
 
     private val DOMAIN_KEYWORDS: Map<String, Set<String>> = mapOf(
+        "set_operating_mode" to setOf("mode", "study", "research", "agentic", "tasks", "switch", "focus", "feynman"),
+        "schedule_task" to setOf("schedule", "task", "todo", "deadline", "recurrence", "daily", "weekly", "plan"),
+        "list_scheduled_tasks" to setOf("tasks", "scheduled", "pending", "agenda", "todo", "list", "schedule"),
+        "complete_scheduled_task" to setOf("complete", "finish", "done", "check", "task"),
+        "deep_research" to setOf("research", "investigate", "study", "synthesis", "dossier", "deep", "analyze", "find out"),
+        "fetch_web_page" to setOf("url", "website", "article", "read", "fetch", "webpage", "page", "http", "https"),
+        "fact_check" to setOf("fact", "check", "verify", "true", "false", "rumor", "debunk", "claim", "hoax"),
         "call_contact" to setOf("call", "phone", "dial", "ring"),
         "send_sms" to setOf("sms", "text", "message"),
         "send_whatsapp_message" to setOf("whatsapp", "message", "chat", "text"),

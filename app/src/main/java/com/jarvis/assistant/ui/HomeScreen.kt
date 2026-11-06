@@ -167,6 +167,7 @@ fun HomeScreen(
     onTakeCallMessage: () -> Unit = {},
     onSpeakIntoCall: (String) -> Unit = {},
     onEndCallSession: () -> Unit = {},
+    onSelectMode: (com.jarvis.assistant.core.JarvisOperatingMode) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -389,6 +390,7 @@ fun HomeScreen(
                                 onSelectTab = onSelectTab,
                                 onQuickPrompt = { prompt -> onSend(prompt) },
                                 onSelectColorTheme = onSelectColorTheme,
+                                onSelectMode = onSelectMode,
                             )
                         }
 
@@ -981,6 +983,7 @@ private fun HomeHudHero(
     onSelectTab: (JarvisTab) -> Unit,
     onQuickPrompt: (String) -> Unit,
     onSelectColorTheme: (HudColorTheme) -> Unit = {},
+    onSelectMode: (com.jarvis.assistant.core.JarvisOperatingMode) -> Unit = {},
 ) {
     val memoryPct = deviceStatus?.memoryUsedPercent ?: 47
     val storagePct = deviceStatus?.storageUsedPercent ?: 87
@@ -1101,7 +1104,15 @@ private fun HomeHudHero(
             )
         }
 
-        Spacer(Modifier.height(if (isChatting) 8.dp else 14.dp))
+        Spacer(Modifier.height(8.dp))
+
+        // Operating Mode Selector Pill Bar (Standard, Study, Research, Tasks, Agentic)
+        OperatingModeSelectorBar(
+            activeMode = state.activeMode,
+            onSelectMode = onSelectMode,
+        )
+
+        Spacer(Modifier.height(if (isChatting) 8.dp else 12.dp))
 
         // Central Iron Man 3 J.A.R.V.I.S. Second Screen Experience Orb + Telemetry
         Box(
@@ -2536,3 +2547,101 @@ private fun copyToClipboard(context: Context, text: String) {
     clipboard?.setPrimaryClip(ClipData.newPlainText("Jarvis", text))
     Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
 }
+
+@Composable
+private fun OperatingModeSelectorBar(
+    activeMode: com.jarvis.assistant.core.JarvisOperatingMode,
+    onSelectMode: (com.jarvis.assistant.core.JarvisOperatingMode) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val modes = remember { com.jarvis.assistant.core.JarvisOperatingMode.values().toList() }
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            modes.forEach { mode ->
+                val selected = mode == activeMode
+                val bgBrush = if (selected) {
+                    Brush.horizontalGradient(
+                        listOf(
+                            JarvisPalette.Cyan.copy(alpha = 0.38f),
+                            JarvisPalette.CyanBright.copy(alpha = 0.22f),
+                        ),
+                    )
+                } else {
+                    Brush.horizontalGradient(
+                        listOf(
+                            JarvisPalette.Panel.copy(alpha = 0.72f),
+                            JarvisPalette.Deep.copy(alpha = 0.65f),
+                        ),
+                    )
+                }
+
+                val borderColor = if (selected) {
+                    JarvisPalette.CyanBright
+                } else {
+                    JarvisPalette.Cyan.copy(alpha = 0.22f)
+                }
+
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(bgBrush)
+                        .border(
+                            width = if (selected) 1.5.dp else 1.dp,
+                            color = borderColor,
+                            shape = RoundedCornerShape(14.dp),
+                        )
+                        .clickable { onSelectMode(mode) }
+                        .padding(horizontal = 12.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        text = mode.icon,
+                        fontSize = 13.sp,
+                    )
+                    Text(
+                        text = mode.label,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                        color = if (selected) JarvisPalette.CyanBright else JarvisPalette.Ice.copy(alpha = 0.78f),
+                    )
+                }
+            }
+        }
+
+        // Active mode descriptor tagline
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(JarvisPalette.CyanBright),
+            )
+            Text(
+                text = "${activeMode.label} Mode · ${activeMode.tagline}",
+                style = MaterialTheme.typography.labelSmall,
+                color = JarvisPalette.Ice.copy(alpha = 0.75f),
+                fontSize = 10.5.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+

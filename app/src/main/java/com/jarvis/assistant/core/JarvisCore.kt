@@ -188,6 +188,30 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         }
     }
 
+    /**
+     * Switches the active operational mode (Standard, Study, Research, Tasks, Agentic),
+     * dynamically re-weighting prompt framing, tool selection, and agent execution.
+     */
+    fun setOperatingMode(mode: JarvisOperatingMode) {
+        if (_state.value.activeMode == mode) return
+        _state.update { it.copy(activeMode = mode) }
+        scope.launch {
+            runCatching {
+                actionLogStore.record(
+                    ActionLogEntry(
+                        id = "mode_${System.currentTimeMillis()}",
+                        toolName = "set_operating_mode",
+                        label = "Operating Mode",
+                        detail = "Switched to ${mode.label} Mode (${mode.icon} ${mode.tagline})",
+                        success = true,
+                        timestamp = System.currentTimeMillis(),
+                    )
+                )
+            }
+            com.jarvis.assistant.voice.SoundFxEngine.play(com.jarvis.assistant.voice.SoundFxEngine.SoundType.ACTION_CONFIRMED)
+        }
+    }
+
     /** True while the single continuous voice-link session owns the microphone. */
     val isHotMicActive: Boolean
         get() = hotMicJob?.isActive == true
@@ -1698,7 +1722,11 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
                 ""
             }
             val systemPrompt = withContext(Dispatchers.IO) {
-                personaBuilder.build(current, memoryContext + sharedContext + recentDialogueContext)
+                personaBuilder.build(
+                    settings = current,
+                    memoryContext = memoryContext + sharedContext + recentDialogueContext,
+                    operatingMode = _state.value.activeMode,
+                )
             }
 
             val selectedTools = com.jarvis.assistant.brain.ToolContextBudgeter.selectToolsForTurn(

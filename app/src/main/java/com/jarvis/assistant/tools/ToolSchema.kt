@@ -56,3 +56,11 @@ internal fun booleanProperty(description: String): JsonObject = buildJsonObject 
     put("type", "boolean")
     put("description", description)
 }
+
+internal fun arrayProperty(description: String, items: JsonObject? = null): JsonObject = buildJsonObject {
+    put("type", "array")
+    put("description", description)
+    if (items != null) {
+        put("items", items)
+    }
+}

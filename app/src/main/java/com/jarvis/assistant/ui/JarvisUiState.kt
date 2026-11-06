@@ -109,6 +109,8 @@ data class JarvisUiState(
         com.jarvis.assistant.core.LiveCallSessionState(),
     val visionReticle: com.jarvis.assistant.core.VisionTargetReticleState =
         com.jarvis.assistant.core.VisionTargetReticleState(),
+    val activeMode: com.jarvis.assistant.core.JarvisOperatingMode =
+        com.jarvis.assistant.core.JarvisOperatingMode.DEFAULT,
 ) {
     val showSettings: Boolean
         get() = tab == JarvisTab.SETTINGS

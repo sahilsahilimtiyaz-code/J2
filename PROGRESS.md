@@ -619,3 +619,24 @@
   - Created centralized utility mapping standard `AccessibilityNodeInfo` action IDs (`ACTION_CLICK`, `ACTION_LONG_CLICK`, `ACTION_SCROLL_FORWARD`, `ACTION_SCROLL_BACKWARD`, `ACTION_SET_TEXT`, etc.) and semantic action strings to programmatic triggers (`Tap`, `TouchAndHold`, `DoubleTap`, `Swipe`, `Scroll`, `TypeText`, `DragAndDrop`, `PinchZoom`).
   - Implemented 4-tier execution pipeline: Direct API action -> Ancestor/container delegation -> Physical touch gesture injection -> Motion vector calculation with display margin protection.
   - Added comprehensive test coverage in `AccessibilityActionTriggerMapperTest` (100% green).
+
+## 2026-11-06 (Part 2) — Operational Modes, Task Scheduling, Support Developer Card & Advanced Web Research (complete)
+
+- [x] **Jarvis Operating Modes (`CoreState.kt`, `PersonaBuilder.kt`, `HomeScreen.kt`, `JarvisCore.kt`, `JarvisViewModel.kt`):**
+  - Added 5 operational modes: `Standard` (⚡), `Study` (📚), `Research` (🔬), `Tasks` (📋), and `Agentic` (🤖).
+  - Designed interactive `OperatingModeSelectorBar` on the home HUD featuring pill buttons with real-time selection state, glowing cyan borders, and dynamic mode tagline descriptors.
+  - Layered mode-specific framing in `PersonaBuilder.kt` (Feynman technique & active recall for Study, multi-source citations for Research, Eisenhower prioritization for Tasks, and autonomous screen/tool chaining for Agentic).
+- [x] **Scheduled Task Manager & Tool Suite (`ScheduledTaskManager.kt`, `TaskAndModeTools.kt`, `ToolRegistry.kt`):**
+  - Thread-safe persistent task scheduler with `ScheduledTask` models, `TaskPriority` (`HIGH`, `MEDIUM`, `LOW`), and `TaskRecurrence` (`NONE`, `DAILY`, `WEEKLY`).
+  - Implemented `set_operating_mode`, `schedule_task`, `list_scheduled_tasks`, and `complete_scheduled_task` tools with exact `AlarmManager` wakeups via `JarvisAlarmReceiver`.
+- [x] **Support Developer YouTube Channel Card (`SettingsScreen.kt`):**
+  - Added dedicated `SupportDeveloperCard` in Settings → About & Feedback.
+  - Features YouTube crimson branding (`#FF0000`), `@octavian-codes` handle, "Octavian — Creator & Chief Architect of J.A.R.V.I.S.", and a direct subscribe action button launching `https://youtube.com/@octavian-codes?si=VpUqmvjT2ok2s7Pc`.
+- [x] **Advanced Web Search & Deep Research Engine (`AdvancedWebSearchTools.kt`, `ToolSchema.kt`, `TaskPlanner.kt`):**
+  - `deep_research`: Multi-query concurrent investigation across DuckDuckGo and Wikipedia with executive summaries and citations.
+  - `fetch_web_page`: Clean article extraction and HTML parsing with ad/script stripping and `SecurityShield` prompt-injection sanitization.
+  - `fact_check`: Claim verification querying authoritative news archives, encyclopedic summaries, and truth-rating analysis.
+- [x] **Unit Testing & Verification:**
+  - Added `TaskAndModeToolsTest.kt` verifying operating modes, priority parsing, tool schemas, and default registry inclusion (100% green).
+  - Both `compile_applet` and `lint_applet` pass with 0 errors.
+
