@@ -645,3 +645,13 @@
   - Updated `askModelForNextScreenStep` system instructions and `PersonaBuilder.SAFETY_RULES` to enforce the Where, How, and Why spatial reasoning model.
   - Every action updates the live HUD visual reticle (`VisionTargetReticleState`) and status notification with the exact target coordinates and purpose.
 
+## 2026-11-06 (Part 2) — AccessibilityActionTriggerMapper: Mapping Node Actions to Programmatic Gestures
+
+- **Architecture:** Implemented `AccessibilityActionTriggerMapper` (`accessibility/AccessibilityActionTriggerMapper.kt`) as a centralized utility mapping standard `AccessibilityNodeInfo` action IDs (`ACTION_CLICK`, `ACTION_LONG_CLICK`, `ACTION_SCROLL_FORWARD`, `ACTION_SCROLL_BACKWARD`, `ACTION_SET_TEXT`, `ACTION_EXPAND`, `ACTION_COLLAPSE`, `ACTION_DISMISS`, `ACTION_SELECT`, `ACTION_CLEAR_SELECTION`, etc.) and semantic action strings to strongly typed programmatic triggers (`ProgrammaticGestureTrigger`).
+- **Multi-Tier Execution Strategy:**
+  1. **Direct API Dispatch:** Performs `node.performAction(...)` natively when supported.
+  2. **Ancestor Delegation:** Ascends the view hierarchy to clickable/scrollable containers when child views (e.g. TextView inside a Card) do not consume the action directly.
+  3. **Physical Touch Gesture Dispatch:** Injects physical gestures (`dispatchTapGesture`, `dispatchLongPressGesture`, `dispatchDoubleTapGesture`, `dispatchSwipeGesture`, `dispatchDragGesture`, `dispatchPinchZoomGesture`) using `JarvisAccessibilityService`.
+  4. **Geometric Motion Vectors:** `calculateDirectionalVector` computes start/end touch trajectories with display margin clamping to ensure swipe and scroll gestures stay within screen boundaries and never clip display edges.
+- **Integration:** Integrated into `ScreenController.executeNodeTrigger` and verified with comprehensive unit tests (`AccessibilityActionTriggerMapperTest`).
+

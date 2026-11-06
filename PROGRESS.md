@@ -615,3 +615,7 @@
   - Added mandatory `why` parameters across screen tools to articulate operational intent before execution.
   - Updated `askModelForNextScreenStep` and `PersonaBuilder.SAFETY_RULES` to enforce the Where, How, and Why spatial reasoning model.
   - Integrated execution feedback with the live HUD visual reticle (`VisionTargetReticleState`) and status notification.
+- [x] **AccessibilityActionTriggerMapper Utility (`AccessibilityActionTriggerMapper.kt`, `ScreenController.kt`):**
+  - Created centralized utility mapping standard `AccessibilityNodeInfo` action IDs (`ACTION_CLICK`, `ACTION_LONG_CLICK`, `ACTION_SCROLL_FORWARD`, `ACTION_SCROLL_BACKWARD`, `ACTION_SET_TEXT`, etc.) and semantic action strings to programmatic triggers (`Tap`, `TouchAndHold`, `DoubleTap`, `Swipe`, `Scroll`, `TypeText`, `DragAndDrop`, `PinchZoom`).
+  - Implemented 4-tier execution pipeline: Direct API action -> Ancestor/container delegation -> Physical touch gesture injection -> Motion vector calculation with display margin protection.
+  - Added comprehensive test coverage in `AccessibilityActionTriggerMapperTest` (100% green).

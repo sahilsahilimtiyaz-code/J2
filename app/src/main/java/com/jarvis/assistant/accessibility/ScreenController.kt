@@ -423,9 +423,34 @@ class ScreenController(private val service: AccessibilityService) {
             }
 
             else -> {
-                return ScreenResult(false, "Unknown action \"$actionType\" on $cleanRef", verified = false)
+                val trigger = AccessibilityActionTriggerMapper.mapSemanticActionToTrigger(
+                    actionName = actionType,
+                    options = TriggerOptions(textArgument = textArgument, whyRationale = userGoal),
+                )
+                val triggerRes = AccessibilityActionTriggerMapper.executeTrigger(
+                    node = node,
+                    trigger = trigger,
+                    service = jarvisService,
+                    options = TriggerOptions(textArgument = textArgument, whyRationale = userGoal),
+                )
+                delay(300L)
+                val after = captureFingerprint()
+                val verified = before.treeSignatureHash != after.treeSignatureHash || triggerRes.success
+                return ScreenResult(triggerRes.success, triggerRes.message, verified = verified)
             }
         }
+    }
+
+    /**
+     * Executes a programmatic action trigger on [node] using [AccessibilityActionTriggerMapper].
+     */
+    suspend fun executeNodeTrigger(
+        node: AccessibilityNodeInfo,
+        actionName: String,
+        options: TriggerOptions = TriggerOptions(),
+    ): TriggerResult {
+        val trigger = AccessibilityActionTriggerMapper.mapSemanticActionToTrigger(actionName, options)
+        return AccessibilityActionTriggerMapper.executeTrigger(node, trigger, jarvisService, options)
     }
 
     private data class QuadrupleFloats(val a: Float, val b: Float, val c: Float, val d: Float)
