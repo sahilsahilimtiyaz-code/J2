@@ -600,3 +600,18 @@
   - Added `PhoneticAccentNormalizer` for Indian/British English STT mishearings and `VoicePhraseAudioCache` for 0ms local playback of frequent J.A.R.V.I.S. phrases.
 - [x] **Phase 5 — Iron Man HUD Experience Upgrades (`HomeScreen.kt`, `JarvisCore.kt`):**
   - Added top-bar **`ORB HUD`** floating overlay toggle, collapsible **`EXECUTED TOOLS`** telemetry drawer in chat cards, and voice protocol macros (*"Red Stealth Protocol"*, *"Combat HUD Protocol"*, *"Mark 42 Protocol"*).
+
+## 2026-11-06 — Spatial Visual Perception & Touch Modality Mastery (Where, How, Why) (complete)
+
+- [x] **Spatial Visual Awareness & Semantic Node Hierarchy (`ActionableNodeSnapshot.kt`, `ScreenController.kt`, `JarvisCore.kt`):**
+  - Upgraded node snapshots to compute relative percentage centers `center=(X%, Y%)`, pixel bounds `[left, top, right, bottom]`, view resource IDs, and semantic UI roles (`[Button]`, `[InputField]`, `[Switch]`, `[Tab]`, `[Card]`, `[ScrollableList]`, `[clickable]`, `[editable]`, `[scrollable]`, `[Text]`).
+  - Structured `readScreen()` to provide a complete layout dump of all actionable controls with stable `#ref` temporary identifiers, ensuring Jarvis knows the exact physical geometry of every on-screen element.
+- [x] **Comprehensive Touch Modalities (`ScreenTools.kt`, `JarvisCore.kt`, `ToolRegistry.kt`):**
+  - **Swipe / Swap (`swipe_screen`):** Added `SwipeScreenTool` supporting directional swipes (`left`, `right`, `up`, `down`) and distances (`short`, `medium`, `long`) with target element/container binding and physically accurate gesture vectors via `JarvisAccessibilityService.dispatchSwipeGesture`.
+  - **Tap & Touch (`tap_screen`):** Upgraded `TapScreenTool` with `action_type` (`tap`, `long_press`/`touch`, `double_tap`), `duration_ms` (hold duration, 400–3000ms), and `expected_outcome`. Routed `#ref` requests directly to `ScreenController.executeRefAction`.
+  - **Scroll (`scroll_screen`):** Enhanced with `target` container binding and `why` rationale.
+  - **Autonomous Execution Loop (`automateScreen`):** Enhanced multi-step execution with native support for `long_press`, `touch_and_hold`, `double_tap`, `swipe_left`, `swipe_right`, `swipe_up`, `swipe_down`, and `swipe`.
+- [x] **Transparent Operational Rationale & Intent Tracking (`TaskPlanner.kt`, `PersonaBuilder.kt`, `JarvisCore.kt`):**
+  - Added mandatory `why` parameters across screen tools to articulate operational intent before execution.
+  - Updated `askModelForNextScreenStep` and `PersonaBuilder.SAFETY_RULES` to enforce the Where, How, and Why spatial reasoning model.
+  - Integrated execution feedback with the live HUD visual reticle (`VisionTargetReticleState`) and status notification.

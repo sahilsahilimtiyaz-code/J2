@@ -40,6 +40,7 @@ class WhisperSttEngine(
     private val stateMachine: MicrophoneStateMachine? = null,
 ) : SttEngine {
 
+    @android.annotation.SuppressLint("MissingPermission")
     override fun listen(locale: Locale): Flow<SttEvent> = callbackFlow {
         val apiKey = getApiKey()
         if (apiKey.isNullOrBlank()) {

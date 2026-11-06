@@ -629,3 +629,19 @@
   - **Fix 3:** Updated `WhatsAppVoiceNotes.matchesContactLabel` with distinct query token matching, bidirectional word containment, and fallback token matching. Updated `AppAutomation.openWhatsAppChatByName` to try candidate query variations (`"sahil sahil"` followed by `"sahil"`) in the search bar and New Chat search. Lowered contact row search scan boundary (`minY = 120`) and expanded top header detection (`bounds.centerY() in 20..580`) for high-resolution displays.
   - **Root Cause 4 (Microphone Conflict During Loudspeaker Playback):** While playing the rendered voice note on loudspeaker for WhatsApp to record, active STT anchors could capture Jarvis's own voice and trigger turn cancellation. `pauseMainListeningForCall()` now cancels `manualListenJob`, `hotMicJob`, and calls `sttEngine.forceDestroyActive(..., releaseLiveAnchor = true)` so WhatsApp has exclusive microphone hardware access during recording.
 
+## 2026-11-06 — Spatial Visual Awareness & Full Touch Modality Mastery (Where, How, and Why Screen Control)
+
+- **The Problem:** The user asked: *"Can u make it like it should know where to tap, touch, swap, scroll, how why . The tools it have are cheap the terminal etc, so use your maximum effort and fix it"*. Previous screen tools exposed bare text strings with generic scroll-only operations, lacked explicit swipe/swap gesture support for tabs and cards, lacked rich tactile modalities (`touch_and_hold`/`long_press`, `double_tap`), had no spatial percent-coordinate awareness in node snapshots, and lacked transparent rationale (`why`) and expected postcondition tracking.
+- **Where (Spatial Visual Perception & Node Layout):**
+  - Upgraded `ActionableNodeSnapshot` and `ScreenController.dumpScreen()` to compute exact relative percentage centers `center=(X%, Y%)`, pixel bounds `[left, top, right, bottom]`, view resource IDs, and high-level semantic UI roles (`[Button]`, `[InputField]`, `[Switch]`, `[Tab]`, `[Card]`, `[ScrollableList]`, `[clickable]`, `[editable]`, `[scrollable]`, `[Text]`).
+  - Upgraded `JarvisCore.readScreen()` so whenever Jarvis inspects the screen, he receives the complete structured spatial layout with stable `#ref` temporary indices and geometric coordinates rather than unformatted flat text.
+- **How (Full Physical Gesture Modalities):**
+  - **Swipe / Swap (`swipe_screen`):** Added a first-class `SwipeScreenTool` (`swipe_screen`) in `ScreenTools.kt` and `ToolRegistry.kt` supporting `direction` (`left`, `right`, `up`, `down`), `distance` (`short`, `medium`, `long`), optional `target` (`#ref` or container label), and `why`. Implemented physically accurate swipe vectors in `JarvisCore.swipe` using `JarvisAccessibilityService.dispatchSwipeGesture` with pre/post fingerprint verification.
+  - **Tap & Touch Modalities (`tap_screen`):** Upgraded `TapScreenTool` with `action_type` (`tap`, `long_press`/`touch`, `double_tap`), `duration_ms` (hold duration, 400–3000ms), and `expected_outcome`. Routed `#ref` requests directly to `ScreenController.executeRefAction` and physical gesture dispatchers.
+  - **Scroll (`scroll_screen`):** Upgraded with `target` container binding and `why` rationale.
+  - **Autonomous Step Execution (`automateScreen`):** Enhanced the automation loop to handle `long_press`, `touch_and_hold`, `double_tap`, `swipe_left`, `swipe_right`, `swipe_up`, `swipe_down`, and `swipe` directly.
+- **Why (Transparent Visual Intent & Verification):**
+  - Added mandatory `why` parameters across screen tools to articulate operational intent before execution.
+  - Updated `askModelForNextScreenStep` system instructions and `PersonaBuilder.SAFETY_RULES` to enforce the Where, How, and Why spatial reasoning model.
+  - Every action updates the live HUD visual reticle (`VisionTargetReticleState`) and status notification with the exact target coordinates and purpose.
+

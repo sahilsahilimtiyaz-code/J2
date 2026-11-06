@@ -383,7 +383,7 @@ class GeminiProvider(private val client: OkHttpClient) : LlmProvider {
         var base = config.baseUrl.trim().trimEnd('/')
         if (base.endsWith("/models")) base = base.removeSuffix("/models")
         val rawModel = config.model.trim().removePrefix("models/")
-        val model = URLEncoder.encode(rawModel, StandardCharsets.UTF_8)
+        val model = URLEncoder.encode(rawModel, "UTF-8")
         return "$base/models/$model:streamGenerateContent?alt=sse"
     }
 
