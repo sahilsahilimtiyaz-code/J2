@@ -410,3 +410,15 @@ The app icon set is generated, never hand-edited:
 python3 tools/generate_app_icons.py                    # built-in Octa-Jarvis orb
 python3 tools/generate_app_icons.py design/app-icon.png  # your own 1024x1024 source
 ```
+
+## Octa-Jarvis download site
+
+Live: https://site-1ddd67d1af8d48b4981cf9745a97e12b.freebuff.page
+
+The page in `site/` is deployed to Freebuff Sites as a static site; `sites/worker.js`
+serves it from the `ASSETS` binding and `deploy.site.json` is the deploy manifest.
+The deploy is a snapshot of the page files, but the version badge reads
+`site/version.json` from this repository first and takes the newer of that and the
+bundled copy, so new releases show up without redeploying the site.
+
+To republish after editing `site/`, deploy `deploy.site.json` again to the same site.
