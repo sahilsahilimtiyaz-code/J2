@@ -2,9 +2,12 @@ name: Publish Octa-Jarvis release
 
 # Builds a signed APK, publishes it as a GitHub Release, rewrites site/version.json
 # so every installed app sees "update available", and deploys the download site.
-# Run it from Actions -> "Publish Octa-Jarvis release" -> Run workflow.
+# Runs automatically on every push to main when it is enabled, and can also be
+# started by hand from Actions -> "Publish Octa-Jarvis release" -> Run workflow.
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       release_notes:
@@ -33,6 +36,7 @@ jobs:
     outputs:
       version_code: ${{ steps.version.outputs.version_code }}
       version_name: ${{ steps.version.outputs.version_name }}
+      pages_enabled: ${{ steps.pages.outputs.enabled }}
     steps:
       - name: Check out source
         uses: actions/checkout@v7
@@ -152,10 +156,29 @@ jobs:
             echo "Manifest unchanged."
             exit 0
           fi
-          git commit -m "chore(site): publish Octa-Jarvis v${{ steps.version.outputs.version_name }} update manifest"
+          git commit -m "chore(site): publish Octa-Jarvis v${{ steps.version.outputs.version_name }} update manifest [skip ci]"
           git push origin "HEAD:${branch}"
 
+      - name: Check whether GitHub Pages is enabled
+        id: pages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          code=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/pages")
+          if [ "$code" = "200" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "GitHub Pages is enabled; the site will be deployed."
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::GitHub Pages is not enabled, so the site deploy is skipped. The release APK and version.json are still published."
+          fi
+
       - name: Upload site artifact
+        if: steps.pages.outputs.enabled == 'true'
         uses: actions/upload-pages-artifact@v5
         with:
           path: site
@@ -163,6 +186,7 @@ jobs:
   deploy-site:
     name: Deploy Octa-Jarvis download site
     needs: build-and-release
+    if: needs.build-and-release.outputs.pages_enabled == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

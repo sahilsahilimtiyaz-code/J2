@@ -80,15 +80,18 @@ class AppUpdateChecker(
     baseClient: OkHttpClient,
 ) {
     companion object {
-        /** GitHub Pages build of the Octa-Jarvis site. */
-        const val PRIMARY_FEED_URL = "https://sahilsahilimtiyaz-code.github.io/J2/version.json"
-
-        /** Raw repository copy, used when Pages is unavailable or still warming up. */
-        const val BACKUP_FEED_URL =
+        /**
+         * The manifest committed by the release workflow. This is the primary feed
+         * because it works whether or not the Octa-Jarvis site is hosted on Pages.
+         */
+        const val PRIMARY_FEED_URL =
             "https://raw.githubusercontent.com/sahilsahilimtiyaz-code/J2/main/site/version.json"
 
-        /** Human-facing download page. */
-        const val DOWNLOAD_PAGE_URL = "https://sahilsahilimtiyaz-code.github.io/J2/"
+        /** Same manifest served by the Octa-Jarvis site once Pages is enabled. */
+        const val BACKUP_FEED_URL = "https://sahilsahilimtiyaz-code.github.io/J2/version.json"
+
+        /** Human-facing download location. */
+        const val DOWNLOAD_PAGE_URL = "https://github.com/sahilsahilimtiyaz-code/J2/releases/latest"
 
         private const val PREFS = "jarvis_updates"
         private const val KEY_SKIPPED = "skipped_version_code"
