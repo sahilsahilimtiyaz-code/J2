@@ -94,18 +94,24 @@ function applyManifest(manifest) {
   }
 }
 
+/* Reads every reachable manifest and keeps the newest build, so a stale bundled
+   file can never advertise an older version than the published one. */
 async function loadManifest() {
+  const found = [];
   for (const source of MANIFEST_SOURCES) {
     try {
       const response = await fetch(source, { cache: 'no-store' });
       if (!response.ok) continue;
       const manifest = await response.json();
-      if (manifest && Number(manifest.versionCode) > 0) return manifest;
+      if (manifest && Number(manifest.versionCode) > 0) found.push(manifest);
     } catch (error) {
       /* try the next source */
     }
   }
-  return null;
+  if (!found.length) return null;
+  return found.reduce((newest, current) =>
+    (Number(current.versionCode) || 0) > (Number(newest.versionCode) || 0) ? current : newest
+  );
 }
 
 function wireCopy() {
