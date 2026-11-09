@@ -71,7 +71,7 @@ function start() {
 
   const RADIUS = 2.35;
   const globe = new THREE.Group();
-  globe.position.set(1.05, 0.28, 0);
+  globe.position.set(1.35, 0.5, 0);
   parallax.add(globe);
 
   /* Tilt, then a spinning inner group (textures plus the network rotate). */
@@ -102,7 +102,7 @@ function start() {
     uniforms: {
       uDay: { value: dayMap },
       uNight: { value: nightMap },
-      uSun: { value: new THREE.Vector3(-0.72, 0.46, -0.52).normalize() },
+      uSun: { value: new THREE.Vector3(-0.34, 0.88, -0.36).normalize() },
       uRim: { value: new THREE.Color(0x3f9bff) },
       uReveal: { value: 0.0 }
     },
@@ -186,7 +186,7 @@ function start() {
           uColor: { value: new THREE.Color(color) },
           uIntensity: { value: intensity },
           uPower: { value: power },
-          uSun: { value: new THREE.Vector3(-0.72, 0.46, -0.52).normalize() },
+          uSun: { value: new THREE.Vector3(-0.34, 0.88, -0.36).normalize() },
           uSunReach: { value: sunReach },
           uReveal: { value: 0.0 }
         },
@@ -452,9 +452,9 @@ function start() {
     const wide = width >= 900;
     const small = width < 620;
     layout.small = small;
-    globe.position.x = wide ? 1.15 : 0;
-    globe.position.y = wide ? 0.3 : small ? 1.05 : 0.85;
-    globe.scale.setScalar(wide ? 1 : small ? 0.62 : 0.78);
+    globe.position.x = wide ? 0.85 : 0;
+    globe.position.y = wide ? 1.55 : small ? 1.15 : 1.0;
+    globe.scale.setScalar(wide ? 1.0 : small ? 0.6 : 0.76);
   }
   resize();
   window.addEventListener('resize', resize);
