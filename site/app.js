@@ -7,7 +7,9 @@ const MANIFEST_SOURCES = [
   'https://raw.githubusercontent.com/sahilsahilimtiyaz-code/J2/main/site/version.json'
 ];
 const RELEASES_URL = 'https://github.com/sahilsahilimtiyaz-code/J2/releases';
-const LATEST_PAGE = RELEASES_URL + '/latest';
+
+/* Builds are mirrored on Google Drive; every download button opens that file. */
+const DOWNLOAD_URL = 'https://drive.google.com/file/d/1RFFKIruFXtSubl4QagFIgIqkoaqaEa0O/view?usp=drivesdk';
 
 const $ = (id) => document.getElementById(id);
 
@@ -32,12 +34,14 @@ function applyManifest(manifest) {
   const name = String(manifest.versionName || '').trim();
   const code = Number(manifest.versionCode) || 0;
   const label = name ? 'v' + name : (code ? 'build ' + code : 'latest build');
-  const href = String(manifest.apkUrl || '').trim() || LATEST_PAGE;
   const published = formatDate(manifest.releasedAt);
 
   for (const id of ['download-btn', 'head-download', 'card-download']) {
     const el = $(id);
-    if (el) el.href = href;
+    if (!el) continue;
+    el.href = DOWNLOAD_URL;
+    el.target = '_blank';
+    el.rel = 'noopener';
   }
 
   const badge = $('version-badge');
@@ -51,7 +55,7 @@ function applyManifest(manifest) {
 
   const meta = $('apk-meta');
   if (meta) {
-    meta.textContent = label + ' \u00b7 ' + android + ' \u00b7 installs over the previous version';
+    meta.textContent = label + ' \u00b7 ' + android + ' \u00b7 downloads open in Google Drive';
   }
 
   const releaseVersion = $('release-version');
