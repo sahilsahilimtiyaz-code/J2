@@ -1,163 +1,204 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Octa-Jarvis — your phone, upgraded</title>
-  <meta name="description" content="Download the latest Octa-Jarvis build for Android. Voice-first, on-device AI assistant with offline conversation, phone control and memory." />
-  <meta name="theme-color" content="#03060c" />
-  <link rel="icon" href="assets/favicon.png" />
-  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
-  <link rel="stylesheet" href="styles.css" />
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Octa-Jarvis — a personal AI that runs your phone</title>
+<meta name="description" content="Octa-Jarvis is a private, voice-first Android assistant. It answers offline, controls your phone by voice and updates itself from this page. Download the latest signed APK.">
+<meta name="theme-color" content="#04070d">
+<meta property="og:title" content="Octa-Jarvis — a personal AI that runs your phone">
+<meta property="og:description" content="Voice-first Android assistant with offline replies, precise screen control and one-tap updates.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="./assets/app-icon.png">
+<link rel="icon" type="image/png" href="./assets/favicon.png">
+<link rel="apple-touch-icon" href="./assets/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="./styles.css">
 </head>
 <body>
-  <div class="aurora" aria-hidden="true"></div>
+<a class="skip-link" href="#main">Skip to content</a>
+<canvas id="bg" aria-hidden="true"></canvas>
+<div class="bg-veil" aria-hidden="true"></div>
 
-  <header class="nav">
-    <a class="brand" href="#top">
-      <img src="assets/app-icon.png" alt="" width="44" height="44" />
-      <span>OCTA<span class="dash">–</span>JARVIS</span>
+<header class="site-head">
+  <div class="wrap head-inner">
+    <a class="brand" href="#top" aria-label="Octa-Jarvis home">
+      <img src="./assets/app-icon.png" alt="" width="34" height="34">
+      <span>OCTA<span class="brand-dash">-</span>JARVIS</span>
     </a>
-    <nav>
-      <a href="#download">Download</a>
+    <nav class="head-nav" aria-label="Sections">
       <a href="#features">Features</a>
+      <a href="#whats-new">What&rsquo;s new</a>
       <a href="#install">Install</a>
-      <a href="#release">Release notes</a>
+      <a href="#updates">Updates</a>
     </nav>
-  </header>
+    <a class="btn btn-small btn-primary" id="head-download" href="https://github.com/sahilsahilimtiyaz-code/J2/releases/latest">Download</a>
+  </div>
+</header>
 
-  <main id="top">
-    <section class="hero">
-      <img class="orb" src="assets/app-icon.png" alt="Octa-Jarvis app icon" width="228" height="228" />
-      <p class="eyebrow">Private Android build · sideload only</p>
-      <h1>Your phone,<br /><span>properly staffed.</span></h1>
-      <p class="lede">
-        Octa-Jarvis is a voice-first assistant that runs on your own device. It thinks offline,
-        speaks in your chosen voice, controls the phone by touch and keeps what it learns about you.
-      </p>
-
-      <div class="cta" id="download">
-        <a class="button primary" id="download-button"
-           href="https://github.com/sahilsahilimtiyaz-code/J2/releases/latest/download/app-debug.apk"
-           rel="noopener">
-          <span class="chev">↓</span>
-          <span>
+<main id="main">
+  <section class="hero" id="top">
+    <div class="wrap">
+      <p class="badge"><span class="pulse" aria-hidden="true"></span><span id="version-badge">Latest release</span></p>
+      <h1>Your own <span class="grad">Jarvis</span>,<br>running on your phone.</h1>
+      <p class="lede">A private, voice-first Android assistant. It answers in your own cloned voice, controls your phone by voice, keeps working without a network &mdash; and updates itself from this page.</p>
+      <div class="actions">
+        <a class="btn btn-primary" id="download-btn" href="https://github.com/sahilsahilimtiyaz-code/J2/releases/latest">
+          <span class="btn-text">
             <strong>Download APK</strong>
-            <small id="download-sub">Latest signed build</small>
+            <small id="download-sub">Signed build &middot; Android 12+</small>
           </span>
+          <svg class="arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0 4.5-4.5M12 15l-4.5-4.5M5 19h14"/></svg>
         </a>
-        <a class="button ghost" href="#install">How to install</a>
+        <a class="btn btn-ghost" href="#whats-new">See what&rsquo;s new</a>
       </div>
+      <p class="hero-meta" id="apk-meta">Checks for updates every 12 hours &middot; installs over the previous version</p>
+      <ul class="chips" aria-label="Highlights">
+        <li>Voice control</li>
+        <li>Offline replies</li>
+        <li>Screen automation</li>
+        <li>On-device memory</li>
+      </ul>
+    </div>
+  </section>
 
-      <div class="status" id="status" hidden>
-        <span class="dot" aria-hidden="true"></span>
-        <span id="status-text">Checking the latest build…</span>
+  <section class="stats" aria-label="At a glance">
+    <div class="wrap stats-grid">
+      <div><strong id="stat-version">Latest build</strong><span>Current release</span></div>
+      <div><strong>12h</strong><span>Update check interval</span></div>
+      <div><strong>1 APK</strong><span>No store, no account</span></div>
+      <div><strong>On device</strong><span>Replies never leave the phone</span></div>
+    </div>
+  </section>
+
+  <section class="section" id="features">
+    <div class="wrap">
+      <p class="eyebrow">Capabilities</p>
+      <h2 class="section-title">Built to actually do the work</h2>
+      <p class="section-lede">Not a chat window bolted onto Android. Octa-Jarvis reads the screen, plans a few steps and carries them out &mdash; with a Stop control always one tap away.</p>
+      <div class="feature-grid">
+        <article class="card feature reveal">
+          <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3Z"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></svg></span>
+          <h3>Voice-first, not voice-only</h3>
+          <p>Wake-word listening, streamed speech and barge-in. Interrupt mid-sentence and Jarvis silences himself immediately.</p>
+        </article>
+        <article class="card feature reveal">
+          <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 3v9M6 15v6M18 3v6M18 12v9M3 12h6M15 9h6"/><circle cx="6" cy="12" r="2"/><circle cx="18" cy="9" r="2"/></svg></span>
+          <h3>Controls your phone</h3>
+          <p>Opens apps, taps, scrolls and types. Multi-step tasks run through an observe, decide, act and verify loop, capped so nothing runs away.</p>
+        </article>
+        <article class="card feature reveal">
+          <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 3l7 7M14 14l6 6"/><path d="M17 3.5a4.5 4.5 0 0 1 3.5 3.5L9 18.5 5.5 15 17 3.5Z"/><path d="M4 20h6"/></svg></span>
+          <h3>Taps where you meant</h3>
+          <p>A correction ladder plus a learned per-app offset keep screen control on target, app by app, instead of guessing once.</p>
+        </article>
+        <article class="card feature reveal">
+          <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/></svg></span>
+          <h3>Answers with no network</h3>
+          <p>An on-device conversational engine handles greetings, follow-ups, arithmetic, memory recall and drafting &mdash; no signal required.</p>
+        </article>
+        <article class="card feature reveal">
+          <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/><circle cx="12" cy="12" r="4.5"/><path d="M6.5 6.5l2 2M15.5 15.5l2 2M17.5 6.5l-2 2M8.5 15.5l-2 2"/></svg></span>
+          <h3>Remembers you</h3>
+          <p>Profile facts and extracted memories are recalled into every conversation, and you can read, edit or delete all of them.</p>
+        </article>
+        <article class="card feature reveal">
+          <span class="ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.2-2.9 7.6-7 9-4.1-1.4-7-4.8-7-9V6l7-3Z"/><path d="M9 12l2.2 2.2L15.5 10"/></svg></span>
+          <h3>Keys stay encrypted</h3>
+          <p>Provider keys live in Android Keystore, memory lives in a local database, and no usage data is sent to us.</p>
+        </article>
       </div>
-      <p class="fineprint">
-        Updates install over the top of your current app. Your API keys, memories and settings are kept.
-      </p>
-    </section>
+    </div>
+  </section>
 
-    <section class="grid" id="features">
-      <article>
-        <span class="tag">01</span>
-        <h2>Offline intelligence</h2>
-        <p>Download a GGUF model once, or use the built-in on-device engine. Conversations, memory recall
-           and every phone action keep working with the network switched off.</p>
-      </article>
-      <article>
-        <span class="tag">02</span>
-        <h2>Precise touch control</h2>
-        <p>Jarvis taps by label or pixel, verifies that the screen actually changed, then corrects its
-           aim and remembers the offset for that app.</p>
-      </article>
-      <article>
-        <span class="tag">03</span>
-        <h2>Your voice</h2>
-        <p>Fish Audio, ElevenLabs or the system voice. Barge in at any time and he stops mid-sentence.</p>
-      </article>
-      <article>
-        <span class="tag">04</span>
-        <h2>Update notices</h2>
-        <p>When a new build lands here, the app on your phone offers it on next launch — no store,
-           no account, no tracking.</p>
-      </article>
-    </section>
+  <section class="section" id="whats-new">
+    <div class="wrap split">
+      <div class="reveal">
+        <p class="eyebrow">Release notes</p>
+        <h2 class="section-title">What&rsquo;s new in <span class="grad-soft" id="release-version">the latest build</span></h2>
+        <p class="section-lede" id="release-date">Published by the release workflow.</p>
+        <ul class="release-notes" id="release-notes">
+          <li>Fetching the release manifest&hellip;</li>
+        </ul>
+        <p class="checksum"><span>SHA-256</span><code id="checksum">published with each build</code><button class="copy" id="copy-checksum" type="button">Copy</button></p>
+        <a class="link" href="https://github.com/sahilsahilimtiyaz-code/J2/releases" target="_blank" rel="noopener">All releases on GitHub &rarr;</a>
+      </div>
+      <aside class="card version-card reveal">
+        <header>
+          <span class="pill" id="card-version">Latest</span>
+          <span class="muted" id="card-date">&mdash;</span>
+        </header>
+        <dl>
+          <div><dt>Format</dt><dd>Signed APK</dd></div>
+          <div><dt>Minimum Android</dt><dd data-android>Android 12+</dd></div>
+          <div><dt>Update source</dt><dd>version.json</dd></div>
+          <div><dt>Check interval</dt><dd>Every 12 hours</dd></div>
+        </dl>
+        <a class="btn btn-primary btn-block" id="card-download" href="https://github.com/sahilsahilimtiyaz-code/J2/releases/latest">Download the latest build</a>
+      </aside>
+    </div>
+  </section>
 
-    <section class="steps" id="install">
-      <h2 class="section-title">Install in four taps</h2>
-      <ol>
-        <li><span>1</span> Tap <strong>Download APK</strong> and wait for it to finish in the browser.</li>
-        <li><span>2</span> Open the downloaded file and allow <strong>Install unknown apps</strong> for your browser when asked.</li>
-        <li><span>3</span> Open Octa-Jarvis, finish onboarding, then in <strong>App info → three-dot menu</strong> choose <strong>Allow restricted settings</strong> so screen control can be enabled.</li>
-        <li><span>4</span> Grant microphone, notification and accessibility permissions from the in-app setup wizard.</li>
+  <section class="section" id="install">
+    <div class="wrap">
+      <p class="eyebrow">Install</p>
+      <h2 class="section-title">Four steps, about a minute</h2>
+      <ol class="steps">
+        <li class="reveal"><span>01</span><div><h3>Download the APK</h3><p>Tap the download button. The file lands in your phone&rsquo;s Downloads folder.</p></div></li>
+        <li class="reveal"><span>02</span><div><h3>Allow the install</h3><p>When Android asks, allow your browser to install unknown apps. That is normal for a sideloaded build.</p></div></li>
+        <li class="reveal"><span>03</span><div><h3>Install over the old copy</h3><p>Every release is signed with the same key, so it installs on top of your existing Octa-Jarvis and keeps your data.</p></div></li>
+        <li class="reveal"><span>04</span><div><h3>Grant the permissions you want</h3><p>Microphone and notifications first. For screen control, enable the accessibility service and allow restricted settings in App info.</p></div></li>
       </ol>
-      <p class="note">
-        Installing a newer build over an older one keeps every memory, key and setting.
-        Never uninstall first unless you have exported a backup from Settings.
-      </p>
-    </section>
+      <p class="note">After that, updates arrive on their own: the app asks <code>version.json</code> whether a newer build exists, then offers a one-tap download.</p>
+    </div>
+  </section>
 
-    <section class="release" id="release">
-      <h2 class="section-title">Release notes</h2>
-      <div class="card">
-        <div class="card-head">
-          <span class="pill" id="version-pill">v1.0.0</span>
-          <span class="muted" id="released-at">2026-11-09</span>
-        </div>
-        <p id="notes">First Octa-Jarvis release.</p>
-        <p class="muted small" id="checksum-row" hidden>
-          SHA-256 <code id="checksum"></code>
-        </p>
+  <section class="section" id="updates">
+    <div class="wrap split">
+      <div class="reveal">
+        <p class="eyebrow">Update pipeline</p>
+        <h2 class="section-title">One manifest, every device</h2>
+        <p class="section-lede">Each release is built, tested and signed by GitHub Actions. The workflow rewrites a single manifest, and your installed copy reads it to decide whether to prompt you.</p>
+        <ul class="ticks">
+          <li>Unit tests and <code>assembleDebug</code> run before anything is published.</li>
+          <li>The APK is attached to a GitHub Release and hashed with SHA-256.</li>
+          <li>The manifest carries the version, notes, checksum and a minimum supported build.</li>
+          <li>Skipping a version is remembered on the phone, so the prompt never nags twice.</li>
+        </ul>
       </div>
-    </section>
-  </main>
+      <aside class="card code-card reveal">
+        <header><span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="muted">version.json</span></header>
+<pre><code>{
+  "versionCode": 150,
+  "versionName": "1.0.150",
+  "apkUrl": ".../releases/latest/download/app-debug.apk",
+  "releaseNotes": "...",
+  "sha256": "...",
+  "minSupportedVersionCode": 0
+}</code></pre>
+      </aside>
+    </div>
+  </section>
+</main>
 
-  <footer>
-    <img src="assets/app-icon.png" alt="" width="28" height="28" />
-    <span>Octa-Jarvis · built for one phone, on purpose.</span>
-  </footer>
+<footer class="site-foot">
+  <div class="wrap foot-inner">
+    <div class="foot-brand">
+      <img src="./assets/app-icon.png" alt="" width="26" height="26">
+      <span>Octa-Jarvis</span>
+    </div>
+    <p class="muted">Kotlin &middot; Jetpack Compose &middot; GitHub Actions</p>
+    <nav aria-label="Project links">
+      <a href="https://github.com/sahilsahilimtiyaz-code/J2" target="_blank" rel="noopener">Source</a>
+      <a href="https://github.com/sahilsahilimtiyaz-code/J2/releases" target="_blank" rel="noopener">Releases</a>
+      <a href="./version.json">Manifest</a>
+    </nav>
+  </div>
+  <p class="wrap copyright">&copy; <span id="year">2026</span> Octa-Jarvis &middot; built for one phone, shared with care</p>
+</footer>
 
-  <script>
-    (function () {
-      const status = document.getElementById("status");
-      const statusText = document.getElementById("status-text");
-      const button = document.getElementById("download-button");
-      const sub = document.getElementById("download-sub");
-      const pill = document.getElementById("version-pill");
-      const notes = document.getElementById("notes");
-      const releasedAt = document.getElementById("released-at");
-      const checksumRow = document.getElementById("checksum-row");
-      const checksum = document.getElementById("checksum");
-
-      fetch("version.json", { cache: "no-store" })
-        .then(function (r) {
-          if (!r.ok) throw new Error("HTTP " + r.status);
-          return r.json();
-        })
-        .then(function (data) {
-          if (data.versionName) {
-            pill.textContent = "v" + data.versionName;
-            sub.textContent = "Version " + data.versionName + " · signed build";
-          }
-          if (data.releaseNotes) notes.textContent = data.releaseNotes;
-          if (data.releasedAt) releasedAt.textContent = data.releasedAt;
-          if (data.sha256) {
-            checksum.textContent = data.sha256;
-            checksumRow.hidden = false;
-          }
-          const url = data.apkUrl || data.downloadPageUrl;
-          if (url) button.href = url;
-          status.hidden = false;
-          statusText.textContent =
-            "Latest build v" + (data.versionName || "1.0.0") + " · " +
-            new Date().toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-        })
-        .catch(function () {
-          status.hidden = false;
-          statusText.textContent = "Latest build available on GitHub Releases";
-        });
-    })();
-  </script>
+<script type="module" src="./app.js"></script>
 </body>
 </html>

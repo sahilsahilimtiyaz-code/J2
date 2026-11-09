@@ -659,3 +659,13 @@
   "app update available" sheet on launch.
 - **Octa-Jarvis site** — `site/` holds the download page. `release.yml` builds the
   APK, publishes a GitHub Release, rewrites `site/version.json` and deploys Pages.
+
+## Octa-Jarvis download site redesign
+
+- Rebuilt `site/` as a modern single-page site: hero, capabilities, live release notes,
+  install steps and update-pipeline sections, driven by `site/version.json`.
+- Added `site/scene.js`: a three.js background with a wireframe orb, halo ring and
+  particle field; it pauses when the tab is hidden and renders one static frame under
+  `prefers-reduced-motion`.
+- Added `site/app.js`: manifest fetch (local file, then raw GitHub), download links,
+  checksum copy, sticky header state and scroll reveals.

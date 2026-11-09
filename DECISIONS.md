@@ -693,3 +693,11 @@
   versionCode, versionName, APK URL, notes, SHA-256. The app checks GitHub Pages and
   falls back to the raw repository copy, so a Pages outage cannot hide a release.
   "Skip this version" stores the versionCode locally.
+
+## Download site: three.js, no build step
+
+The Octa-Jarvis site stays plain HTML, CSS and ES modules because GitHub Pages serves
+it directly and the release workflow deploys `site/` untouched. three.js 0.187.0 loads
+from jsDelivr through a native module import, so there is no bundler, package.json or
+build step to keep in sync. `site/version.json` remains the update contract the Android
+app reads; the page only decorates it.
