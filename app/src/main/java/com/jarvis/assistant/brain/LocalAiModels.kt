@@ -1751,15 +1751,10 @@ class LocalLlmProvider(
         val modelFile = downloadManager?.modelFile(readySpec)
         val ggufInfo = modelFile?.let { GgufModelInspector.inspect(it) }
 
-        if (downloadManager != null && (modelFile == null || !modelFile.exists() || ggufInfo?.valid != true)) {
-            emit(
-                LlmEvent.Error(
-                    "Offline model '${requestedSpec.displayName}' is not downloaded yet. " +
-                        "Open Settings → AI Model → Offline Local AI Models and tap Download.",
-                ),
-            )
-            return@flow
-        }
+        // The GGUF file is optional. Without it the built-in on-device engine still
+        // answers and runs every phone tool, so an un-downloaded model is never a
+        // dead end: it simply reports that the built-in engine is answering.
+        val isModelReady = modelFile != null && modelFile.exists() && ggufInfo?.valid == true
 
         // Connection test probe from ProviderTester
         val lastMessage = request.messages.lastOrNull()
@@ -1772,7 +1767,7 @@ class LocalLlmProvider(
         }
 
         // Optional: If a local llama.cpp / Ollama server is running on loopback, try it first
-        if (isLocalRunnerReachable()) {
+        if (isModelReady && isLocalRunnerReachable()) {
             var emittedAny = false
             runCatching {
                 openAiBridge.stream(
@@ -1835,6 +1830,7 @@ class LocalLlmProvider(
             request = request,
             spec = readySpec,
             ggufInfo = ggufInfo,
+            modelReady = isModelReady,
         )
 
         val words = reply.split(Regex("(?<=\\s)"))
@@ -1897,6 +1893,7 @@ class LocalLlmProvider(
         request: ChatRequest,
         spec: LocalModelSpec,
         ggufInfo: GgufHeaderInfo?,
+        modelReady: Boolean,
     ): String {
         val systemText = request.messages.firstOrNull { it.role == LlmRole.SYSTEM }?.content.orEmpty()
         val title = extractOwnerTitle(systemText)
@@ -1989,47 +1986,33 @@ class LocalLlmProvider(
             }
         }
 
-        return when {
-            lower.contains("who are you") || lower.contains("what is your name") || lower.contains("introduce yourself") ->
-                "I am Jarvis, your personal AI assistant, $title. I am currently running locally on your device using ${spec.displayName} (${spec.parameterBadge}) with zero API keys required."
+        return OfflineConversationEngine.reply(
+            userText = userText,
+            context = OfflineReplyContext(
+                ownerTitle = title,
+                ownerName = ownerName,
+                modelName = spec.displayName,
+                modelSizeLabel = spec.approxSizeLabel,
+                modelReady = modelReady,
+                memoryLines = memoryLinesFromPrompt(systemText),
+                lastAssistantReply = lastAssistantReply,
+                previousUserQuestion = previousUserQuestion,
+                now = Date(),
+            ),
+        )
+    }
 
-            lower.contains("who am i") || lower.contains("what is my name") ->
-                if (ownerName.isNotBlank()) {
-                    "You are $ownerName, $title."
-                } else {
-                    "You are my owner, $title."
-                }
-
-            lower.contains("which model") || lower.contains("what model") || lower.contains("offline") || lower.contains("local ai") -> {
-                val sizeStr = ggufInfo?.fileSizeBytes?.takeIf { it > 0 }?.let { LocalModelCatalog.formatBytes(it) } ?: spec.approxSizeLabel
-                "I am currently operating on-device with ${spec.displayName} ($sizeStr, ${spec.bestUse}), $title. All phone tools, web research, voice commands, and local memories are active."
-            }
-
-            lower.contains("what can you do") || lower.contains("help") || lower.contains("capabilities") ->
-                "Running on ${spec.displayName}, $title, I can perform web research, recall and save your personal memories and notes, open any installed app or specific section like your YouTube profile, play videos, send WhatsApp messages and voice notes, place calls, send texts, set alarms, timers and reminders, toggle the torch, adjust volume and brightness, and read notifications."
-
-            lower.contains("time") && (lower.contains("what") || lower.contains("current") || lower.contains("tell")) -> {
-                val now = SimpleDateFormat("HH:mm 'on' EEEE, d MMMM yyyy", Locale.getDefault()).format(Date())
-                "It is $now, $title."
-            }
-
-            lower.startsWith("write ") || lower.contains("draft ") || lower.contains("compose ") -> {
-                val topic = userText.replace(Regex("(?i)^(jarvis\\s*,?\\s*)?(please\\s+)?(write|draft|compose)\\s+(a\\s+|an\\s+)?"), "").trim()
-                "Certainly, $title. Here is a concise draft for $topic:\n\n" +
-                    "Good day — I am writing regarding $topic. Please let me know a convenient time to discuss the next steps. Best regards${if (ownerName.isNotBlank()) ", $ownerName" else ""}."
-            }
-
-            else -> {
-                val allMemoriesSummary = listStoredMemoriesFromPrompt(systemText)
-                if (allMemoriesSummary != null && (lower.contains("note") || lower.contains("memor") || lower.contains("remember") || lower.contains("know about me"))) {
-                    "Here is what I have stored in your memories and notes, $title:\n$allMemoriesSummary"
-                } else if (!previousUserQuestion.isNullOrBlank() && (lower.startsWith("and ") || lower.startsWith("what about ") || lower.startsWith("tell me more") || lower.contains("about that") || lower.contains("about it"))) {
-                    "Regarding your earlier point on \"$previousUserQuestion\", $title: I have that context in focus. Tell me if you would like me to run a web search on it, save it to your memories, or execute a phone action."
-                } else {
-                    "At your service on ${spec.displayName}, $title. You can ask me to open any app or section (such as your YouTube profile), research any topic on the web, save or run skills, or control your phone."
-                }
-            }
-        }
+    /** Collects the sanitized memory lines the memory layer injects into the prompt. */
+    private fun memoryLinesFromPrompt(systemPrompt: String): List<String> {
+        val section = systemPrompt.substringAfter("## Retrieved memory notes", "")
+            .substringBefore("## Non-negotiable", "")
+        if (section.isBlank()) return emptyList()
+        return section.lines()
+            .map { it.trim() }
+            .filter { it.startsWith("- ") }
+            .map { it.removePrefix("- ").replace(Regex("^\\([^)]*\\)\\s*"), "").trim() }
+            .filter { it.isNotBlank() && !it.contains("Octavian") }
+            .take(12)
     }
 
     private fun parseToolOutcome(rawJson: String): String? {

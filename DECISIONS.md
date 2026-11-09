@@ -674,3 +674,22 @@
   - `fact_check`: Analyzes assertions and rumors against fact-checking and news indices, providing evidence-backed truth evaluations.
 
 
+
+## Octa-Jarvis: icon, offline brain, tap precision and updates
+
+- **Icon source of truth** — the artwork lives as one 1024px PNG plus a deterministic
+  generator, so densities and the adaptive safe-zone layer can never drift apart from
+  the master again. No hand-edited per-density files.
+- **Offline replies stay native Kotlin** — shipping a llama.cpp JNI build was out of
+  scope for this change, so the downloaded GGUF remains optional and the built-in
+  conversational engine answers instead of emitting "model not downloaded". It never
+  pretends to know a fact it cannot verify: general questions are declined honestly
+  and routed to web search when a connection exists.
+- **Touch correction instead of a single fixed offset** — the previous 30%-of-height
+  retry was a guess. The correction ladder keeps every retry inside the element's
+  reported bounds (so it cannot hit a neighbour) and records the delta of the retry
+  that verified, averaged per package and clamped to 44px.
+- **Updates come from our own site** — `site/version.json` is the release contract:
+  versionCode, versionName, APK URL, notes, SHA-256. The app checks GitHub Pages and
+  falls back to the raw repository copy, so a Pages outage cannot hide a release.
+  "Skip this version" stores the versionCode locally.

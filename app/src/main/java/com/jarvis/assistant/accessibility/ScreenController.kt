@@ -314,8 +314,19 @@ class ScreenController(private val service: AccessibilityService) {
                 }.getOrDefault(false)
 
                 if (!clicked && bounds.width() > 0 && bounds.height() > 0) {
-                    Log.d("JARVIS_ACT", "executeRefAction: ACTION_CLICK returned false, using center gesture tap as last resort (${bounds.centerX()}, ${bounds.centerY()})")
-                    clicked = jarvisService?.dispatchTapGesture(bounds.exactCenterX(), bounds.exactCenterY()) ?: false
+                    // Dispatch a physically precise, bias-corrected touch instead of
+                    // the raw rectangle centre: thin rows and edge-anchored controls
+                    // are where an off-by-a-few-pixels tap silently does nothing.
+                    val (displayW, displayH) = jarvisService?.getScreenDimensions() ?: (1080 to 2340)
+                    TapPrecisionEngine.attach(jarvisService)
+                    val point = TapPrecisionEngine.applyBias(
+                        TapPrecisionEngine.targetPoint(ElementBox.from(bounds), displayW, displayH),
+                        TapPrecisionEngine.learnedBias(pkg, displayW, displayH),
+                        displayW,
+                        displayH,
+                    )
+                    Log.d("JARVIS_ACT", "executeRefAction: ACTION_CLICK returned false, dispatching corrected touch at (${point.x}, ${point.y})")
+                    clicked = jarvisService?.dispatchTapGesture(point.x.toFloat(), point.y.toFloat()) ?: false
                 }
                 val outcome = pollForClickVerification(before, nodeSnapshot.text.ifBlank { nodeSnapshot.contentDescription })
                 return ScreenResult(
@@ -811,24 +822,31 @@ class ScreenController(private val service: AccessibilityService) {
                     )
                 }
 
-                // Second physical touch, offset towards the upper part of the
-                // target. YouTube and similar feeds often put a non-interactive
-                // title node on top of the real thumbnail hit area.
+                // Ordered touch-correction ladder: feeds and list rows often report
+                // bounds whose visual centre is not the hit-tested centre, so retry
+                // inside the element (upper/lower thirds, left/right thirds, nudges)
+                // before declaring the tap unsuccessful.
                 if (gestureSent && candidate.bounds.height() > 24) {
-                    attempts++
-                    jarvisService?.dispatchTapGesture(
-                        x = candidate.bounds.exactCenterX(),
-                        y = candidate.bounds.top + candidate.bounds.height() * 0.30f,
-                    )
-                    val checkC = pollForClickVerification(before, bestLabel)
-                    if (checkC.verified) {
-                        return ScreenResult(
-                            success = true,
-                            message = "Tapped \"$bestLabel\" via physical touch (verified: ${checkC.signal}).",
-                            verified = true,
-                            verificationSignal = checkC.signal,
-                            attempts = attempts,
-                        )
+                    val (displayW, displayH) = jarvisService?.getScreenDimensions() ?: (1080 to 2340)
+                    val appPackage = foregroundPackage()
+                    val box = ElementBox.from(candidate.bounds)
+                    val centre = TapPrecisionEngine.targetPoint(box, displayW, displayH)
+                    val bias = TapPrecisionEngine.learnedBias(appPackage, displayW, displayH)
+                    for (retry in TapPrecisionEngine.correctionLadder(centre, box, displayW, displayH).drop(1)) {
+                        attempts++
+                        val point = TapPrecisionEngine.applyBias(retry, bias, displayW, displayH)
+                        jarvisService?.dispatchTapGesture(point.x.toFloat(), point.y.toFloat())
+                        val checkC = pollForClickVerification(before, bestLabel)
+                        if (checkC.verified) {
+                            TapPrecisionEngine.recordVerifiedCorrection(appPackage, centre, point)
+                            return ScreenResult(
+                                success = true,
+                                message = "Tapped \"$bestLabel\" after touch correction (verified: ${checkC.signal}).",
+                                verified = true,
+                                verificationSignal = checkC.signal,
+                                attempts = attempts,
+                            )
+                        }
                     }
                 }
             }
@@ -860,21 +878,59 @@ class ScreenController(private val service: AccessibilityService) {
         if (x <= 0 || y <= 0) {
             return ScreenResult(false, "Invalid coordinates ($x, $y).", verified = false)
         }
-        val before = withContext(Dispatchers.Main) { captureFingerprint() }
-        val sent = jarvisService?.dispatchTapGesture(x.toFloat(), y.toFloat()) ?: false
-        if (!sent) {
-            return ScreenResult(false, "Could not send touch gesture to coordinates ($x, $y).", verified = false)
+        TapPrecisionEngine.attach(jarvisService)
+        val (displayW, displayH) = jarvisService?.getScreenDimensions() ?: (1080 to 2340)
+        val appPackage = foregroundPackage()
+        val bias = TapPrecisionEngine.learnedBias(appPackage, displayW, displayH)
+        val requested = TapPoint(x, y)
+        val ladder = TapPrecisionEngine.correctionLadder(requested, null, displayW, displayH)
+        var attempts = 0
+        var lastPoint = requested
+        var dispatchedAny = false
+
+        for (candidate in ladder) {
+            val point = TapPrecisionEngine.applyBias(candidate, bias, displayW, displayH)
+            val before = withContext(Dispatchers.Main) { captureFingerprint() }
+            val sent = jarvisService?.dispatchTapGesture(point.x.toFloat(), point.y.toFloat()) ?: false
+            attempts++
+            if (!sent) continue
+            dispatchedAny = true
+            lastPoint = point
+            val outcome = pollForClickVerification(before, "coordinates (${point.x}, ${point.y})")
+            if (outcome.verified) {
+                if (attempts > 1) {
+                    TapPrecisionEngine.recordVerifiedCorrection(appPackage, requested, point)
+                }
+                val correctionNote = if (attempts > 1) {
+                    " after ${attempts - 1} touch correction${if (attempts > 2) "s" else ""}"
+                } else {
+                    ""
+                }
+                return ScreenResult(
+                    success = true,
+                    message = "Tapped coordinates (${point.x}, ${point.y})$correctionNote (verified: ${outcome.signal}).",
+                    verified = true,
+                    verificationSignal = outcome.signal,
+                    attempts = attempts,
+                )
+            }
+            if (attempts < ladder.size) delay(140L)
         }
-        val outcome = pollForClickVerification(before, "coordinates ($x, $y)")
+
+        if (!dispatchedAny) {
+            return ScreenResult(
+                success = false,
+                message = "Could not send a touch gesture to coordinates ($x, $y).",
+                verified = false,
+            )
+        }
         return ScreenResult(
             success = true,
-            message = if (outcome.verified) {
-                "Tapped coordinates ($x, $y) (verified: ${outcome.signal})."
-            } else {
-                "Tapped coordinates ($x, $y), but I could not confirm a visible change."
-            },
-            verified = outcome.verified,
-            verificationSignal = if (outcome.verified) outcome.signal else "coordinate_tap_dispatched_unverified",
+            message = "Tapped coordinates (${lastPoint.x}, ${lastPoint.y}) and tried $attempts corrected touches, " +
+                "but the screen did not visibly change.",
+            verified = false,
+            verificationSignal = "coordinate_tap_dispatched_unverified",
+            attempts = attempts,
         )
     }
 

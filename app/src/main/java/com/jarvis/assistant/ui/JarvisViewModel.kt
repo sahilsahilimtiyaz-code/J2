@@ -43,11 +43,22 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
     private val core = JarvisCore.get(application)
     private val appContext = application.applicationContext
     private val modelCatalogue = ModelCatalogueService(core.httpClient)
+    private val updateChecker =
+        com.jarvis.assistant.update.AppUpdateChecker(appContext, core.httpClient)
 
     private val _ui = MutableStateFlow(JarvisUiState())
     val ui: StateFlow<JarvisUiState> = _ui.asStateFlow()
 
     init {
+        _ui.update { it.copy(appVersionName = updateChecker.currentVersionName()) }
+
+        // Ask the Octa-Jarvis site whether a newer build exists, shortly after launch
+        // so the first screen has already settled when the popup appears.
+        viewModelScope.launch {
+            kotlinx.coroutines.delay(2_500L)
+            checkForUpdates()
+        }
+
         viewModelScope.launch {
             core.settings.collect { settings ->
                 _ui.update { state ->
@@ -411,6 +422,43 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
 
     fun openProposals() {
         _ui.update { it.copy(tab = JarvisTab.PROPOSALS, quickPanelOpen = false) }
+    }
+
+    // Updates -------------------------------------------------------------
+
+    /** Queries the Octa-Jarvis site for a newer build and surfaces the popup. */
+    fun checkForUpdates() {
+        if (_ui.value.checkingForUpdate) return
+        viewModelScope.launch {
+            _ui.update { it.copy(checkingForUpdate = true) }
+            val found = runCatching { updateChecker.check() }.getOrNull()
+            _ui.update { state ->
+                state.copy(
+                    checkingForUpdate = false,
+                    updateAvailable = found ?: state.updateAvailable,
+                )
+            }
+        }
+    }
+
+    /** Opens the APK download (or the download page) in the browser. */
+    fun downloadUpdate() {
+        val update = _ui.value.updateAvailable ?: return
+        if (!updateChecker.openDownload(appContext, update)) {
+            core.setError("I could not open the Octa-Jarvis download page. Visit " + com.jarvis.assistant.update.AppUpdateChecker.DOWNLOAD_PAGE_URL)
+        }
+        _ui.update { it.copy(updateAvailable = null) }
+    }
+
+    /** Hides the prompt until the next launch. */
+    fun dismissUpdatePrompt() {
+        _ui.update { it.copy(updateAvailable = null) }
+    }
+
+    /** Silences this exact version for good. */
+    fun skipUpdateVersion() {
+        _ui.value.updateAvailable?.let { update -> updateChecker.skipVersion(update.manifest.versionCode) }
+        _ui.update { it.copy(updateAvailable = null) }
     }
 
     fun dismissError() = core.dismissError()

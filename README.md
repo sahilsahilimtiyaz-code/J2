@@ -385,3 +385,28 @@ In **Settings → System → Phase 0 Probes & Call/Message Receptionist** (or pr
    - Place a WhatsApp voice call from a second phone: Jarvis detects the call at `0ms`, clicks the **Answer** button first (via Notification PendingIntent, View ID, Label, or `HumanVisionEyeEngine` green button pixel detection), switches on speakerphone, greets the caller, and converses with them.
 6. **WhatsApp Message by Contact Name (Never Requires Phone Number):**
    - Say *"Jarvis, send a WhatsApp message to <Contact Name> saying I will be there in 10 minutes"*. Jarvis resolves the contact by name (including phonetic/accented matches, WhatsApp JID rows, inline notification reply, or opening WhatsApp Search and typing their name) without ever asking for their phone number.
+
+## Octa-Jarvis download site and app updates
+
+The download page lives in [`site/`](site/index.html) and reads
+[`site/version.json`](site/version.json). Every installed build checks that file (and
+the raw repository copy as a fallback) on launch and every 12 hours; when
+`versionCode` is newer than the installed build, the app shows the update sheet and a
+notification that opens the download.
+
+Publishing a release (GitHub → Actions → **Publish Octa-Jarvis release** → Run workflow):
+
+1. Builds and signs the APK.
+2. Publishes a GitHub Release with `app-debug.apk`.
+3. Rewrites `site/version.json` with the new `versionCode`, `versionName`, notes and
+   SHA-256.
+4. Deploys `site/` to GitHub Pages.
+
+Enable Pages once under **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+
+The app icon set is generated, never hand-edited:
+
+```bash
+python3 tools/generate_app_icons.py                    # built-in Octa-Jarvis orb
+python3 tools/generate_app_icons.py design/app-icon.png  # your own 1024x1024 source
+```

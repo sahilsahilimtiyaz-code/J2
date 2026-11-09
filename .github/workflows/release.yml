@@ -1,0 +1,168 @@
+name: Publish Octa-Jarvis release
+
+# Builds a signed APK, publishes it as a GitHub Release, rewrites site/version.json
+# with the new version so every installed app sees "update available", and deploys
+# the download site to GitHub Pages.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_notes:
+        description: "Release notes shown in the app update popup"
+        required: false
+        default: "Octa-Jarvis maintenance release."
+      min_supported_version_code:
+        description: "Older builds below this versionCode are told the update is required (0 = optional)"
+        required: false
+        default: "0"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: octa-jarvis-release
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    name: Build, release, refresh site manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      version_code: ${{ steps.version.outputs.version_code }}
+      version_name: ${{ steps.version.outputs.version_name }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android SDK packages
+        run: sdkmanager --install "platforms;android-37.0" "build-tools;36.0.0"
+
+      - name: Set up Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+
+      - name: Configure stable signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          key_path="$RUNNER_TEMP/octa-jarvis-signing.keystore"
+          if [ -n "${KEYSTORE_BASE64:-}" ] && [ -n "${KEYSTORE_PASSWORD:-}" ] && [ -n "${KEY_ALIAS:-}" ] && [ -n "${KEY_PASSWORD:-}" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$key_path"
+            chmod 600 "$key_path"
+            {
+              echo "JARVIS_KEYSTORE_PATH=$key_path"
+              echo "JARVIS_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+              echo "JARVIS_KEY_ALIAS=$KEY_ALIAS"
+              echo "JARVIS_KEY_PASSWORD=$KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
+          elif [ -f "debug.keystore.base64" ]; then
+            tr -d '[:space:]' < debug.keystore.base64 | base64 --decode > "$key_path"
+            chmod 600 "$key_path"
+            {
+              echo "JARVIS_KEYSTORE_PATH=$key_path"
+              echo "JARVIS_KEYSTORE_PASSWORD=android"
+              echo "JARVIS_KEY_ALIAS=androiddebugkey"
+              echo "JARVIS_KEY_PASSWORD=android"
+            } >> "$GITHUB_ENV"
+          else
+            echo "::warning::No signing key configured; the APK will use the throwaway debug key and install over nothing."
+          fi
+
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          run="${GITHUB_RUN_NUMBER:-0}"
+          code=$((100 + run))
+          name="1.0.${run}"
+          echo "version_code=$code" >> "$GITHUB_OUTPUT"
+          echo "version_name=$name" >> "$GITHUB_OUTPUT"
+          echo "tag=v${name}" >> "$GITHUB_OUTPUT"
+          echo "Releasing v${name} (versionCode ${code})"
+
+      - name: Run unit tests and build APK
+        run: gradle testDebugUnitTest assembleDebug --no-daemon --stacktrace
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version_name }}
+          name: Octa-Jarvis v${{ steps.version.outputs.version_name }}
+          body: ${{ github.event.inputs.release_notes || 'Octa-Jarvis release.' }}
+          files: app/build/outputs/apk/debug/app-debug.apk
+          fail_on_unmatched_files: true
+
+      - name: Refresh site/version.json
+        env:
+          VERSION_CODE: ${{ steps.version.outputs.version_code }}
+          VERSION_NAME: ${{ steps.version.outputs.version_name }}
+          NOTES: ${{ github.event.inputs.release_notes || 'Octa-Jarvis release.' }}
+          MIN_SUPPORTED: ${{ github.event.inputs.min_supported_version_code || '0' }}
+        run: |
+          set -euo pipefail
+          apk="app/build/outputs/apk/debug/app-debug.apk"
+          sha=$(sha256sum "$apk" | awk '{print $1}')
+          python3 - <<'PY'
+          import json, os
+          manifest = {
+              "versionCode": int(os.environ["VERSION_CODE"]),
+              "versionName": os.environ["VERSION_NAME"],
+              "apkUrl": "https://github.com/sahilsahilimtiyaz-code/J2/releases/latest/download/app-debug.apk",
+              "downloadPageUrl": "https://sahilsahilimtiyaz-code.github.io/J2/",
+              "releaseNotes": os.environ["NOTES"],
+              "releasedAt": os.environ.get("GITHUB_RUN_STARTED", ""),
+              "sha256": os.environ["APK_SHA256"],
+              "minSupportedVersionCode": int(os.environ["MIN_SUPPORTED"]),
+          }
+          with open("site/version.json", "w") as handle:
+              json.dump(manifest, handle, indent=2)
+              handle.write("\n")
+          PY
+          sed -i "s/\"releasedAt\": \"\"/\"releasedAt\": \"$(date -u +%Y-%m-%d)\"/" site/version.json
+          cat site/version.json
+
+      - name: Commit refreshed manifest
+        run: |
+          set -euo pipefail
+          git config user.name "octa-jarvis-bot"
+          git config user.email "actions@github.com"
+          git add site/version.json
+          git commit -m "chore(site): publish Octa-Jarvis v${{ steps.version.outputs.version_name }} update manifest" || echo "manifest unchanged"
+          git push || echo "::warning::Could not push the manifest; the next build will publish it."
+
+      - name: Upload site artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+  deploy-site:
+    name: Deploy Octa-Jarvis download site
+    needs: build-and-release
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

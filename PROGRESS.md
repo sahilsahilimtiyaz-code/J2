@@ -640,3 +640,22 @@
   - Added `TaskAndModeToolsTest.kt` verifying operating modes, priority parsing, tool schemas, and default registry inclusion (100% green).
   - Both `compile_applet` and `lint_applet` pass with 0 errors.
 
+
+## Octa-Jarvis update (November 2026)
+
+- **Launcher artwork** — every icon density, the in-app logo and the adaptive
+  foreground now come from `design/octa-jarvis-icon.png`. Regenerate with
+  `python3 tools/generate_app_icons.py` or pass your own square PNG:
+  `python3 tools/generate_app_icons.py design/app-icon.png`.
+- **Offline replies** — `brain/OfflineConversationEngine.kt` answers greetings,
+  small talk, identity, time/date, arithmetic, memory questions, follow-ups,
+  drafting and general questions entirely on-device. A missing GGUF file no longer
+  blocks offline chat.
+- **Tap precision** — `accessibility/TapPrecisionEngine.kt` targets element centres
+  away from edges, retries a correction ladder when a touch verifies nothing, and
+  learns a per-app pixel offset from the touch that finally worked.
+- **App updates** — `update/AppUpdateChecker.kt` reads `site/version.json`, the
+  `UpdateCheckWorker` checks every 12 hours, and `ui/UpdateDialog.kt` shows the
+  "app update available" sheet on launch.
+- **Octa-Jarvis site** — `site/` holds the download page. `release.yml` builds the
+  APK, publishes a GitHub Release, rewrites `site/version.json` and deploys Pages.

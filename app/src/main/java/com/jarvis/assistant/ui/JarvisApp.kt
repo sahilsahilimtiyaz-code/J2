@@ -311,6 +311,18 @@ fun JarvisApp(vm: JarvisViewModel = viewModel()) {
                         onPreviewVoice = { draftText -> vm.previewConfirmationDraft(draftText) },
                         onReject = vm::rejectConfirmation,
                     )
+
+                    UpdateAvailableDialog(
+                        update = if (state.poweredOn && state.onboardingComplete) {
+                            state.updateAvailable
+                        } else {
+                            null
+                        },
+                        currentVersionName = state.appVersionName,
+                        onDownload = vm::downloadUpdate,
+                        onLater = vm::dismissUpdatePrompt,
+                        onSkipVersion = vm::skipUpdateVersion,
+                    )
                 }
             }
         }

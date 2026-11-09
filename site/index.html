@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Octa-Jarvis — your phone, upgraded</title>
+  <meta name="description" content="Download the latest Octa-Jarvis build for Android. Voice-first, on-device AI assistant with offline conversation, phone control and memory." />
+  <meta name="theme-color" content="#03060c" />
+  <link rel="icon" href="assets/favicon.png" />
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="aurora" aria-hidden="true"></div>
+
+  <header class="nav">
+    <a class="brand" href="#top">
+      <img src="assets/app-icon.png" alt="" width="44" height="44" />
+      <span>OCTA<span class="dash">–</span>JARVIS</span>
+    </a>
+    <nav>
+      <a href="#download">Download</a>
+      <a href="#features">Features</a>
+      <a href="#install">Install</a>
+      <a href="#release">Release notes</a>
+    </nav>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <img class="orb" src="assets/app-icon.png" alt="Octa-Jarvis app icon" width="228" height="228" />
+      <p class="eyebrow">Private Android build · sideload only</p>
+      <h1>Your phone,<br /><span>properly staffed.</span></h1>
+      <p class="lede">
+        Octa-Jarvis is a voice-first assistant that runs on your own device. It thinks offline,
+        speaks in your chosen voice, controls the phone by touch and keeps what it learns about you.
+      </p>
+
+      <div class="cta" id="download">
+        <a class="button primary" id="download-button"
+           href="https://github.com/sahilsahilimtiyaz-code/J2/releases/latest/download/app-debug.apk"
+           rel="noopener">
+          <span class="chev">↓</span>
+          <span>
+            <strong>Download APK</strong>
+            <small id="download-sub">Latest signed build</small>
+          </span>
+        </a>
+        <a class="button ghost" href="#install">How to install</a>
+      </div>
+
+      <div class="status" id="status" hidden>
+        <span class="dot" aria-hidden="true"></span>
+        <span id="status-text">Checking the latest build…</span>
+      </div>
+      <p class="fineprint">
+        Updates install over the top of your current app. Your API keys, memories and settings are kept.
+      </p>
+    </section>
+
+    <section class="grid" id="features">
+      <article>
+        <span class="tag">01</span>
+        <h2>Offline intelligence</h2>
+        <p>Download a GGUF model once, or use the built-in on-device engine. Conversations, memory recall
+           and every phone action keep working with the network switched off.</p>
+      </article>
+      <article>
+        <span class="tag">02</span>
+        <h2>Precise touch control</h2>
+        <p>Jarvis taps by label or pixel, verifies that the screen actually changed, then corrects its
+           aim and remembers the offset for that app.</p>
+      </article>
+      <article>
+        <span class="tag">03</span>
+        <h2>Your voice</h2>
+        <p>Fish Audio, ElevenLabs or the system voice. Barge in at any time and he stops mid-sentence.</p>
+      </article>
+      <article>
+        <span class="tag">04</span>
+        <h2>Update notices</h2>
+        <p>When a new build lands here, the app on your phone offers it on next launch — no store,
+           no account, no tracking.</p>
+      </article>
+    </section>
+
+    <section class="steps" id="install">
+      <h2 class="section-title">Install in four taps</h2>
+      <ol>
+        <li><span>1</span> Tap <strong>Download APK</strong> and wait for it to finish in the browser.</li>
+        <li><span>2</span> Open the downloaded file and allow <strong>Install unknown apps</strong> for your browser when asked.</li>
+        <li><span>3</span> Open Octa-Jarvis, finish onboarding, then in <strong>App info → three-dot menu</strong> choose <strong>Allow restricted settings</strong> so screen control can be enabled.</li>
+        <li><span>4</span> Grant microphone, notification and accessibility permissions from the in-app setup wizard.</li>
+      </ol>
+      <p class="note">
+        Installing a newer build over an older one keeps every memory, key and setting.
+        Never uninstall first unless you have exported a backup from Settings.
+      </p>
+    </section>
+
+    <section class="release" id="release">
+      <h2 class="section-title">Release notes</h2>
+      <div class="card">
+        <div class="card-head">
+          <span class="pill" id="version-pill">v1.0.0</span>
+          <span class="muted" id="released-at">2026-11-09</span>
+        </div>
+        <p id="notes">First Octa-Jarvis release.</p>
+        <p class="muted small" id="checksum-row" hidden>
+          SHA-256 <code id="checksum"></code>
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <img src="assets/app-icon.png" alt="" width="28" height="28" />
+    <span>Octa-Jarvis · built for one phone, on purpose.</span>
+  </footer>
+
+  <script>
+    (function () {
+      const status = document.getElementById("status");
+      const statusText = document.getElementById("status-text");
+      const button = document.getElementById("download-button");
+      const sub = document.getElementById("download-sub");
+      const pill = document.getElementById("version-pill");
+      const notes = document.getElementById("notes");
+      const releasedAt = document.getElementById("released-at");
+      const checksumRow = document.getElementById("checksum-row");
+      const checksum = document.getElementById("checksum");
+
+      fetch("version.json", { cache: "no-store" })
+        .then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.json();
+        })
+        .then(function (data) {
+          if (data.versionName) {
+            pill.textContent = "v" + data.versionName;
+            sub.textContent = "Version " + data.versionName + " · signed build";
+          }
+          if (data.releaseNotes) notes.textContent = data.releaseNotes;
+          if (data.releasedAt) releasedAt.textContent = data.releasedAt;
+          if (data.sha256) {
+            checksum.textContent = data.sha256;
+            checksumRow.hidden = false;
+          }
+          const url = data.apkUrl || data.downloadPageUrl;
+          if (url) button.href = url;
+          status.hidden = false;
+          statusText.textContent =
+            "Latest build v" + (data.versionName || "1.0.0") + " · " +
+            new Date().toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+        })
+        .catch(function () {
+          status.hidden = false;
+          statusText.textContent = "Latest build available on GitHub Releases";
+        });
+    })();
+  </script>
+</body>
+</html>

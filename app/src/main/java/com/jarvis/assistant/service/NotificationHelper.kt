@@ -17,9 +17,11 @@ object NotificationHelper {
     const val CHANNEL_VOICE = "jarvis_voice"
     const val CHANNEL_ALERTS = "jarvis_alerts"
     const val CHANNEL_SCREEN_CONTROL = "jarvis_screen_control"
+    const val CHANNEL_UPDATES = "jarvis_updates"
     const val LISTENING_NOTIFICATION_ID = 4101
     const val SCREEN_CONTROL_NOTIFICATION_ID = 4102
     const val HEALTH_REMINDER_NOTIFICATION_ID = 4103
+    const val UPDATE_NOTIFICATION_ID = 4104
 
     fun createChannels(context: Context) {
         val manager = NotificationManagerCompat.from(context)
@@ -47,6 +49,13 @@ object NotificationHelper {
                     .setName(context.getString(R.string.screen_control_channel_name))
                     .setDescription(context.getString(R.string.screen_control_channel_description))
                     .setShowBadge(false)
+                    .build(),
+                NotificationChannelCompat.Builder(
+                    CHANNEL_UPDATES,
+                    NotificationManagerCompat.IMPORTANCE_DEFAULT,
+                )
+                    .setName("Octa-Jarvis updates")
+                    .setDescription("Tells you when a newer Octa-Jarvis build is on the download site.")
                     .build(),
             ),
         )
@@ -195,6 +204,35 @@ object NotificationHelper {
     fun cancelHealthReminderNotification(context: Context) {
         runCatching {
             NotificationManagerCompat.from(context).cancel(HEALTH_REMINDER_NOTIFICATION_ID)
+        }
+    }
+
+    /** "App update available" card that opens the download page when tapped. */
+    fun showUpdateNotification(
+        context: Context,
+        versionName: String,
+        releaseNotes: String,
+        downloadUrl: String,
+    ) {
+        if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
+        val openDownload = PendingIntent.getActivity(
+            context,
+            3,
+            Intent(Intent.ACTION_VIEW, android.net.Uri.parse(downloadUrl))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val body = releaseNotes.ifBlank { "Open Octa-Jarvis to download the new build." }
+        val notification = NotificationCompat.Builder(context, CHANNEL_UPDATES)
+            .setSmallIcon(R.drawable.ic_jarvis)
+            .setContentTitle("Octa-Jarvis v$versionName is available")
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setAutoCancel(true)
+            .setContentIntent(openDownload)
+            .build()
+        runCatching {
+            NotificationManagerCompat.from(context).notify(UPDATE_NOTIFICATION_ID, notification)
         }
     }
 

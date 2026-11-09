@@ -13,5 +13,8 @@ class JarvisApplication : Application() {
         // shared by the screen, the workers and the listening service.
         runCatching { JarvisCore.get(this).warmUp() }
             .onFailure { android.util.Log.e("JarvisApplication", "Runtime start failed", it) }
+        // Quiet background check of the Octa-Jarvis site so releases are noticed
+        // even on days the app is not opened.
+        com.jarvis.assistant.update.UpdateCheckWorker.schedule(this)
     }
 }

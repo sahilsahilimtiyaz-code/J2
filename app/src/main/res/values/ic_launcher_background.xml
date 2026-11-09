@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Deep Jarvis dark navy frame behind the centered Arc Reactor emblem. -->
-    <color name="ic_launcher_background">#061116</color>
+    <!-- Deep black glass frame behind the centered Octa-Jarvis orb emblem. -->
+    <color name="ic_launcher_background">#04070D</color>
 </resources>
