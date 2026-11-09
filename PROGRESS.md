@@ -669,3 +669,15 @@
   `prefers-reduced-motion`.
 - Added `site/app.js`: manifest fetch (local file, then raw GitHub), download links,
   checksum copy, sticky header state and scroll reveals.
+
+## Download site: night-Earth background and Drive downloads (2026-11-09)
+
+- Every download button now opens the APK's Google Drive copy in a new tab, and the
+  install steps describe tapping Drive's download icon.
+- Replaced the wireframe orb in `site/scene.js` with the night side of Earth: NASA
+  Blue Marble and Black Marble textures self-hosted in `site/assets/earth-*`. A
+  shader renders dark oceans, faint landmasses, warm city lights with a bloom pass,
+  a cyan atmospheric limb and two soft shells; city-to-city arcs carry travelling
+  pulses, and light trails and a star field finish the frame.
+- Verified in the cloud browser at desktop width and at 390/360 px through an iframe
+  harness (phone widths soften arcs and trails). Reduced motion renders one frame.

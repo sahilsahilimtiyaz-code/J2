@@ -701,3 +701,17 @@ it directly and the release workflow deploys `site/` untouched. three.js 0.187.0
 from jsDelivr through a native module import, so there is no bundler, package.json or
 build step to keep in sync. `site/version.json` remains the update contract the Android
 app reads; the page only decorates it.
+
+## Download site: textures, shaders, and where downloads point
+
+- **Google Drive is the download destination.** The page links the Drive view URL
+  rather than `uc?export=download`, because Drive's large-file scan page breaks the
+  direct form; visitors tap the download icon on Drive. The in-app updater still
+  follows `version.json` to the GitHub release asset.
+- **Self-hosted NASA textures.** `earth-day.jpg` (Blue Marble) and `earth-night.png`
+  (Black Marble) are committed under `site/assets` instead of hot-linked, so there is
+  no CORS or CDN dependency. Both are public domain, about 900 KB together.
+- **City lights are thresholded, not boosted.** Amplifying the raw night-map values
+  also amplified the texture's faint haze and washed the continents grey. A smoothstep
+  mask plus a four-tap bloom keeps land dark and lights crisp, which is what makes the
+  globe read as the night side rather than a dim day map.
