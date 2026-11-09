@@ -232,10 +232,11 @@ a { color: inherit; }
 h1 {
   margin: 22px 0 0;
   font-family: var(--display);
-  font-size: clamp(40px, 7.2vw, 84px);
+  font-size: clamp(34px, 8vw, 84px);
   font-weight: 700;
-  line-height: 1.02;
+  line-height: 1.04;
   letter-spacing: -0.035em;
+  text-wrap: balance;
 }
 .grad {
   background: linear-gradient(100deg, #ffffff 5%, #b6e8ff 40%, #4fb4ff 75%, #2f7bff 100%);
@@ -335,10 +336,11 @@ h1 {
 .section-title {
   margin: 0;
   font-family: var(--display);
-  font-size: clamp(27px, 3.6vw, 40px);
+  font-size: clamp(26px, 3.6vw, 40px);
   font-weight: 600;
-  line-height: 1.14;
+  line-height: 1.16;
   letter-spacing: -0.025em;
+  text-wrap: balance;
 }
 
 .section-lede {
@@ -647,11 +649,42 @@ html.js .reveal.in { opacity: 1; transform: none; }
   .stats-grid { grid-template-columns: 1fr; gap: 16px; }
   .stats-grid > div { padding: 0; border-left: 0; }
   .stats-grid > div + div { padding-top: 14px; border-top: 1px solid var(--line); }
-  .hero { text-align: left; }
+  .hero { text-align: left; padding-top: 40px; padding-bottom: 40px; }
   .hero .badge, .actions, .hero-meta, .chips { justify-content: flex-start; }
-  .lede { margin-left: 0; }
+  h1 { font-size: clamp(31px, 8.6vw, 38px); }
+  h1 br { display: none; }
+  .lede { margin-left: 0; margin-top: 16px; font-size: 15px; }
+  .actions { margin-top: 26px; gap: 10px; }
   .actions .btn { width: 100%; justify-content: space-between; }
+  .badge { font-size: 11px; letter-spacing: 0.06em; padding: 6px 13px 6px 10px; }
+  .chips { gap: 6px; margin-top: 22px; }
+  .chips li { padding: 5px 11px; font-size: 11.5px; }
+  .head-inner { min-height: 62px; gap: 12px; }
+  .brand { gap: 9px; font-size: 11px; letter-spacing: 0.13em; }
+  .brand img { width: 30px; height: 30px; }
+  .site-head .btn-small { padding: 8px 13px; font-size: 12.5px; }
+  .section { padding: 48px 0; }
+  .section-title { font-size: 26px; }
+  .section-lede { font-size: 14.5px; }
+  .feature-grid { margin-top: 26px; gap: 12px; }
+  .feature { padding: 20px 18px 18px; }
+  .ico { width: 38px; height: 38px; margin-bottom: 14px; }
+  .steps { margin-top: 26px; gap: 10px; }
+  .steps li { padding: 15px 15px; gap: 13px; }
+  .steps li > span { flex-basis: 28px; height: 28px; font-size: 11.5px; }
+  .steps p { font-size: 13.5px; }
+  .version-card { padding: 18px; }
+  .code-card pre { padding: 16px; font-size: 11.5px; }
+  .checksum { padding: 10px 12px; }
+  .release-notes li { font-size: 14px; }
   .foot-inner { justify-content: flex-start; }
+  .foot-inner nav { gap: 16px; }
+}
+
+@media (max-width: 360px) {
+  .brand span { letter-spacing: 0.06em; }
+  .head-inner { gap: 8px; }
+  .site-head .btn-small { padding: 8px 11px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
