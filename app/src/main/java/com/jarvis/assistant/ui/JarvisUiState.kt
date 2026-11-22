@@ -10,6 +10,7 @@ import com.jarvis.assistant.service.ScreenUsageHealthSnapshot
 import com.jarvis.assistant.settings.AppSettings
 import com.jarvis.assistant.tools.ActionLogEntry
 import com.jarvis.assistant.tools.ToolSummary
+import com.jarvis.assistant.update.AvailableUpdate
 
 enum class ChatAuthor { USER, JARVIS }
 
@@ -113,6 +114,9 @@ data class JarvisUiState(
         com.jarvis.assistant.core.JarvisOperatingMode.DEFAULT,
     val batteryDiagnostics: com.jarvis.assistant.core.BatteryDiagnostics =
         com.jarvis.assistant.core.BatteryDiagnostics(),
+    val appVersionName: String = "",
+    val checkingForUpdate: Boolean = false,
+    val updateAvailable: AvailableUpdate? = null,
 ) {
     val showSettings: Boolean
         get() = tab == JarvisTab.SETTINGS
