@@ -1,10 +1,10 @@
 {
-  "versionCode": 100,
-  "versionName": "1.0.0",
+  "versionCode": 102,
+  "versionName": "1.0.2",
   "apkUrl": "https://github.com/sahilsahilimtiyaz-code/J2/releases/latest/download/app-debug.apk",
   "downloadPageUrl": "https://sahilsahilimtiyaz-code.github.io/J2/",
-  "releaseNotes": "First Octa-Jarvis release: new glass-orb app icon, a conversational on-device engine that answers offline, precise touch correction for screen control, and in-app update notifications.",
-  "releasedAt": "2026-11-09",
-  "sha256": "",
+  "releaseNotes": "",
+  "releasedAt": "2026-11-22",
+  "sha256": "33bfbb1268f4543014ae5763a791e50289af5b984a7cdcd05eb75ee1465dae1a",
   "minSupportedVersionCode": 0
 }
