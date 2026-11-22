@@ -22,6 +22,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -264,6 +265,11 @@ class ScreenUsageHealthService : Service() {
         if (tickerJob?.isActive == true) return
         tickerJob = serviceScope.launch {
             while (isActive) {
+                // Zero-CPU sleep when display is off; wakes instantly on ACTION_SCREEN_ON / ACTION_USER_PRESENT
+                if (!_snapshot.value.isScreenInteractive) {
+                    _snapshot.first { it.isScreenInteractive }
+                    if (!isActive) break
+                }
                 tickAndEvaluate(this@ScreenUsageHealthService)
                 delay(TICK_INTERVAL_MS)
             }
@@ -558,15 +564,25 @@ class ScreenUsageHealthService : Service() {
                 0L
             }
 
-            persistState(context)
+            val newContinuousMin = continuousMs / 60_000L
+            val newDailyMin = (dailyAccumulatedMs / 60_000L).coerceAtLeast(newContinuousMin)
+            val prevSnap = _snapshot.value
+            val stateChangedSignificantly = prevSnap.isScreenInteractive != interactive ||
+                prevSnap.continuousSessionMinutes != newContinuousMin ||
+                prevSnap.dailyScreenMinutes != newDailyMin ||
+                prevSnap.breaksTakenToday != breaksTakenToday
+
+            if (stateChangedSignificantly) {
+                persistState(context)
+            }
 
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             _snapshot.update {
                 it.copy(
                     serviceRunning = isRunning,
                     isScreenInteractive = interactive,
-                    continuousSessionMinutes = continuousMs / 60_000L,
-                    dailyScreenMinutes = (dailyAccumulatedMs / 60_000L).coerceAtLeast(continuousMs / 60_000L),
+                    continuousSessionMinutes = newContinuousMin,
+                    dailyScreenMinutes = newDailyMin,
                     recommendedLimitMinutes = healthSettings.sessionLimitMinutes,
                     breaksTakenToday = breaksTakenToday,
                     lastReminderAtMs = lastReminderAtMs,

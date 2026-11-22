@@ -284,10 +284,11 @@ class MemoryRepository(private val dao: MemoryDao) {
             ),
         )
         val conversation = dao.conversation(conversationId)
+        val existingTitle = conversation?.title
         val title = when {
-            !conversation?.title.isNullOrBlank() -> conversation!!.title
+            !existingTitle.isNullOrBlank() -> existingTitle
             author == "user" -> text.take(60)
-            else -> conversation?.title.orEmpty()
+            else -> existingTitle.orEmpty()
         }
         dao.touchConversation(conversationId, System.currentTimeMillis(), title)
         id

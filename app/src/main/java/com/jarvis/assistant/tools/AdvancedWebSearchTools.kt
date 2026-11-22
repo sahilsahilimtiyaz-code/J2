@@ -452,19 +452,20 @@ private data class WebResearchHit(
 )
 
 private fun httpGet(urlStr: String, timeoutMs: Int): String? = runCatching {
-    val connection = (URL(urlStr).openConnection() as HttpURLConnection).apply {
-        connectTimeout = timeoutMs
-        readTimeout = timeoutMs
-        setRequestProperty("User-Agent", USER_AGENT_MOBILE)
-        setRequestProperty("Accept-Language", "en-US,en;q=0.9")
-        setRequestProperty("Accept", "application/json,text/html,application/xhtml+xml")
-        instanceFollowRedirects = true
-    }
-    try {
-        val code = connection.responseCode
-        if (code !in 200..299) return@runCatching null
-        connection.inputStream.bufferedReader(Charsets.UTF_8).use(BufferedReader::readText)
-    } finally {
-        connection.disconnect()
+    val client = com.jarvis.assistant.brain.HttpClientFactory.shared.newBuilder()
+        .connectTimeout(timeoutMs.toLong(), java.util.concurrent.TimeUnit.MILLISECONDS)
+        .readTimeout(timeoutMs.toLong(), java.util.concurrent.TimeUnit.MILLISECONDS)
+        .followRedirects(true)
+        .followSslRedirects(true)
+        .build()
+    val request = okhttp3.Request.Builder()
+        .url(urlStr)
+        .header("User-Agent", USER_AGENT_MOBILE)
+        .header("Accept-Language", "en-US,en;q=0.9")
+        .header("Accept", "application/json,text/html,application/xhtml+xml")
+        .build()
+    client.newCall(request).execute().use { response ->
+        if (!response.isSuccessful) return@runCatching null
+        response.body.string()
     }
 }.getOrNull()

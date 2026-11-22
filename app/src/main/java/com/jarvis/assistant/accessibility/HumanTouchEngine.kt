@@ -819,19 +819,20 @@ object JarvisUiElementMatcher {
         }
 
         val isHighConsequence = HIGH_CONSEQUENCE_KEYWORDS.any { needle.contains(it) }
-        val ambiguous = second != null &&
+        val ambiguityMsg = if (
+            second != null &&
             isHighConsequence &&
             abs(best.score - second.score) <= 8 &&
             best.element.primaryLabel.lowercase(Locale.ROOT) != second.element.primaryLabel.lowercase(Locale.ROOT)
-
-        val ambiguityMsg = if (ambiguous) {
+        ) {
             "Multiple similar high-consequence elements matched '$raw': " +
                 "1) '${best.element.primaryLabel}' (#${best.element.index}) and " +
-                "2) '${second!!.element.primaryLabel}' (#${second.element.index}). " +
+                "2) '${second.element.primaryLabel}' (#${second.element.index}). " +
                 "Please specify which one to tap."
         } else {
             null
         }
+        val ambiguous = ambiguityMsg != null
 
         return ElementMatchResolution(
             best = best,

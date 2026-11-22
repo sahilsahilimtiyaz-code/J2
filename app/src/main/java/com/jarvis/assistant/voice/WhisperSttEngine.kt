@@ -231,7 +231,7 @@ class WhisperSttEngine(
         runCatching {
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return@use ""
-                val bodyText = response.body?.string().orEmpty()
+                val bodyText = response.body.string()
                 val parsed = Json.parseToJsonElement(bodyText)
                 parsed.jsonObject["text"]?.jsonPrimitive?.content?.trim().orEmpty()
             }

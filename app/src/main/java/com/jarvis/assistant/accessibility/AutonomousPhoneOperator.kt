@@ -538,7 +538,7 @@ object TaskResumptionEngine {
         // If the current app matches target app and current step was an app launcher, advance
         val currentStep = plan.steps.getOrNull(nextIndex)
         if (currentStep != null && currentStep.precondition is StepPrecondition.RequireForegroundPackage &&
-            currentScreen.packageName.equals((currentStep.precondition as StepPrecondition.RequireForegroundPackage).packageName, ignoreCase = true)
+            currentScreen.packageName.equals(currentStep.precondition.packageName, ignoreCase = true)
         ) {
             currentStep.status = StepExecutionStatus.VERIFIED_COMPLETED
             nextIndex++

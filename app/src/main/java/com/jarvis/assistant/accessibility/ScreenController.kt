@@ -1407,7 +1407,7 @@ class ScreenController(private val service: AccessibilityService) {
                     chosen = parent
                     break
                 }
-                parent = runCatching { parent?.parent }.getOrNull()
+                parent = runCatching { parent.parent }.getOrNull()
                 depth++
             }
             val container = chosen ?: node
@@ -1909,7 +1909,7 @@ class ScreenController(private val service: AccessibilityService) {
                     return parent
                 }
             }
-            parent = runCatching { parent?.parent }.getOrNull()
+            parent = runCatching { parent.parent }.getOrNull()
             depth++
         }
         return null

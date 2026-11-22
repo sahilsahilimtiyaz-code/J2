@@ -41,7 +41,11 @@ class MemoryExtractionWorker(
          * than repeatedly being pushed back.
          */
         fun schedule(context: Context, delayMinutes: Long = 4L) {
+            val constraints = androidx.work.Constraints.Builder()
+                .setRequiresBatteryNotLow(true)
+                .build()
             val request = OneTimeWorkRequestBuilder<MemoryExtractionWorker>()
+                .setConstraints(constraints)
                 .setInitialDelay(delayMinutes, TimeUnit.MINUTES)
                 .build()
             runCatching {

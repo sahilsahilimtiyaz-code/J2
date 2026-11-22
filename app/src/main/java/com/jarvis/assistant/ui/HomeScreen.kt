@@ -4,6 +4,8 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
@@ -200,12 +202,18 @@ fun HomeScreen(
         }
     }
 
-    LaunchedEffect(Unit) {
-        while (true) {
-            deviceStatus = withContext(Dispatchers.IO) {
-                runCatching { readDeviceStatus(context) }.getOrNull()
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    val batteryManager = remember(context) {
+        com.jarvis.assistant.core.BatteryOptimizationManager.get(context)
+    }
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                deviceStatus = withContext(Dispatchers.IO) {
+                    runCatching { readDeviceStatus(context) }.getOrNull()
+                }
+                delay(batteryManager.deviceStatusPollIntervalMs())
             }
-            delay(5000)
         }
     }
 
@@ -985,23 +993,11 @@ private fun HomeHudHero(
     onSelectColorTheme: (HudColorTheme) -> Unit = {},
     onSelectMode: (com.jarvis.assistant.core.JarvisOperatingMode) -> Unit = {},
 ) {
-    val memoryPct = deviceStatus?.memoryUsedPercent ?: 47
-    val storagePct = deviceStatus?.storageUsedPercent ?: 87
-    val cpuPct = remember(state.generating, state.listening, state.speaking) {
-        when {
-            state.generating -> 38
-            state.speaking -> 26
-            state.listening -> 18
-            else -> 12
-        }
-    }
-    val gpuPct = remember(state.generating, state.speaking) {
-        when {
-            state.generating -> 28
-            state.speaking -> 19
-            else -> 8
-        }
-    }
+    val memoryPct = deviceStatus?.memoryUsedPercent ?: 0
+    val storagePct = deviceStatus?.storageUsedPercent ?: 0
+    val batteryDiag = state.batteryDiagnostics
+    val batteryPctLabel = "${batteryDiag.levelPercent}%"
+    val thermalLabel = "%.1f°C".format(batteryDiag.temperatureCelsius)
 
     val greetingHeadline = remember(state.settings.profile.title) {
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
@@ -1132,7 +1128,7 @@ private fun HomeHudHero(
                 )
             }
 
-            // Left HUD telemetry column: SYSTEM STABLE, CPU, GPU
+            // Left HUD telemetry column: SYSTEM, REAL BATTERY, REAL THERMAL
             Column(
                 modifier = Modifier
                     .align(Alignment.TopStart)
@@ -1151,15 +1147,19 @@ private fun HomeHudHero(
                     valueColor = if (toolActive) JarvisPalette.Amber else JarvisPalette.CyanBright,
                 )
                 MiniTelemetryBlock(
-                    title = "CPU",
-                    value = "$cpuPct%",
-                    valueColor = JarvisPalette.Ice,
+                    title = if (batteryDiag.isCharging) "CHARGE" else "POWER",
+                    value = batteryPctLabel,
+                    valueColor = when {
+                        batteryDiag.levelPercent <= 20 && !batteryDiag.isCharging -> JarvisPalette.Danger
+                        batteryDiag.isCharging -> JarvisPalette.Success
+                        else -> JarvisPalette.Ice
+                    },
                 )
                 if (!isChatting) {
                     MiniTelemetryBlock(
-                        title = "GPU",
-                        value = "$gpuPct%",
-                        valueColor = JarvisPalette.Ice,
+                        title = "THERMAL",
+                        value = thermalLabel,
+                        valueColor = if (batteryDiag.temperatureCelsius >= 41f) JarvisPalette.Amber else JarvisPalette.Ice,
                     )
                 }
             }

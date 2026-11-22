@@ -492,6 +492,15 @@ private fun htmlText(raw: String): String = raw
     .replace("&gt;", ">")
     .replace("&quot;", "\"")
     .replace("&#39;", "'")
+    .replace("&#x27;", "'")
+    .replace("&apos;", "'")
+    .replace("&rsquo;", "'")
+    .replace("&lsquo;", "'")
+    .replace("&ldquo;", "\"")
+    .replace("&rdquo;", "\"")
+    .replace("&mdash;", "—")
+    .replace("&ndash;", "–")
+    .replace("&hellip;", "...")
     .replace("&nbsp;", " ")
     .replace("\\s+".toRegex(), " ")
     .trim()
@@ -505,10 +514,11 @@ private fun parseDuckHtmlResults(html: String): List<WebHit> = html
         val href = Regex("""href="([^"]+)"""").find(titleBody)?.groupValues?.get(1)
             ?: return@mapNotNull null
         val title = htmlText(titleBody.substringAfter(">"))
-        val snippetBody = chunk.substringAfter("result__snippet", "").let {
-            Regex("</a>(.*?)</div>").find(it)?.groupValues?.get(1)
-                ?: chunk.substringAfter("</a>", "")
-        }
+        val snippetMatch = Regex(
+            """class="result__snippet"[^>]*>(.*?)</(?:a|div|span)>""",
+            setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE),
+        ).find(chunk)
+        val snippetBody = snippetMatch?.groupValues?.get(1).orEmpty()
         val snippet = htmlText(snippetBody).take(320)
         if (title.isBlank()) return@mapNotNull null
         WebHit(title.take(140), snippet, cleanDuckUrl(href))

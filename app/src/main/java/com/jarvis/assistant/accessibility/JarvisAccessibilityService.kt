@@ -6,7 +6,6 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.ColorSpace
 import android.graphics.Path
 import android.hardware.HardwareBuffer
 import android.os.Build
@@ -429,7 +428,7 @@ class JarvisAccessibilityService : AccessibilityService() {
                             if (cont.isActive) {
                                 cont.resume(screenshot)
                             } else {
-                                screenshot.hardwareBuffer?.close()
+                                screenshot.hardwareBuffer.close()
                             }
                         }
 
@@ -447,14 +446,17 @@ class JarvisAccessibilityService : AccessibilityService() {
                 try {
                     val wrapped = Bitmap.wrapHardwareBuffer(
                         hardware,
-                        raw.colorSpace ?: ColorSpace.get(ColorSpace.Named.SRGB),
+                        raw.colorSpace,
                     ) ?: return@runCatching null
-                    val raster = wrapped.copy(Bitmap.Config.ARGB_8888, false)
-                        ?: return@runCatching null
+                    val raster = try {
+                        wrapped.copy(Bitmap.Config.ARGB_8888, false)
+                    } finally {
+                        wrapped.recycle()
+                    } ?: return@runCatching null
                     val scaled = if (raster.width > maxWidth) {
                         val height = (raster.height.toFloat() / raster.width * maxWidth)
                             .toInt().coerceAtLeast(1)
-                        Bitmap.createScaledBitmap(raster, maxWidth, height, true) ?: raster
+                        Bitmap.createScaledBitmap(raster, maxWidth, height, true)
                     } else {
                         raster
                     }

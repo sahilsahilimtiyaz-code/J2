@@ -111,10 +111,8 @@ data class JarvisUiState(
         com.jarvis.assistant.core.VisionTargetReticleState(),
     val activeMode: com.jarvis.assistant.core.JarvisOperatingMode =
         com.jarvis.assistant.core.JarvisOperatingMode.DEFAULT,
-    /** A newer build published on the Octa-Jarvis site, if any. */
-    val updateAvailable: com.jarvis.assistant.update.AvailableUpdate? = null,
-    val checkingForUpdate: Boolean = false,
-    val appVersionName: String = "",
+    val batteryDiagnostics: com.jarvis.assistant.core.BatteryDiagnostics =
+        com.jarvis.assistant.core.BatteryDiagnostics(),
 ) {
     val showSettings: Boolean
         get() = tab == JarvisTab.SETTINGS

@@ -75,7 +75,7 @@ abstract class JarvisDatabase : RoomDatabase() {
                     NAME,
                 )
                     .addMigrations(MIGRATION_1_2)
-                    .fallbackToDestructiveMigrationOnDowngrade()
+                    .fallbackToDestructiveMigrationOnDowngrade(true)
                     .build()
                     .also { instance = it }
             }

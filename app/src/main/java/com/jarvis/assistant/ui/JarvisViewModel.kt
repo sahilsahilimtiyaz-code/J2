@@ -203,6 +203,12 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         viewModelScope.launch {
+            core.batteryOptimizationManager.diagnostics.collect { diag ->
+                _ui.update { it.copy(batteryDiagnostics = diag) }
+            }
+        }
+
+        viewModelScope.launch {
             core.localModelManager.statuses.collect { statuses ->
                 val freeBytes = withContext(Dispatchers.IO) {
                     core.localModelManager.availableStorageBytes()
@@ -313,6 +319,26 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application) 
 
     fun selectMode(mode: com.jarvis.assistant.core.JarvisOperatingMode) {
         core.setOperatingMode(mode)
+    }
+
+    fun requestBatteryUnrestricted() {
+        core.batteryOptimizationManager.requestBatteryUnrestricted()
+    }
+
+    fun refreshBatteryDiagnostics() {
+        core.batteryOptimizationManager.refreshPowerState()
+    }
+
+    fun setPowerProfileOverride(override: com.jarvis.assistant.core.PowerProfileOverride) {
+        core.batteryOptimizationManager.setProfileOverride(override)
+        core.setNotice("Power profile set to ${override.label}.")
+    }
+
+    fun optimizeAppCache() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val summary = core.batteryOptimizationManager.trimAppCache()
+            core.setNotice(summary)
+        }
     }
 
     fun toggleFloatingHud() {

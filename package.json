@@ -1,0 +1,12 @@
+{
+  "name": "jarvis-android-assistant",
+  "version": "3.1.0",
+  "description": "J.A.R.V.I.S. Android Voice-First AI Assistant - Native Kotlin & Web Companion",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "author": "Octavian",
+  "license": "MIT"
+}

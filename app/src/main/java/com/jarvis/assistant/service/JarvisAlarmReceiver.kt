@@ -9,6 +9,12 @@ import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.jarvis.assistant.R
+import com.jarvis.assistant.core.JarvisCore
+import com.jarvis.assistant.core.JarvisOperatingMode
+import com.jarvis.assistant.core.ScheduledTaskManager
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class JarvisAlarmReceiver : BroadcastReceiver() {
 
@@ -59,6 +65,31 @@ class JarvisAlarmReceiver : BroadcastReceiver() {
             .build()
 
         notificationManager.notify(NOTIFICATION_ID, notification)
+
+        // Handle ScheduledTaskManager payloads: activate requested operating mode and advance/complete task
+        val scheduledTaskId = intent.getStringExtra("EXTRA_TASK_ID")
+        val scheduledMode = intent.getStringExtra("EXTRA_MODE")
+        if (!scheduledTaskId.isNullOrBlank() || !scheduledMode.isNullOrBlank()) {
+            val pendingResult = goAsync()
+            val appCtx = context.applicationContext
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    if (!scheduledMode.isNullOrBlank()) {
+                        runCatching {
+                            val targetMode = JarvisOperatingMode.fromId(scheduledMode)
+                            JarvisCore.get(appCtx).setOperatingMode(targetMode)
+                        }
+                    }
+                    if (!scheduledTaskId.isNullOrBlank()) {
+                        runCatching {
+                            ScheduledTaskManager.get(appCtx).completeTask(scheduledTaskId)
+                        }
+                    }
+                } finally {
+                    pendingResult.finish()
+                }
+            }
+        }
 
         // Reschedule tomorrow's daily briefing if this was a recurring morning briefing alarm
         val dailyHour = intent.getIntExtra(EXTRA_DAILY_HOUR, -1)

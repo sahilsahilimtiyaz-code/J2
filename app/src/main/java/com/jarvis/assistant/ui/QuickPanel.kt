@@ -43,6 +43,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -82,15 +84,20 @@ fun QuickPanelOverlay(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     var status by remember { mutableStateOf<DeviceStatus?>(null) }
 
-    LaunchedEffect(visible) {
+    LaunchedEffect(visible, lifecycleOwner, state.batteryDiagnostics.profile) {
         if (!visible) return@LaunchedEffect
-        while (true) {
-            status = withContext(Dispatchers.IO) {
-                runCatching { readDeviceStatus(context) }.getOrNull()
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            val pollMs = com.jarvis.assistant.core.BatteryOptimizationManager
+                .recommendedTelemetryPollMs(state.batteryDiagnostics.profile)
+            while (true) {
+                status = withContext(Dispatchers.IO) {
+                    runCatching { readDeviceStatus(context) }.getOrNull()
+                }
+                delay(pollMs)
             }
-            delay(4000)
         }
     }
 
@@ -265,6 +272,8 @@ fun QuickPanelOverlay(
 
                     Spacer(Modifier.height(12.dp))
 
+                    val batteryDiag = state.batteryDiagnostics
+                    val netConnected = status?.networkConnected
                     // Network Connected
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -283,17 +292,21 @@ fun QuickPanelOverlay(
                                 color = JarvisPalette.Ice,
                             )
                             Text(
-                                text = if (status?.networkConnected != false) "Connected" else "Offline",
+                                text = when (netConnected) {
+                                    true -> "Connected"
+                                    false -> "Offline"
+                                    null -> "Checking..."
+                                },
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (status?.networkConnected != false) {
-                                    JarvisPalette.Success
-                                } else {
-                                    JarvisPalette.Amber
+                                color = when (netConnected) {
+                                    true -> JarvisPalette.Success
+                                    false -> JarvisPalette.Amber
+                                    null -> JarvisPalette.TextDim
                                 },
                             )
                         }
                         Text(
-                            text = status?.network ?: "Wi-Fi",
+                            text = status?.network ?: "—",
                             style = MaterialTheme.typography.labelSmall,
                             color = JarvisPalette.TextDim,
                         )
@@ -301,32 +314,44 @@ fun QuickPanelOverlay(
 
                     Spacer(Modifier.height(12.dp))
 
-                    // Battery
+                    // Battery (live Android BatteryManager / BroadcastReceiver)
+                    val liveBatteryPct = status?.batteryPercent ?: batteryDiag.levelPercent
                     SystemMetricRow(
                         glyph = HudGlyph.BATTERY,
                         label = "Battery",
-                        value = status?.let { "${it.batteryPercent}%" } ?: "92%",
-                        valueColor = JarvisPalette.Ice,
+                        value = if (batteryDiag.isCharging) "$liveBatteryPct% ⚡" else "$liveBatteryPct%",
+                        valueColor = if (liveBatteryPct < 20 && !batteryDiag.isCharging) JarvisPalette.Amber else JarvisPalette.Ice,
                     )
 
                     Spacer(Modifier.height(12.dp))
 
-                    // Temperature
+                    // Temperature (live battery thermistor)
+                    val liveTempC = (status?.batteryTemperatureC ?: batteryDiag.temperatureCelsius).toInt()
                     SystemMetricRow(
                         glyph = HudGlyph.TEMPERATURE,
                         label = "Temperature",
-                        value = status?.batteryTemperatureC?.let { "${it.toInt()}°C" } ?: "36°C",
-                        valueColor = JarvisPalette.Ice,
+                        value = "${liveTempC}°C (${batteryDiag.thermalStatusLabel})",
+                        valueColor = if (liveTempC >= 42 || batteryDiag.isThermallyThrottled) JarvisPalette.Amber else JarvisPalette.Ice,
                     )
 
                     Spacer(Modifier.height(12.dp))
 
-                    // Performance
+                    // Power & Thermal Profile (real BatteryOptimizationManager state)
+                    val perfLabel = when {
+                        batteryDiag.isThermallyThrottled -> "Throttled"
+                        batteryDiag.profile == com.jarvis.assistant.core.PowerProfile.POWER_SAVER -> "Power Saver"
+                        batteryDiag.profile == com.jarvis.assistant.core.PowerProfile.BALANCED -> "Balanced"
+                        else -> "Optimal"
+                    }
                     SystemMetricRow(
                         glyph = HudGlyph.CHIP,
-                        label = "Performance",
-                        value = "Optimal",
-                        valueColor = JarvisPalette.CyanBright,
+                        label = "Power Profile",
+                        value = perfLabel,
+                        valueColor = if (batteryDiag.isThermallyThrottled || batteryDiag.profile == com.jarvis.assistant.core.PowerProfile.POWER_SAVER) {
+                            JarvisPalette.Amber
+                        } else {
+                            JarvisPalette.CyanBright
+                        },
                     )
 
                 }

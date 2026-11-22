@@ -71,6 +71,7 @@ fun JarvisApp(vm: JarvisViewModel = viewModel()) {
                 Lifecycle.Event.ON_START -> {
                     vm.setUiVisible(true)
                     vm.refreshPermissions()
+                    vm.refreshBatteryDiagnostics()
                 }
 
                 Lifecycle.Event.ON_STOP -> vm.setUiVisible(false)

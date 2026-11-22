@@ -18,6 +18,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -142,7 +143,14 @@ class DevicePresenceMonitor(
         monitorJob = scope.launch(Dispatchers.Default) {
             delay(INITIAL_SETTLE_MS)
             while (isActive) {
-                delay(TICK_INTERVAL_MS)
+                // Zero-CPU screen-off gating: suspend until screen turns back on instead of polling while asleep
+                if (!_state.value.isScreenOn) {
+                    _state.first { it.isScreenOn }
+                    if (!isActive) break
+                }
+                val isPowerSave = runCatching { powerManager?.isPowerSaveMode ?: false }.getOrDefault(false)
+                val dynamicInterval = if (isPowerSave) 35_000L else TICK_INTERVAL_MS
+                delay(dynamicInterval)
                 val now = System.currentTimeMillis()
                 refreshTelemetry(now)
 

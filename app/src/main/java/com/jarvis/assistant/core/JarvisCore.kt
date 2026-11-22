@@ -160,6 +160,7 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         memoryRepository = memoryRepository,
         skillRepository = skillRepository,
     )
+    val batteryOptimizationManager = BatteryOptimizationManager.get(appContext)
 
     private val _conversationMode = MutableStateFlow(false)
     val conversationMode: StateFlow<Boolean> = _conversationMode.asStateFlow()
@@ -330,9 +331,17 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
 
     internal val httpClient = HttpClientFactory.create()
     val localModelManager = LocalModelDownloadManager(appContext, httpClient)
-    private val providerRegistry = ProviderRegistry(httpClient, localModelManager)
+    private val providerRegistry = ProviderRegistry(httpClient, localModelManager) {
+        batteryOptimizationManager.recommendedInferenceThreads()
+    }
     val providerTester = ProviderTester(providerRegistry)
     val modelCatalogueService = ModelCatalogueService(httpClient)
+
+    fun onTrimMemory(level: Int) {
+        if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) {
+            com.jarvis.assistant.brain.OnDeviceGgufEngine.releaseBestEffort()
+        }
+    }
 
     @Volatile
     private var lastEditedConfirmationDraft: String? = null
@@ -3990,14 +3999,10 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
         )
         delay(350L)
         val afterFp = controller.captureFingerprint()
-        val verified = if (beforeFp != null && afterFp != null) {
-            com.jarvis.assistant.accessibility.StepVerificationEvaluator.evaluateScroll(
-                before = beforeFp,
-                after = afterFp,
-            ).verified
-        } else {
-            gestureSuccess
-        }
+        val verified = com.jarvis.assistant.accessibility.StepVerificationEvaluator.evaluateScroll(
+            before = beforeFp,
+            after = afterFp,
+        ).verified
 
         return ScreenResult(
             success = gestureSuccess,
@@ -6510,9 +6515,11 @@ class JarvisCore private constructor(context: Context) : MemoryBridge, ScreenAcc
      * {"steps": [...]} object, or the legacy serialized list. Key aliases are
      * normalised so tool/name/args variants all work.
      */
+    private val lenientSkillJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+
     private fun parseSkillSteps(raw: String): List<com.jarvis.assistant.memory.SkillStep> {
         val legacy = runCatching {
-            kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+            lenientSkillJson
                 .decodeFromString(
                     kotlinx.serialization.builtins.ListSerializer(com.jarvis.assistant.memory.SkillStep.serializer()),
                     raw,

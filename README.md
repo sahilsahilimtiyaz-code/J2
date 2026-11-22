@@ -3,9 +3,9 @@
 Jarvis is a private, native Kotlin personal assistant for Android 14+ (minSdk 31), built for one
 owner's Samsung Galaxy A54. It is sideloaded, never published on Google Play.
 
-**Current status: Phase 9 complete plus two 2026-11-01 passes: (A) a latched continuous microphone, glass neural-orb core, verified screen taps/scrolls, direct YouTube playback, live free-model discovery and the 8-screen holographic HUD; (B) true pixel vision for the model, one-shot verified WhatsApp sending, real web-search answers, a premium two-phase incoming-call screen with live captions, deeply buffered gapless TTS, autonomous thoughts on a 10-minute cadence, a cinematic boot video, a new logo/adaptive launcher icon and a professional neural orb.**
+**Current status: Phase 9 complete plus Spatial Visual Perception, 5 Operational Modes (`Standard`, `Study`, `Research`, `Tasks`, `Agentic`), Task Scheduler, Deep Web Research (`deep_research`, `fetch_web_page`, `fact_check`), Support Developer YouTube card (`@octavian-codes`), On-Device ARM64 GGUF Inference (`OnDeviceGgufEngine`), Natural Offline Prose Guardrails (`NaturalResponseSanitizer`), Zero Fake Activity, and Deep Battery/App Optimization.**
 
-Local `assembleDebug` and `testDebugUnitTest` are green (JDK 17, Gradle 9.6.0, AGP 9.5.0, SDK 37.0; this project tree lives in `/sdcard/JAR2/J2-main`, where the aarch64 phone routes aapt2 through `/root/aapt2bin/aapt2`).
+Local `gradle testDebugUnitTest assembleDebug --no-daemon` and `lintDebug` are green (**182 unit tests, 0 failures**; JDK 17/21, Gradle 9.3.1, AGP 9.5.0, Kotlin 2.4.10, `compileSdk 37`, `targetSdk 36`, `minSdk 31`).
 
 ## What works now
 
@@ -386,27 +386,38 @@ In **Settings → System → Phase 0 Probes & Call/Message Receptionist** (or pr
 6. **WhatsApp Message by Contact Name (Never Requires Phone Number):**
    - Say *"Jarvis, send a WhatsApp message to <Contact Name> saying I will be there in 10 minutes"*. Jarvis resolves the contact by name (including phonetic/accented matches, WhatsApp JID rows, inline notification reply, or opening WhatsApp Search and typing their name) without ever asking for their phone number.
 
-## Octa-Jarvis download site and app updates
+---
 
-The download page lives in [`site/`](site/index.html) and reads
-[`site/version.json`](site/version.json). Every installed build checks that file (and
-the raw repository copy as a fallback) on launch and every 12 hours; when
-`versionCode` is newer than the installed build, the app shows the update sheet and a
-notification that opens the download.
+## 2026-11-06 Upgrade — Spatial Visual Perception, Operating Modes, Scheduled Tasks, Advanced Web Search & Support Developer
 
-Publishing a release (GitHub → Actions → **Publish Octa-Jarvis release** → Run workflow):
+- **Spatial Visual Perception & Full Touch Modalities (`ScreenController.kt`, `ScreenTools.kt`, `AccessibilityActionTriggerMapper.kt`):**
+  - Actionable snapshots compute relative percentage centers `center=(X%, Y%)`, pixel bounds, resource IDs, and semantic roles (`[Button]`, `[InputField]`, `[Switch]`, `[Tab]`, `[Card]`, `[ScrollableList]`).
+  - Added `swipe_screen` (`left`/`right`/`up`/`down`, `short`/`medium`/`long`), upgraded `tap_screen` with `long_press` and `double_tap`, and added mandatory `why` operational rationale tracking.
+- **5 Operational Modes (`HomeScreen.kt`, `PersonaBuilder.kt`, `TaskAndModeTools.kt`):**
+  - Switch interactively on the Home pill bar or via `set_operating_mode`: **Standard** (`⚡`), **Study** (`📚` Feynman technique & active recall), **Research** (`🔬` multi-source citations), **Tasks** (`📋` prioritization & `ScheduledTaskManager` alarms), and **Agentic** (`🤖` autonomous multi-step execution).
+- **Advanced Web Search (`AdvancedWebSearchTools.kt`):**
+  - Added `deep_research` (concurrent multi-query synthesis across DuckDuckGo + Wikipedia), `fetch_web_page` (clean article extraction with SSRF & `SecurityShield` sanitization), and `fact_check`.
+- **Support Developer Card (`SettingsScreen.kt`):**
+  - Settings → About includes the dedicated **Support Developer** card for **Octavian (`@octavian-codes`)** opening `https://youtube.com/@octavian-codes?si=VpUqmvjT2ok2s7Pc`.
 
-1. Builds and signs the APK.
-2. Publishes a GitHub Release with `app-debug.apk`.
-3. Rewrites `site/version.json` with the new `versionCode`, `versionName`, notes and
-   SHA-256.
-4. Deploys `site/` to GitHub Pages.
+---
 
-Enable Pages once under **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+## 2026-11-22 Upgrade — On-Device ARM64 GGUF Inference, Natural Offline Prose, Zero Fake Activity & Deep Battery Optimization
 
-The app icon set is generated, never hand-edited:
+- **Real On-Device ARM64 GGUF Inference (`OnDeviceGgufEngine.kt`, `LocalAiModels.kt`):**
+  - Integrated `dev.ffmpegkit-maintained:llama-android:0.1.1` (`arm64-v8a` native `llama.cpp`) with single-model caching, adaptive CPU threading (`2–4` threads), and `2048` context window.
+  - Small local models receive a compact tool-free prompt (`buildCompactLocalSystemPrompt`) and `NaturalResponseSanitizer` strips `<think>`, `<end_of_turn>`, `<tool_call>`, Markdown, and unsolicited raw code/JSON blocks while `OfflineMathAndUnitEngine` + `OfflineNaturalEngine` guarantee clear natural prose answers even completely offline.
+- **Zero Fake Activity & Bug Fixes (`HomeScreen.kt`, `QuickPanel.kt`, `MemoryScreen.kt`, `ToolsScreen.kt`, `MediaTools.kt`, `PerceptionLadderEngine.kt`):**
+  - Replaced all hardcoded telemetry and demo offsets with real `BatteryManager`, `PowerManager`, `ActivityManager` RAM, `StatFs` storage, and live Room counts.
+  - Fixed DuckDuckGo HTML result snippet parsing, HTML entity decoding, and screenshot bitmap recycling.
+- **Battery & App Optimization Without Losing Any UI/UX (`BatteryOptimizationManager.kt`, `BatteryOptimizationCard.kt`, `Reactor.kt`, `HttpClientFactory.kt`, `JarvisApplication.kt`):**
+  - Added **Settings → System → Battery & App Optimization** with live battery/thermal diagnostics, persisted **Power Profile Mode** (`Auto`, `Max`, `Balanced`, `Saver`), Samsung Galaxy A54 Unrestricted battery wizard, and one-tap **Optimize Now** (`trimAppCache`, evicting idle OkHttp sockets & releasing idle GGUF weights while preserving downloaded `.gguf` models and memories).
+  - Converted `ArcReactor` to pre-allocated zero-GC scratch buffers and 6 batched GPU `drawPoints`/`drawLines` calls per frame, gated UI loops/MP4 playback with `repeatOnLifecycle` (0% GPU/CPU when backgrounded), and constrained idle background workers with `requiresBatteryNotLow` + `requiresDeviceIdle`.
 
-```bash
-python3 tools/generate_app_icons.py                    # built-in Octa-Jarvis orb
-python3 tools/generate_app_icons.py design/app-icon.png  # your own 1024x1024 source
-```
+### Test This on Your Phone (2026-11-22 Checklist)
+
+1. **Offline Natural Answers (Zero Raw Code):** Turn on Airplane Mode, select any downloaded `.gguf` offline model (or Offline Local Brain), and ask `"Explain gravity simply"`, `"What is 25% of 400?"`, and `"Convert 100 km to miles"`. Verify Jarvis answers in clear, natural English prose with zero `<think>` tags, JSON, or raw code. Ask `"Write a Kotlin hello world function"` to verify code is still returned when explicitly requested.
+2. **Real HUD Telemetry & Honest Counts:** Compare **Home** telemetry (`POWER` %, `THERMAL` °C, `MEMORY`, `STORAGE`) and **Quick Panel** (`Network`, `Battery`, `Temperature`, `Power Profile`) against Android Settings; verify **Memory** cluster cards match your actual Room database items without inflated offsets.
+3. **Operating Modes & Scheduled Tasks:** Tap **Study**, **Research**, **Tasks**, and **Agentic** on the Home mode strip, then say `"Schedule a daily task to review AI papers at 9 PM high priority"` and verify `list_scheduled_tasks` returns it cleanly.
+4. **Battery & App Optimization:** Open **Settings → System → Battery & App Optimization**. Switch between **Auto / Max / Balanced / Saver** (restart the app to confirm persistence), verify **Samsung A54: Unrestricted** status, tap **Optimize Now**, and verify temp cache/sockets/idle RAM trim without deleting downloaded `.gguf` models.
+5. **Support Developer Button:** Open **Settings → About → Support Developer** and tap the YouTube subscribe button to confirm it opens `https://youtube.com/@octavian-codes?si=VpUqmvjT2ok2s7Pc`.

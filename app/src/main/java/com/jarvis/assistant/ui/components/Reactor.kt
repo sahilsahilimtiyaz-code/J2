@@ -38,6 +38,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -224,6 +226,29 @@ private val GEODESIC_SPHERE: GeodesicMesh = run {
     )
 }
 
+private const val SHEET_SAMPLES = 160
+private val SHEET_PAIRS = arrayOf(
+    0.00f to 0.16f, // Inner containment ring band
+    0.20f to 0.62f, // Middle folded wave sheet
+    0.52f to 0.98f, // Outer folded wave sheet
+)
+private val SHEET_THETA = FloatArray(SHEET_SAMPLES + 1) { i -> (i.toFloat() / SHEET_SAMPLES) * 2f * PI.toFloat() }
+private val SHEET_COS = FloatArray(SHEET_SAMPLES + 1) { i -> cos(SHEET_THETA[i]) }
+private val SHEET_SIN = FloatArray(SHEET_SAMPLES + 1) { i -> sin(SHEET_THETA[i]) }
+
+private const val CONTOUR_RINGS = 22
+private const val DOTS_PER_RING = 192
+private const val MAX_STIPPLE_POINTS = CONTOUR_RINGS * DOTS_PER_RING
+private const val MAX_RIDGE_SEGMENTS = 4 * DOTS_PER_RING
+private val STIPPLE_THETA_EVEN = FloatArray(DOTS_PER_RING + 1) { d -> (d.toFloat() / DOTS_PER_RING) * 2f * PI.toFloat() }
+private val STIPPLE_COS_EVEN = FloatArray(DOTS_PER_RING + 1) { d -> cos(STIPPLE_THETA_EVEN[d]) }
+private val STIPPLE_SIN_EVEN = FloatArray(DOTS_PER_RING + 1) { d -> sin(STIPPLE_THETA_EVEN[d]) }
+private val STIPPLE_THETA_ODD = FloatArray(DOTS_PER_RING + 1) { d ->
+    (d.toFloat() / DOTS_PER_RING) * 2f * PI.toFloat() + (PI.toFloat() / DOTS_PER_RING)
+}
+private val STIPPLE_COS_ODD = FloatArray(DOTS_PER_RING + 1) { d -> cos(STIPPLE_THETA_ODD[d]) }
+private val STIPPLE_SIN_ODD = FloatArray(DOTS_PER_RING + 1) { d -> sin(STIPPLE_THETA_ODD[d]) }
+
 @Stable
 class NeuralOrbPhysics(val nodeCount: Int = 162) {
     var spinAngleDeg by mutableFloatStateOf(0f)
@@ -246,6 +271,32 @@ class NeuralOrbPhysics(val nodeCount: Int = 162) {
     var touchImpactScale by mutableFloatStateOf(0f)
 
     var hologramMode by mutableStateOf(JarvisHologramMode.AUTO_CINEMATIC)
+
+    // Zero-GC reusable scratch buffers for 60fps Canvas drawing (zero per-frame heap allocations)
+    internal val festoonPath = Path()
+    internal val sheetPath = Path()
+    internal val projX = FloatArray(GEODESIC_SPHERE.vertices.size)
+    internal val projY = FloatArray(GEODESIC_SPHERE.vertices.size)
+    internal val projZ = FloatArray(GEODESIC_SPHERE.vertices.size)
+    internal val sheetInnerX = FloatArray(SHEET_SAMPLES + 1)
+    internal val sheetInnerY = FloatArray(SHEET_SAMPLES + 1)
+
+    // Batched native drawPoints / drawLines buffers for 4,224 stipple dots + 4 ridges + 260 spray dots
+    internal val stippleSpecularPts = FloatArray(MAX_STIPPLE_POINTS * 2)
+    internal val stippleBrightPts = FloatArray(MAX_STIPPLE_POINTS * 2)
+    internal val stippleMidPts = FloatArray(MAX_STIPPLE_POINTS * 2)
+    internal val stippleDimPts = FloatArray(MAX_STIPPLE_POINTS * 2)
+    internal val ridgeLinePts = FloatArray(MAX_RIDGE_SEGMENTS * 4)
+    internal val sprayBrightPts = FloatArray(OUTER_SPRAY_PARTICLES.size * 2)
+    internal val sprayDimPts = FloatArray(OUTER_SPRAY_PARTICLES.size * 2)
+    internal val batchPointPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+    }
+    internal val batchLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+    }
 
     fun onTouchDown(normX: Float, normY: Float) {
         isTouched = true
@@ -356,19 +407,38 @@ fun rememberNeuralOrbPhysics(
     val currentState by rememberUpdatedState(state)
     val currentAudio by rememberUpdatedState(audioLevel)
     val currentToolActive by rememberUpdatedState(toolActive)
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    val batteryManager = remember(context) {
+        com.jarvis.assistant.core.BatteryOptimizationManager.get(context)
+    }
 
-    LaunchedEffect(physics) {
-        var lastNanos = 0L
-        while (true) {
-            withFrameNanos { nanos ->
-                val dt = if (lastNanos == 0L) 0.016f else ((nanos - lastNanos) / 1_000_000_000f)
-                lastNanos = nanos
-                physics.step(
-                    dtSeconds = dt,
-                    state = currentState,
-                    audioLevel = currentAudio,
-                    toolActive = currentToolActive,
-                )
+    // Lifecycle-aware + Battery-Adaptive frame loop:
+    // Completely stops (0% CPU/GPU) when app is backgrounded or screen is off,
+    // runs full 60fps during active voice/touch/thinking, and adapts smoothly during quiet idle.
+    LaunchedEffect(physics, lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            var lastStepNanos = 0L
+            while (true) {
+                withFrameNanos { nanos ->
+                    val active = currentState != ReactorState.IDLE || currentToolActive || physics.isTouched
+                    val minIntervalMs = batteryManager.targetOrbFrameIntervalMs(
+                        isActive = active,
+                        audioAmplitude = currentAudio,
+                    )
+                    val minIntervalNanos = minIntervalMs * 1_000_000L
+                    if (lastStepNanos == 0L || (nanos - lastStepNanos) >= minIntervalNanos) {
+                        val dt = if (lastStepNanos == 0L) 0.016f else ((nanos - lastStepNanos) / 1_000_000_000f)
+                        lastStepNanos = nanos
+                        val effectiveAudio = if (batteryManager.shouldComputeAudioFx(currentAudio)) currentAudio else 0f
+                        physics.step(
+                            dtSeconds = dt,
+                            state = currentState,
+                            audioLevel = effectiveAudio,
+                            toolActive = currentToolActive,
+                        )
+                    }
+                }
             }
         }
     }
@@ -413,14 +483,20 @@ fun ArcReactor(
     )
 
     val activeColorTheme = com.jarvis.assistant.ui.theme.JarvisPalette.activeTheme
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val batteryManager = remember(context) {
+        com.jarvis.assistant.core.BatteryOptimizationManager.get(context)
+    }
+    val allowVideoBackdrop = batteryManager.shouldRunBackgroundVideo()
 
     androidx.compose.foundation.layout.Box(
         modifier = modifier,
         contentAlignment = androidx.compose.ui.Alignment.Center,
     ) {
         // Layer 0: Hardware-accelerated loop of the exact uploaded Iron Man 3 Orb video
-        // (clipped to a circle so it blends seamlessly with the interactive 3D Canvas orb!)
-        if (hologramMode == JarvisHologramMode.AUTO_CINEMATIC) {
+        // (clipped to a circle so it blends seamlessly with the interactive 3D Canvas orb!
+        // Automatically pauses in Ultra Power Saver or severe thermal state while keeping the full 3D Canvas orb.)
+        if (hologramMode == JarvisHologramMode.AUTO_CINEMATIC && allowVideoBackdrop) {
             Im3VideoOrbLoopLayer(
                 colorTheme = activeColorTheme,
                 alpha = if (activeColorTheme == com.jarvis.assistant.settings.HudColorTheme.IM3_SEAFOAM) 0.58f else 0.26f,
@@ -496,13 +572,41 @@ private fun Im3VideoOrbLoopLayer(
     alpha: Float,
     modifier: Modifier = Modifier,
 ) {
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    val playerHolder = remember { arrayOfNulls<android.media.MediaPlayer>(1) }
+    val surfaceHolder = remember { arrayOfNulls<android.view.Surface>(1) }
+    val appliedThemeHolder = remember { arrayOfNulls<com.jarvis.assistant.settings.HudColorTheme>(1) }
+
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            val mp = playerHolder[0] ?: return@LifecycleEventObserver
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_PAUSE,
+                androidx.lifecycle.Lifecycle.Event.ON_STOP,
+                -> runCatching { if (mp.isPlaying) mp.pause() }
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> runCatching { if (!mp.isPlaying) mp.start() }
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            runCatching {
+                playerHolder[0]?.stop()
+                playerHolder[0]?.release()
+            }
+            playerHolder[0] = null
+            runCatching { surfaceHolder[0]?.release() }
+            surfaceHolder[0] = null
+        }
+    }
+
     androidx.compose.ui.viewinterop.AndroidView(
         modifier = modifier,
         factory = { ctx ->
             android.view.TextureView(ctx).apply {
                 isOpaque = false
                 this.alpha = alpha
-                var player: android.media.MediaPlayer? = null
                 surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
                     override fun onSurfaceTextureAvailable(
                         surfaceTexture: android.graphics.SurfaceTexture,
@@ -512,13 +616,19 @@ private fun Im3VideoOrbLoopLayer(
                         runCatching {
                             val afd = ctx.assets.openFd("boot/jarvis_orb_loop.mp4")
                             val mp = android.media.MediaPlayer()
-                            player = mp
-                            mp.setSurface(android.view.Surface(surfaceTexture))
+                            val surface = android.view.Surface(surfaceTexture)
+                            playerHolder[0] = mp
+                            surfaceHolder[0] = surface
+                            mp.setSurface(surface)
                             mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
                             afd.close()
                             mp.isLooping = true
                             mp.setVolume(0f, 0f)
-                            mp.setOnPreparedListener { it.start() }
+                            mp.setOnPreparedListener { prepared ->
+                                if (lifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+                                    prepared.start()
+                                }
+                            }
                             mp.prepareAsync()
                         }
                     }
@@ -531,10 +641,12 @@ private fun Im3VideoOrbLoopLayer(
 
                     override fun onSurfaceTextureDestroyed(surface: android.graphics.SurfaceTexture): Boolean {
                         runCatching {
-                            player?.stop()
-                            player?.release()
+                            playerHolder[0]?.stop()
+                            playerHolder[0]?.release()
                         }
-                        player = null
+                        playerHolder[0] = null
+                        runCatching { surfaceHolder[0]?.release() }
+                        surfaceHolder[0] = null
                         return true
                     }
 
@@ -543,26 +655,31 @@ private fun Im3VideoOrbLoopLayer(
             }
         },
         update = { view ->
-            view.alpha = alpha
-            val targetColor = Color(colorTheme.brightHex)
-            if (colorTheme == com.jarvis.assistant.settings.HudColorTheme.IM3_SEAFOAM) {
-                view.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
-            } else {
-                val rScale = targetColor.red
-                val gScale = targetColor.green
-                val bScale = targetColor.blue
-                val matrix = android.graphics.ColorMatrix(
-                    floatArrayOf(
-                        0.2f * rScale, 0.5f * rScale, 0.3f * rScale, 0f, 0f,
-                        0.2f * gScale, 0.5f * gScale, 0.3f * gScale, 0f, 0f,
-                        0.2f * bScale, 0.5f * bScale, 0.3f * bScale, 0f, 0f,
-                        0f, 0f, 0f, 1f, 0f,
-                    ),
-                )
-                val paint = android.graphics.Paint().apply {
-                    colorFilter = android.graphics.ColorMatrixColorFilter(matrix)
+            if (view.alpha != alpha) {
+                view.alpha = alpha
+            }
+            if (appliedThemeHolder[0] != colorTheme) {
+                appliedThemeHolder[0] = colorTheme
+                val targetColor = Color(colorTheme.brightHex)
+                if (colorTheme == com.jarvis.assistant.settings.HudColorTheme.IM3_SEAFOAM) {
+                    view.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+                } else {
+                    val rScale = targetColor.red
+                    val gScale = targetColor.green
+                    val bScale = targetColor.blue
+                    val matrix = android.graphics.ColorMatrix(
+                        floatArrayOf(
+                            0.2f * rScale, 0.5f * rScale, 0.3f * rScale, 0f, 0f,
+                            0.2f * gScale, 0.5f * gScale, 0.3f * gScale, 0f, 0f,
+                            0.2f * bScale, 0.5f * bScale, 0.3f * bScale, 0f, 0f,
+                            0f, 0f, 0f, 1f, 0f,
+                        ),
+                    )
+                    val paint = android.graphics.Paint().apply {
+                        colorFilter = android.graphics.ColorMatrixColorFilter(matrix)
+                    }
+                    view.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, paint)
                 }
-                view.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, paint)
             }
         },
     )
@@ -833,7 +950,8 @@ private fun DrawScope.drawCavernAnd12ScallopedArches(
     )
 
     // 12-Arch Concave Scalloped Festoon Ring: r(theta) = rCusp + (rArch - rCusp) * |sin(6*theta + spin)|^0.72
-    val festoonPath = Path()
+    val festoonPath = physics.festoonPath
+    festoonPath.reset()
     val samples = 240
     val rCusp = orbRadius * 0.387f
     val rArch = orbRadius * 0.453f
@@ -914,9 +1032,9 @@ private fun DrawScope.drawGeodesicTriangulatedSphere(
 
     val verts = GEODESIC_SPHERE.vertices
     val n = verts.size
-    val px = FloatArray(n)
-    val py = FloatArray(n)
-    val pz = FloatArray(n)
+    val px = physics.projX
+    val py = physics.projY
+    val pz = physics.projZ
 
     for (i in 0 until n) {
         val v = verts[i]
@@ -1039,23 +1157,19 @@ private fun DrawScope.drawOuterStippledWaveMembrane(
     val dpPx = 1.dp.toPx()
 
     // 1. Underlying Volumetric Folded Wave Caustic Sheets (gives the soft seafoam glow between stipple rows)
-    val sheetSamples = 160
-    val sheetPath = Path()
-    val sheetPairs = arrayOf(
-        0.00f to 0.16f, // Inner containment ring band
-        0.20f to 0.62f, // Middle folded wave sheet
-        0.52f to 0.98f, // Outer folded wave sheet
-    )
-    val innerX = FloatArray(sheetSamples + 1)
-    val innerY = FloatArray(sheetSamples + 1)
+    val sheetSamples = SHEET_SAMPLES
+    val sheetPath = physics.sheetPath
+    val sheetPairs = SHEET_PAIRS
+    val innerX = physics.sheetInnerX
+    val innerY = physics.sheetInnerY
 
     for (sIdx in sheetPairs.indices) {
         val (uIn, uOut) = sheetPairs[sIdx]
         sheetPath.reset()
         for (i in 0..sheetSamples) {
-            val theta = (i.toFloat() / sheetSamples) * 2f * PI.toFloat()
-            val c = cos(theta)
-            val s = sin(theta)
+            val theta = SHEET_THETA[i]
+            val c = SHEET_COS[i]
+            val s = SHEET_SIN[i]
             val rIn = evaluateOuterMembraneRadius(
                 theta = theta,
                 u = uIn,
@@ -1097,33 +1211,39 @@ private fun DrawScope.drawOuterStippledWaveMembrane(
         )
     }
 
-    // 2. 22 Concentric Stippled Contour Rings × 192 Angular Dots = 4,224 3D-Projected Stipple Points!
-    // Look closely at frame_03.png, frame_05.png, frame_22.png, frame_24.png:
-    // The outer torus is literally made of concentric dotted/stippled contour rows that bunch up along
-    // the folded ridges!
-    val contourRings = 22
-    val dotsPerRing = 192
+    // 2. 22 Concentric Stippled Contour Rings × 192 Angular Dots = 4,224 3D-Projected Stipple Points
+    // Batched into zero-GC native Canvas drawPoints/drawLines calls (6 GPU draws instead of 5,252!)
+    val contourRings = CONTOUR_RINGS
+    val dotsPerRing = DOTS_PER_RING
+    val specPts = physics.stippleSpecularPts
+    val brightPts = physics.stippleBrightPts
+    val midPts = physics.stippleMidPts
+    val dimPts = physics.stippleDimPts
+    val ridgePts = physics.ridgeLinePts
+
+    var specCount = 0
+    var brightCount = 0
+    var midCount = 0
+    var dimCount = 0
+    var ridgeCount = 0
+
     for (ringIdx in 0 until contourRings) {
         val u = ringIdx.toFloat() / (contourRings - 1)
         // Skip the dark gap between the inner ring (u < 0.16) and outer band (u > 0.20) when calm
         if (ringIdx == 4 && cymatic < 0.35f) continue
 
         val isBoundaryRidge = ringIdx == 0 || ringIdx == 3 || ringIdx == 5 || ringIdx == contourRings - 1
-        val baseDotRadius = when {
-            isBoundaryRidge -> 1.15f * dpPx
-            ringIdx % 3 == 0 -> 0.95f * dpPx
-            else -> 0.78f * dpPx
-        }
-
-        // Slight angular phase stagger per ring so dots form organic diagonal stipple weaves
-        val thetaStagger = (ringIdx % 2) * (PI.toFloat() / dotsPerRing)
+        val isOdd = (ringIdx and 1) == 1
+        val thetas = if (isOdd) STIPPLE_THETA_ODD else STIPPLE_THETA_EVEN
+        val cosines = if (isOdd) STIPPLE_COS_ODD else STIPPLE_COS_EVEN
+        val sines = if (isOdd) STIPPLE_SIN_ODD else STIPPLE_SIN_EVEN
 
         var prevX = 0f
         var prevY = 0f
         for (dIdx in 0..dotsPerRing) {
-            val theta = (dIdx.toFloat() / dotsPerRing) * 2f * PI.toFloat() + thetaStagger
-            val c = cos(theta)
-            val s = sin(theta)
+            val theta = thetas[dIdx]
+            val c = cosines[dIdx]
+            val s = sines[dIdx]
 
             val r = evaluateOuterMembraneRadius(
                 theta = theta,
@@ -1138,45 +1258,44 @@ private fun DrawScope.drawOuterStippledWaveMembrane(
             val x = center.x + r * c
             val y = center.y + r * s
 
-            // Draw faint connecting filament along the 4 primary fold ridges so folded edges look razor-crisp
-            if (isBoundaryRidge && dIdx > 0) {
-                val ridgeAlpha = if (ringIdx == 0 || ringIdx == contourRings - 1) {
-                    0.42f + cymatic * 0.25f
-                } else {
-                    0.28f + cymatic * 0.22f
-                }
-                drawLine(
-                    color = Im3SeafoamBright.copy(alpha = ridgeAlpha.coerceIn(0.15f, 0.78f)),
-                    start = Offset(prevX, prevY),
-                    end = Offset(x, y),
-                    strokeWidth = 0.9f * dpPx,
-                )
+            if (isBoundaryRidge && dIdx > 0 && ridgeCount + 4 <= ridgePts.size) {
+                ridgePts[ridgeCount++] = prevX
+                ridgePts[ridgeCount++] = prevY
+                ridgePts[ridgeCount++] = x
+                ridgePts[ridgeCount++] = y
             }
             prevX = x
             prevY = y
 
             if (dIdx < dotsPerRing) {
-                // Modulate stipple brightness to create the caustic highlights on wave crests
                 val caustic = 0.65f + 0.35f * cos(9f * theta - wavePhase + u * 3f)
-                val dotAlpha = when {
-                    isBoundaryRidge -> (0.58f + 0.36f * caustic + audio * 0.12f).coerceIn(0.30f, 0.98f)
-                    else -> (0.24f + 0.48f * caustic).coerceIn(0.14f, 0.86f)
+                when {
+                    isBoundaryRidge && caustic > 0.78f -> {
+                        specPts[specCount++] = x
+                        specPts[specCount++] = y
+                    }
+                    isBoundaryRidge -> {
+                        brightPts[brightCount++] = x
+                        brightPts[brightCount++] = y
+                    }
+                    caustic > 0.62f || ringIdx % 3 == 0 -> {
+                        midPts[midCount++] = x
+                        midPts[midCount++] = y
+                    }
+                    else -> {
+                        dimPts[dimCount++] = x
+                        dimPts[dimCount++] = y
+                    }
                 }
-                val dotColor = if (isBoundaryRidge && caustic > 0.78f) {
-                    Im3SpecularIce.copy(alpha = dotAlpha)
-                } else {
-                    Im3SeafoamBright.copy(alpha = dotAlpha)
-                }
-                drawCircle(
-                    color = dotColor,
-                    radius = baseDotRadius,
-                    center = Offset(x, y),
-                )
             }
         }
     }
 
-    // 3. Outer Scattered Particle Spray (visible around the outer rim in frame_03.png & frame_22.png)
+    // 3. Outer Scattered Particle Spray (batched into 2 native drawPoints calls)
+    val sprayBright = physics.sprayBrightPts
+    val sprayDim = physics.sprayDimPts
+    var sprayBrightCount = 0
+    var sprayDimCount = 0
     for (sp in OUTER_SPRAY_PARTICLES) {
         val waveOut = evaluateOuterMembraneRadius(
             theta = sp.theta,
@@ -1192,11 +1311,62 @@ private fun DrawScope.drawOuterStippledWaveMembrane(
         val x = center.x + r * sp.cosT
         val y = center.y + r * sp.sinT
         val twinkle = 0.55f + 0.45f * sin(physics.frameTick * 3.1f + sp.phase)
-        drawCircle(
-            color = Im3SeafoamBright.copy(alpha = (sp.alpha * twinkle).coerceIn(0.08f, 0.75f)),
-            radius = sp.sizeDp * dpPx * 0.55f,
-            center = Offset(x, y),
-        )
+        if (sp.alpha * twinkle >= 0.32f) {
+            sprayBright[sprayBrightCount++] = x
+            sprayBright[sprayBrightCount++] = y
+        } else {
+            sprayDim[sprayDimCount++] = x
+            sprayDim[sprayDimCount++] = y
+        }
+    }
+
+    // Flush all batched lines & points directly to the native GPU canvas
+    val nativeCanvas = drawContext.canvas.nativeCanvas
+    val linePaint = physics.batchLinePaint
+    val ptPaint = physics.batchPointPaint
+
+    fun colorToArgb(color: Color, alpha: Float): Int {
+        val a = (alpha.coerceIn(0f, 1f) * 255f).toInt()
+        val r = (color.red * 255f).toInt()
+        val g = (color.green * 255f).toInt()
+        val b = (color.blue * 255f).toInt()
+        return android.graphics.Color.argb(a, r, g, b)
+    }
+
+    if (ridgeCount > 0) {
+        linePaint.strokeWidth = 0.9f * dpPx
+        linePaint.color = colorToArgb(Im3SeafoamBright, (0.36f + cymatic * 0.24f).coerceIn(0.18f, 0.76f))
+        nativeCanvas.drawLines(ridgePts, 0, ridgeCount, linePaint)
+    }
+    if (dimCount > 0) {
+        ptPaint.strokeWidth = 1.56f * dpPx
+        ptPaint.color = colorToArgb(Im3SeafoamBright, 0.34f)
+        nativeCanvas.drawPoints(dimPts, 0, dimCount, ptPaint)
+    }
+    if (midCount > 0) {
+        ptPaint.strokeWidth = 1.85f * dpPx
+        ptPaint.color = colorToArgb(Im3SeafoamBright, 0.64f)
+        nativeCanvas.drawPoints(midPts, 0, midCount, ptPaint)
+    }
+    if (brightCount > 0) {
+        ptPaint.strokeWidth = 2.25f * dpPx
+        ptPaint.color = colorToArgb(Im3SeafoamBright, (0.78f + audio * 0.14f).coerceIn(0.55f, 0.96f))
+        nativeCanvas.drawPoints(brightPts, 0, brightCount, ptPaint)
+    }
+    if (specCount > 0) {
+        ptPaint.strokeWidth = 2.40f * dpPx
+        ptPaint.color = colorToArgb(Im3SpecularIce, (0.88f + audio * 0.10f).coerceIn(0.70f, 0.98f))
+        nativeCanvas.drawPoints(specPts, 0, specCount, ptPaint)
+    }
+    if (sprayDimCount > 0) {
+        ptPaint.strokeWidth = 1.10f * dpPx
+        ptPaint.color = colorToArgb(Im3SeafoamBright, 0.24f)
+        nativeCanvas.drawPoints(sprayDim, 0, sprayDimCount, ptPaint)
+    }
+    if (sprayBrightCount > 0) {
+        ptPaint.strokeWidth = 1.55f * dpPx
+        ptPaint.color = colorToArgb(Im3SeafoamBright, 0.56f)
+        nativeCanvas.drawPoints(sprayBright, 0, sprayBrightCount, ptPaint)
     }
 }
 

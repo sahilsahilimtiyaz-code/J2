@@ -194,7 +194,7 @@ private fun IncomingCallScreen(
     val core = remember { runCatching { JarvisCore.get(context.applicationContext) }.getOrNull() }
     val coreState: CoreState? = core?.state?.collectAsState(initial = null)?.value
     val speaking = coreState?.speaking == true
-    val audioLevel = if (speaking) coreState?.audioLevel ?: 0f else 0f
+    val audioLevel = if (coreState != null && coreState.speaking) coreState.audioLevel else 0f
     val caption = coreState?.spokenCaption
 
     var elapsedSeconds by remember { mutableStateOf(0) }

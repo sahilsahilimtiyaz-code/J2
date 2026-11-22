@@ -76,6 +76,7 @@ class SelfReviewWorker(
         fun scheduleNightly(context: Context) {
             val constraints = Constraints.Builder()
                 .setRequiresBatteryNotLow(true)
+                .setRequiresDeviceIdle(true)
                 .build()
 
             val request = PeriodicWorkRequestBuilder<SelfReviewWorker>(24, TimeUnit.HOURS)

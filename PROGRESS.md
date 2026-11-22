@@ -641,21 +641,19 @@
   - Both `compile_applet` and `lint_applet` pass with 0 errors.
 
 
-## Octa-Jarvis update (November 2026)
 
-- **Launcher artwork** — every icon density, the in-app logo and the adaptive
-  foreground now come from `design/octa-jarvis-icon.png`. Regenerate with
-  `python3 tools/generate_app_icons.py` or pass your own square PNG:
-  `python3 tools/generate_app_icons.py design/app-icon.png`.
-- **Offline replies** — `brain/OfflineConversationEngine.kt` answers greetings,
-  small talk, identity, time/date, arithmetic, memory questions, follow-ups,
-  drafting and general questions entirely on-device. A missing GGUF file no longer
-  blocks offline chat.
-- **Tap precision** — `accessibility/TapPrecisionEngine.kt` targets element centres
-  away from edges, retries a correction ladder when a touch verifies nothing, and
-  learns a per-app pixel offset from the touch that finally worked.
-- **App updates** — `update/AppUpdateChecker.kt` reads `site/version.json`, the
-  `UpdateCheckWorker` checks every 12 hours, and `ui/UpdateDialog.kt` shows the
-  "app update available" sheet on launch.
-- **Octa-Jarvis site** — `site/` holds the download page. `release.yml` builds the
-  APK, publishes a GitHub Release, rewrites `site/version.json` and deploys Pages.
+## 2026-11-22 — Offline Natural GGUF Inference, Zero Fake Activity & Deep Battery/App Optimization
+
+- [x] **Real On-Device ARM64 GGUF Inference & Natural Offline Answers (`app/build.gradle.kts`, `OnDeviceGgufEngine.kt`, `LocalAiModels.kt`, `OfflineNaturalEngine.kt`):**
+  - Integrated `dev.ffmpegkit-maintained:llama-android:0.1.1` (`arm64-v8a` native `libllama.so`/`libggml*.so`) so downloaded `.gguf` models run natively on-device with adaptive CPU threads (`2–4` based on battery/thermal profile) and `contextSize = 2048`.
+  - Fixed root causes of offline models answering in raw code/JSON: routed deterministic phone commands before local LLM calls, stopped `OfflineTaskRouter` from hijacking general knowledge questions (`"explain ..."`, `"what is ..."`, `"how does ..."`) into `web_search`, stripped massive 50+ JSON tool schemas from local/loopback prompts (`OnDeviceGgufEngine.buildCompactLocalSystemPrompt`), and hardened `NaturalResponseSanitizer` to strip `<think>`/`<end_of_turn>`/`<tool_call>` tokens and reject unsolicited code blocks/tool JSON in favor of clean natural prose from `OfflineNaturalEngine`.
+  - Fixed `OfflineTaskRouter` regex to match `"schedule a daily task ..."` and `"schedule a weekly task ..."`.
+- [x] **Real Bug Fixes & Removal of Fake Activity (`MediaTools.kt`, `HomeScreen.kt`, `QuickPanel.kt`, `MemoryScreen.kt`, `ToolsScreen.kt`, `PerceptionLadderEngine.kt`, `SettingsExtras.kt`, `JarvisCore.kt`, `JarvisIncomingCallActivity.kt`, `SettingsScreen.kt`):**
+  - Fixed `MediaTools.kt` `parseDuckHtmlResults()` regex (previously skipped snippet content after `</a>`) and expanded HTML entity decoding.
+  - Replaced fabricated hardcoded HUD telemetry (`cpuPct`/`gpuPct`/`47`/`87` in `HomeScreen.kt`, fake `"92%"`/`"36°C"`/`"Wi-Fi"`/`"Optimal"` in `QuickPanel.kt`, fake `+12/+28/+56/+14/43` offsets in `MemoryScreen.kt`, and misleading demo cards in `ToolsScreen.kt`) with 100% real Android hardware metrics, real Room memory counts, and accurate live tool cards.
+  - Fixed `PerceptionLadderEngine.kt` `dummyBitmap` recycle leak in `try/finally` and resolved Kotlin compiler warnings.
+- [x] **Real Battery & App Optimization with Zero UI/UX Reduction (`Reactor.kt`, `BatteryOptimizationManager.kt`, `BatteryOptimizationCard.kt`, `HttpClientFactory.kt`, `JarvisApplication.kt`, `SelfReviewWorker.kt`, `MemoryExtractionWorker.kt`):**
+  - Added lifecycle-aware (`repeatOnLifecycle`) orb animation & video pausing (0% GPU/CPU when backgrounded), precomputed trig tables, zero-GC reusable scratch buffers, and batched native `drawPoints`/`drawLines` rendering in `Reactor.kt` (6 GPU draws instead of 5,252 individual calls per frame) while preserving every single Iron Man 3 visual layer.
+  - Unified `BatteryOptimizationManager` with `PowerProfileOverride` (`Auto`/`Max`/`Balanced`/`Saver` persisted across restarts), real `PowerManager.currentThermalStatus` + battery temperature throttling (`ThermalState`), Android 14+ `ContextCompat.RECEIVER_NOT_EXPORTED`, `trimAppCache()` (clears temp cache while preserving GGUF models, flushes idle HTTP sockets, releases idle GGUF native RAM), and `JarvisApplication.onTrimMemory` cleanup.
+  - Added tuned OkHttp `Dispatcher`/`ConnectionPool` reuse in `HttpClientFactory.kt` and battery-not-low / device-idle WorkManager constraints on `MemoryExtractionWorker` and `SelfReviewWorker`.
+- [x] **Verification & Polish:** Resolved remaining Kotlin compiler warnings (`JarvisAccessibilityService`, `ScreenController`, `PerceptionLadderEngine`, `AutonomousPhoneOperator`, `HumanTouchEngine`, `JarvisDatabase`, `MemoryRepository`, `AppDestinations`, `WhisperSttEngine`), updated `README.md` with 2026-11-06/2026-11-22 documentation and phone test checklists, synced `.build-outputs/app-debug.apk`, and verified `gradle testDebugUnitTest assembleDebug --no-daemon` (**182 tests, 0 failures**), `compile_applet`, and `lint_applet` (`BUILD SUCCESSFUL`).

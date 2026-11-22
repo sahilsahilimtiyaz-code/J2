@@ -206,4 +206,82 @@ class LocalAiModelsTest {
         assertTrue(text.contains("Flashlight turned on"))
         assertTrue(round2Events.any { it is LlmEvent.Done })
     }
+
+    @Test
+    fun sanitizer_strips_control_tokens_and_rejects_unsolicited_code_blocks() {
+        // Strips <think>, <end_of_turn>, Assistant: prefix
+        val thinkingReply = "<think>let me check</think>\nAssistant: Good evening, sir. Photosynthesis turns sunlight into chemical energy.<end_of_turn>"
+        val cleaned = NaturalResponseSanitizer.sanitizeModelOutput(thinkingReply, allowCode = false)
+        assertTrue(cleaned.contains("Photosynthesis turns sunlight into chemical energy."))
+        assertTrue(!cleaned.contains("<think>"))
+        assertTrue(!cleaned.contains("<end_of_turn>"))
+        assertTrue(!cleaned.startsWith("Assistant:"))
+
+        // Rejects unsolicited Python code fence when user did not ask for code
+        val rawCodeReply = "```python\ndef answer():\n    return 'Hello'\nprint(answer())\n```"
+        val rejectedCode = NaturalResponseSanitizer.sanitizeModelOutput(rawCodeReply, allowCode = false)
+        assertEquals("", rejectedCode)
+
+        // Rejects raw tool-call JSON dump
+        val rawToolJson = """{"tool_call": {"name": "web_search", "arguments": {"query": "gravity"}}}"""
+        val rejectedTool = NaturalResponseSanitizer.sanitizeModelOutput(rawToolJson, allowCode = false)
+        assertEquals("", rejectedTool)
+
+        // Extracts prose from simple JSON answer envelope
+        val jsonEnvelope = """{"response": "Gravity is the attractive force between objects with mass."}"""
+        val extracted = NaturalResponseSanitizer.sanitizeModelOutput(jsonEnvelope, allowCode = false)
+        assertEquals("Gravity is the attractive force between objects with mass.", extracted)
+
+        // Preserves code when explicitly requested
+        val allowedCode = NaturalResponseSanitizer.sanitizeModelOutput(rawCodeReply, allowCode = true)
+        assertTrue(allowedCode.contains("def answer"))
+    }
+
+    @Test
+    fun compact_local_prompt_has_no_json_tool_bloat_and_offline_chat_answers_naturally() = runBlocking {
+        val compactPrompt = OnDeviceGgufEngine.buildCompactLocalSystemPrompt(
+            ownerName = "Octavian",
+            ownerTitle = "sir",
+            activeModeName = "Standard",
+            memoryHighlights = listOf("Builds Android AI assistants"),
+            userAskedForCode = false,
+        )
+        assertTrue(compactPrompt.contains("clear conversational English prose"))
+        assertTrue(!compactPrompt.contains("\"type\":\"function\""))
+
+        val provider = LocalLlmProvider(OkHttpClient(), downloadManager = null)
+        val config = ProviderConfig(
+            id = "local_ai",
+            name = "Offline Local AI",
+            kind = ProviderKind.LOCAL_ON_DEVICE,
+            baseUrl = "http://127.0.0.1:8080/v1",
+            model = "gemma3_1b",
+            apiKey = "",
+        )
+
+        val questions = listOf(
+            "Hello Jarvis, how are you today?",
+            "What is 15 * 24?",
+            "Explain gravity simply",
+            "Who created you?",
+        )
+        for (q in questions) {
+            val events = provider.stream(
+                request = ChatRequest(
+                    messages = listOf(
+                        LlmMessage.system("You are Jarvis. Address the owner as sir."),
+                        LlmMessage.user(q),
+                    ),
+                    tools = sampleTools,
+                ),
+                config = config,
+            ).toList()
+
+            val reply = events.filterIsInstance<LlmEvent.TextDelta>().joinToString("") { it.text }.trim()
+            assertTrue("Expected non-empty natural reply for '$q'", reply.isNotBlank())
+            assertTrue("Reply for '$q' must not contain code fences: $reply", !reply.contains("```"))
+            assertTrue("Reply for '$q' must not contain JSON tool calls: $reply", !reply.contains("\"tool_call\""))
+            assertTrue("Reply for '$q' must not contain XML control tags: $reply", !reply.contains("<think>"))
+        }
+    }
 }

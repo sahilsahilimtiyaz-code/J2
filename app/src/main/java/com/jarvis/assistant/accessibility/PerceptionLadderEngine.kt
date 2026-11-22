@@ -115,8 +115,11 @@ object SetOfMarkAnnotator {
         val dstW = (srcW * scale).toInt().coerceAtLeast(1)
         val dstH = (srcH * scale).toInt().coerceAtLeast(1)
 
-        val scaledBitmap = Bitmap.createScaledBitmap(rawScreenshot, dstW, dstH, true)
-            .copy(Bitmap.Config.ARGB_8888, true)
+        val tempScaled = Bitmap.createScaledBitmap(rawScreenshot, dstW, dstH, true)
+        val scaledBitmap = tempScaled.copy(Bitmap.Config.ARGB_8888, true)
+        if (tempScaled !== rawScreenshot && tempScaled !== scaledBitmap && !tempScaled.isRecycled) {
+            tempScaled.recycle()
+        }
         val canvas = Canvas(scaledBitmap)
 
         val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -348,7 +351,7 @@ class PerceptionLadderEngine(
             val dialogDismiss = screen.elements.firstOrNull { el ->
                 el.clickable && COMMON_DIALOG_DISMISS_LABELS.any { d -> el.primaryLabel.equals(d, ignoreCase = true) }
             } ?: screen.dismissCandidate
-            if (dialogDismiss != null && !targetQuery.contains(screen.activeDialogTitle, ignoreCase = true)) {
+            if (!targetQuery.contains(screen.activeDialogTitle, ignoreCase = true)) {
                 return PerceptionStepOutcome(
                     success = true,
                     verified = true,
@@ -430,27 +433,37 @@ class PerceptionLadderEngine(
                 screen.screenHeight.coerceAtLeast(100),
                 Bitmap.Config.ARGB_8888,
             )
-            val annotated = SetOfMarkAnnotator.annotate(dummyBitmap, screen)
-            val decision = visionSelectorCallback(annotated)
-            val chosen = decision?.let { annotated.boxMap[it.boxNumber] }
-            if (chosen != null) {
-                if (!ownerApprovedRedTier && requiresRedTierApproval(targetQuery, chosen)) {
+            var annotated: SetOfMarkAnnotator.AnnotatedVisionFrame? = null
+            try {
+                annotated = SetOfMarkAnnotator.annotate(dummyBitmap, screen)
+                val decision = visionSelectorCallback(annotated)
+                val chosen = decision?.let { annotated.boxMap[it.boxNumber] }
+                if (chosen != null) {
+                    if (!ownerApprovedRedTier && requiresRedTierApproval(targetQuery, chosen)) {
+                        return PerceptionStepOutcome(
+                            success = false,
+                            verified = false,
+                            rungUsed = PerceptionRung.RUNG_3_VISION_SET_OF_MARK,
+                            targetElement = chosen,
+                            blockedByRedTier = true,
+                            summary = "RED-tier approval required before tapping box #${decision.boxNumber} ('${chosen.primaryLabel}').",
+                        )
+                    }
                     return PerceptionStepOutcome(
-                        success = false,
-                        verified = false,
+                        success = true,
+                        verified = true,
                         rungUsed = PerceptionRung.RUNG_3_VISION_SET_OF_MARK,
                         targetElement = chosen,
-                        blockedByRedTier = true,
-                        summary = "RED-tier approval required before tapping box #${decision.boxNumber} ('${chosen.primaryLabel}').",
+                        summary = "Matched box #${decision.boxNumber} ('${chosen.primaryLabel}') via Rung 3 Set-of-Mark Vision.",
                     )
                 }
-                return PerceptionStepOutcome(
-                    success = true,
-                    verified = true,
-                    rungUsed = PerceptionRung.RUNG_3_VISION_SET_OF_MARK,
-                    targetElement = chosen,
-                    summary = "Matched box #${decision.boxNumber} ('${chosen.primaryLabel}') via Rung 3 Set-of-Mark Vision.",
-                )
+            } finally {
+                annotated?.annotatedBitmap?.let { bmp ->
+                    if (!bmp.isRecycled) bmp.recycle()
+                }
+                if (!dummyBitmap.isRecycled) {
+                    dummyBitmap.recycle()
+                }
             }
         }
 

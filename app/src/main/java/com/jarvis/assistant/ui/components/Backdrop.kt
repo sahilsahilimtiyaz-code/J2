@@ -114,6 +114,7 @@ fun JarvisBackdrop(
 
     val seafoamBright = JarvisPalette.CyanBright
     val seafoamMid = JarvisPalette.Cyan
+    val reusableHexPath = remember { Path() }
 
     Box(modifier = modifier.fillMaxSize()) {
         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -149,6 +150,7 @@ fun JarvisBackdrop(
                 cells = UPPER_RIGHT_HEX_CLUSTER,
                 color = seafoamBright,
                 breathe = breathe,
+                path = reusableHexPath,
             )
 
             // Lower-Left Hexagonal Honeycomb Grid Cluster (00:02–00:14)
@@ -158,6 +160,7 @@ fun JarvisBackdrop(
                 cells = LOWER_LEFT_HEX_CLUSTER,
                 color = seafoamBright,
                 breathe = breathe,
+                path = reusableHexPath,
             )
 
             // Subtle instrument grid hairlines
@@ -222,11 +225,11 @@ private fun DrawScope.drawHexCluster(
     cells: List<HexCell>,
     color: Color,
     breathe: Float,
+    path: Path,
 ) {
     val dx = hexRadius * 1.5f
     val dy = hexRadius * sqrt(3f)
     val strokeW = 1.0.dp.toPx()
-    val path = Path()
 
     for (cell in cells) {
         val cx = origin.x + cell.col * dx

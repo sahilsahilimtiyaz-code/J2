@@ -17,4 +17,9 @@ class JarvisApplication : Application() {
         // even on days the app is not opened.
         com.jarvis.assistant.update.UpdateCheckWorker.schedule(this)
     }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        runCatching { JarvisCore.get(this).onTrimMemory(level) }
+    }
 }

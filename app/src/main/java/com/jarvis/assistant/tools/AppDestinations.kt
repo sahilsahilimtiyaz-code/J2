@@ -161,9 +161,10 @@ object AppDestinationOpener {
                         match = findDestination(controller.snapshotActionableNodes(), step, sectionQuery)
                     }
                 }
-                if (match != null) {
+                val foundMatch = match
+                if (foundMatch != null) {
                     val retryRes = controller.executeRefAction(
-                        tempRef = match!!.tempRef,
+                        tempRef = foundMatch.tempRef,
                         actionType = "click",
                         userGoal = sectionQuery,
                     )

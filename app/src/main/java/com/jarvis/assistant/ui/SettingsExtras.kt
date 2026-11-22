@@ -933,7 +933,7 @@ fun MicrophoneStatusMonitorCard(
             DiagnosticRow("Foreground service state", diag.foregroundServiceState)
             DiagnosticRow("Last microphone start reason", diag.lastStartReason)
             DiagnosticRow("Last microphone stop reason", diag.lastStopReason)
-            DiagnosticRow("Last error", diag.lastError ?: "None")
+            DiagnosticRow("Last error", diag.lastError.ifBlank { "None" })
             DiagnosticRow(
                 "Microphone resource held",
                 if (diag.isMicrophoneResourceHeld) "YES (Active capture)" else "NO (Fully released)",

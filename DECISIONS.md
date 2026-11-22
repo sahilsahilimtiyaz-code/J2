@@ -675,21 +675,10 @@
 
 
 
-## Octa-Jarvis: icon, offline brain, tap precision and updates
 
-- **Icon source of truth** — the artwork lives as one 1024px PNG plus a deterministic
-  generator, so densities and the adaptive safe-zone layer can never drift apart from
-  the master again. No hand-edited per-density files.
-- **Offline replies stay native Kotlin** — shipping a llama.cpp JNI build was out of
-  scope for this change, so the downloaded GGUF remains optional and the built-in
-  conversational engine answers instead of emitting "model not downloaded". It never
-  pretends to know a fact it cannot verify: general questions are declined honestly
-  and routed to web search when a connection exists.
-- **Touch correction instead of a single fixed offset** — the previous 30%-of-height
-  retry was a guess. The correction ladder keeps every retry inside the element's
-  reported bounds (so it cannot hit a neighbour) and records the delta of the retry
-  that verified, averaged per package and clamped to 44px.
-- **Updates come from our own site** — `site/version.json` is the release contract:
-  versionCode, versionName, APK URL, notes, SHA-256. The app checks GitHub Pages and
-  falls back to the raw repository copy, so a Pages outage cannot hide a release.
-  "Skip this version" stores the versionCode locally.
+## 2026-11-22 — On-Device GGUF Engine, Natural Offline Guardrails & Zero-Compromise Battery Optimization
+
+- **Native ARM64 GGUF Inference (`dev.ffmpegkit-maintained:llama-android:0.1.1`):** Chosen over raw JNI compilation because it ships a compact 2.0 MB AAR (`minSdk 24`, prebuilt `arm64-v8a` `libllama.so` + `libggml*.so`), keeps APK size reasonable, and degrades gracefully on JVM unit tests / non-ARM64 environments. Native weights are cached for fast follow-up turns and automatically released via `onTrimMemory` or the Settings `Optimize Now` action.
+- **Why Offline Models Outputted Code & How We Eliminated It:** Small 350M–1.7B quantized models collapse into emitting JSON/Python tool-call syntax when fed 50+ JSON function schemas, and `OfflineTaskRouter` previously routed general knowledge prefixes (`"explain"`, `"what is"`, `"how does"`) into `web_search` even offline. Deterministic phone commands now run before local inference, general knowledge routes directly to `OnDeviceGgufEngine` / loopback server using a compact tool-free prompt (`tools = emptyList()`), and `NaturalResponseSanitizer` rejects unsolicited raw code/JSON/control tokens so `OfflineNaturalEngine` always provides natural English prose.
+- **Zero-UI-Loss Battery Architecture:** Instead of stripping visual effects from the Iron Man 3 Arc Reactor, we moved the 4,224 stipple points, 4 fold ridges, and 260 spray particles onto pre-allocated scratch buffers and 6 batched native `drawPoints`/`drawLines` calls, gated all animation and telemetry loops with `repeatOnLifecycle`, paused/released `MediaPlayer` + `Surface` when backgrounded, and paced idle frames (`16ms / 33ms / 50ms`) while maintaining full 60fps whenever speaking, listening, thinking, or touched.
+- **100% Honest Telemetry:** Removed all fabricated hardcoded percentages and demo offsets from `HomeScreen`, `QuickPanel`, `MemoryScreen`, and `ToolsScreen`, replacing them with real `BatteryManager`/`PowerManager`/`ActivityManager`/`StatFs` hardware readings and live Room counts.

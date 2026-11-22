@@ -77,6 +77,7 @@ import com.jarvis.assistant.brain.LocalModelSpec
 import com.jarvis.assistant.brain.ProviderKind
 import java.util.Locale
 import androidx.compose.ui.graphics.Color
+import com.jarvis.assistant.core.PowerProfile
 import com.jarvis.assistant.settings.HudColorTheme
 import com.jarvis.assistant.settings.OwnerProfile
 import com.jarvis.assistant.settings.ProviderPreset
@@ -429,6 +430,12 @@ fun SettingsScreen(
                     AnimatedVisibility(visible = expandedSection == SettingsSection.SYSTEM) {
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             MasterPowerCard(state = state, onPowerOff = viewModel::powerOff)
+                            BatteryOptimizationCard(
+                                state = state,
+                                onRequestBatteryUnrestricted = viewModel::requestBatteryUnrestricted,
+                                onSelectPowerProfile = viewModel::setPowerProfileOverride,
+                                onOptimizeAppCache = viewModel::optimizeAppCache,
+                            )
                             Phase0DiagnosticsEntryCard(onOpenDiagnostics = viewModel::openDiagnostics)
                             MicrophoneStatusMonitorCard(state = state, viewModel = viewModel)
                             ScreenUsageHealthCard(state = state, viewModel = viewModel)
@@ -1110,17 +1117,19 @@ private fun ProviderCard(
                     Text(
                         text = buildString {
                             append(provider.kind.label)
-                            if (!matchedPreset?.apiKeyPortal.isNullOrBlank()) {
-                                append(" · Key: ${matchedPreset?.apiKeyPortal}")
+                            val portal = matchedPreset?.apiKeyPortal
+                            if (!portal.isNullOrBlank()) {
+                                append(" · Key: $portal")
                             }
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    if (!matchedPreset?.note.isNullOrBlank()) {
+                    val presetNote = matchedPreset?.note
+                    if (!presetNote.isNullOrBlank()) {
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            text = matchedPreset?.note.orEmpty(),
+                            text = presetNote,
                             style = MaterialTheme.typography.labelSmall,
                             color = JarvisPalette.CyanBright.copy(alpha = 0.85f),
                         )

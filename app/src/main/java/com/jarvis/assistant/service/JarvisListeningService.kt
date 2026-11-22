@@ -96,7 +96,7 @@ class JarvisListeningService : Service() {
         val lock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Jarvis::listening")
         runCatching {
             lock.setReferenceCounted(false)
-            lock.acquire()
+            lock.acquire(10 * 60 * 1000L)
             wakeLock = lock
         }
     }

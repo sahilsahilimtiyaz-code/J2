@@ -134,18 +134,27 @@ fun MemoryScreen(
     }
 
     val projectsCount = remember(state.memories) {
-        state.memories.count { it.type.equals(MemoryType.PROJECT, ignoreCase = true) } + 12
+        state.memories.count { it.type.equals(MemoryType.PROJECT, ignoreCase = true) }
     }
     val ideasCount = remember(state.memories) {
-        state.memories.count { it.type.equals(MemoryType.PREFERENCE, ignoreCase = true) } + 28
+        state.memories.count { it.type.equals(MemoryType.PREFERENCE, ignoreCase = true) }
     }
     val researchCount = remember(state.memories) {
-        state.memories.count { it.type.equals(MemoryType.FACT, ignoreCase = true) } + 56
+        state.memories.count {
+            it.type.equals(MemoryType.FACT, ignoreCase = true) ||
+                it.type.equals(MemoryType.LESSON, ignoreCase = true)
+        }
     }
     val personalCount = remember(state.memories, state.facts) {
-        state.facts.size + state.memories.count { it.type.equals(MemoryType.PERSON, ignoreCase = true) } + 14
+        state.facts.size + state.memories.count { it.type.equals(MemoryType.PERSON, ignoreCase = true) }
     }
-    val mediaCount = 43
+    val mediaCount = remember(state.memories) {
+        state.memories.count {
+            it.type.equals(MemoryType.ROUTINE, ignoreCase = true) ||
+                it.type.equals(MemoryType.RECURRING_TASK, ignoreCase = true) ||
+                it.type.equals(MemoryType.IMPORTANT_DATE, ignoreCase = true)
+        }
+    }
     val totalVisualCount = state.memories.size + state.facts.size
 
     if (confirmForget) {
@@ -525,15 +534,15 @@ private fun MemoryGalaxyStage(
             onClick = { onSelectCluster("person") },
         )
 
-        // Bottom-center: Media
+        // Bottom-center: Routines & Dates
         FloatingClusterNode(
-            title = "Media",
+            title = "Routines",
             count = "$mediaCount items",
-            glyph = HudGlyph.IMAGE,
+            glyph = HudGlyph.SPARKLES,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .offset(y = (-6).dp),
-            onClick = { onSelectCluster("") },
+            onClick = { onSelectCluster("routine") },
         )
     }
 }

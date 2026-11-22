@@ -121,6 +121,9 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+        jniLibs {
+            pickFirsts += "lib/**/libc++_shared.so"
+        }
     }
 }
 
@@ -153,6 +156,9 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
     implementation("com.squareup.okhttp3:okhttp:5.5.1")
+
+    // Real on-device ARM64 GGUF LLM inference engine (llama.cpp JNI, zero NDK required)
+    implementation("dev.ffmpegkit-maintained:llama-android:0.1.1")
 
     implementation("com.googlecode.libphonenumber:libphonenumber:8.13.55")
 

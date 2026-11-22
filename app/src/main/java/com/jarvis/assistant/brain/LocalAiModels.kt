@@ -328,7 +328,9 @@ class LocalModelDownloadManager(
     val statuses: StateFlow<Map<String, LocalModelDownloadStatus>> = _statuses.asStateFlow()
 
     init {
-        refreshStatuses()
+        scope.launch(Dispatchers.IO) {
+            refreshStatuses()
+        }
     }
 
     fun modelsDirectory(): File {
@@ -1151,13 +1153,88 @@ object OfflineTaskRouter {
             return call("get_current_time", "{}")
         }
 
-        // 21. Screen navigation, scrolling, typing & tapping
+        // 20b. Operational Modes (Study / Research / Tasks / Agentic / Default)
+        if (hasTool("set_operating_mode") &&
+            (lower.contains("study mode") || lower.contains("research mode") || lower.contains("tasks mode") ||
+                lower.contains("task mode") || lower.contains("agentic mode") || lower.contains("default mode") ||
+                lower.contains("standard mode") || lower.contains("normal mode"))
+        ) {
+            val targetMode = when {
+                lower.contains("study") -> "study"
+                lower.contains("research") -> "research"
+                lower.contains("agentic") -> "agentic"
+                lower.contains("task") -> "tasks"
+                else -> "default"
+            }
+            return call(
+                "set_operating_mode",
+                buildJsonObject { put("mode", targetMode) }.toString(),
+            )
+        }
+
+        // 20c. Scheduled Tasks (schedule, list, complete)
+        if ((Regex("""^(?:jarvis\s*,?\s*)?(?:please\s+)?schedule\s+(?:a\s+)?(?:(?:daily|weekly)\s+)?task\b|^(?:jarvis\s*,?\s*)?(?:please\s+)?schedule\s+(?:daily|weekly)\b|add\s+a\s+scheduled\s+task""")
+                .containsMatchIn(lower)) &&
+            hasTool("schedule_task")
+        ) {
+            val recurrence = when {
+                lower.contains("daily") || lower.contains("every day") -> "daily"
+                lower.contains("weekly") || lower.contains("every week") -> "weekly"
+                else -> "none"
+            }
+            val durationMinutes = (parseDurationSeconds(lower) / 60).takeIf { it > 0 } ?: 15
+            val title = clean
+                .replace(Regex("""(?i)^(jarvis\s*,?\s*)?(please\s+)?(schedule\s+(a\s+)?(daily|weekly)?\s*task|add\s+a\s+scheduled\s+task)\s*(in\s+\d+\s*(minutes?|mins?|hours?|hrs?))?\s*(to|for|about)?\s*"""), "")
+                .trim()
+                .ifBlank { "Scheduled task" }
+            return call(
+                "schedule_task",
+                buildJsonObject {
+                    put("title", title)
+                    put("minutes_from_now", durationMinutes)
+                    put("recurrence", recurrence)
+                }.toString(),
+            )
+        }
+        if ((lower.contains("list scheduled tasks") || lower.contains("show scheduled tasks") ||
+                lower.contains("my scheduled tasks") || lower.contains("upcoming tasks") ||
+                lower.contains("what tasks do i have")) &&
+            hasTool("list_scheduled_tasks")
+        ) {
+            return call("list_scheduled_tasks", "{}")
+        }
+        if ((lower.startsWith("complete task ") || lower.startsWith("finish task ") ||
+                lower.startsWith("mark task ")) &&
+            hasTool("complete_scheduled_task")
+        ) {
+            val taskRef = clean
+                .replace(Regex("""(?i)^(jarvis\s*,?\s*)?(please\s+)?(complete|finish|mark)\s+task\s+"""), "")
+                .replace(Regex("""(?i)\s+(as\s+)?(done|complete|completed|finished)$"""), "")
+                .trim()
+            if (taskRef.isNotBlank()) {
+                return call(
+                    "complete_scheduled_task",
+                    buildJsonObject { put("task_id_or_title", taskRef) }.toString(),
+                )
+            }
+        }
+
+        // 21. Screen navigation, scrolling, swiping, typing & tapping
         if ((lower == "scroll down" || lower == "scroll up" || lower == "scroll left" || lower == "scroll right") &&
             hasTool("scroll_screen")
         ) {
             val dir = lower.removePrefix("scroll ").trim()
             return call(
                 "scroll_screen",
+                buildJsonObject { put("direction", dir) }.toString(),
+            )
+        }
+        if ((lower == "swipe up" || lower == "swipe down" || lower == "swipe left" || lower == "swipe right") &&
+            hasTool("swipe_screen")
+        ) {
+            val dir = lower.removePrefix("swipe ").trim()
+            return call(
+                "swipe_screen",
                 buildJsonObject { put("direction", dir) }.toString(),
             )
         }
@@ -1321,7 +1398,48 @@ object OfflineTaskRouter {
             }
         }
 
-        // 23. Web Search & Web Research (works with zero API keys via DuckDuckGo & Wikipedia)
+        // 23. Advanced Web Search, Deep Research, Fact Check & Webpage Fetch (zero API keys required)
+        val urlMatch = Regex("""https?://\S+""").find(clean)
+        if (urlMatch != null &&
+            (lower.contains("fetch") || lower.contains("read ") || lower.contains("summarize") || lower.contains("open page") || lower.contains("check url")) &&
+            hasTool("fetch_web_page")
+        ) {
+            return call(
+                "fetch_web_page",
+                buildJsonObject { put("url", urlMatch.value.trimEnd('.', ',', ')')) }.toString(),
+            )
+        }
+        if ((lower.startsWith("fact check ") || lower.startsWith("fact-check ") ||
+                lower.startsWith("verify claim ") || lower.startsWith("verify whether ") ||
+                lower.startsWith("is it true that ")) &&
+            hasTool("fact_check")
+        ) {
+            val claim = clean
+                .replace(Regex("""(?i)^(jarvis\s*,?\s*)?(please\s+)?(fact[\s-]check|verify\s+claim|verify\s+whether|is\s+it\s+true\s+that)\s+"""), "")
+                .trim()
+                .trimEnd('?')
+            if (claim.isNotBlank()) {
+                return call(
+                    "fact_check",
+                    buildJsonObject { put("claim", claim) }.toString(),
+                )
+            }
+        }
+        if ((lower.startsWith("deep research ") || lower.startsWith("in-depth research ") ||
+                lower.startsWith("thorough research ") || lower.contains("do deep research on ")) &&
+            hasTool("deep_research")
+        ) {
+            val topic = clean
+                .replace(Regex("""(?i)^(jarvis\s*,?\s*)?(please\s+)?(do\s+)?(deep|in-depth|thorough)\s+research\s+(on|about|into|for)?\s*"""), "")
+                .trim()
+                .trimEnd('?')
+            if (topic.isNotBlank()) {
+                return call(
+                    "deep_research",
+                    buildJsonObject { put("query", topic) }.toString(),
+                )
+            }
+        }
         if (hasTool("web_search") && isWebResearchIntent(lower)) {
             val searchQuery = extractWebResearchQuery(clean)
             if (searchQuery.isNotBlank()) {
@@ -1531,25 +1649,18 @@ object OfflineTaskRouter {
         )
         if (explicitTriggers.any { lower.contains(it) }) return true
 
-        // Factual knowledge / encyclopedia questions ("who is ...", "what is ...", "where is ...", "tell me about ...")
-        val factualPrefixes = listOf(
-            "who is ",
-            "what is ",
-            "what are ",
-            "where is ",
-            "when was ",
-            "how does ",
-            "tell me about ",
-            "explain ",
+        // Never hijack personal, identity, conversational, math, unit-conversion, or date/time questions into web search
+        val nonWebPatterns = listOf(
+            "your name", "my name", "who are you", "who am i", "who created you", "who made you",
+            "who built you", "your creator", "your developer", "which model", "what model",
+            "how are you", "are you okay", "today's date", "todays date", "what time",
+            "what day is", "what year is", "what month is", "my memory", "my notes", "about me",
         )
-        if (factualPrefixes.any { lower.startsWith(it) || lower.startsWith("jarvis $it") || lower.startsWith("jarvis, $it") }) {
-            // Do not route simple math or personal questions ("what is my ...", "who is my ...") to web search;
-            // personal questions should check stored memory first!
-            if (lower.contains(" my ") || lower.contains(" i ") || Regex("""\d+\s*[\+\-\*x×/÷]\s*\d+""").containsMatchIn(lower)) {
-                return false
-            }
-            return true
-        }
+        if (nonWebPatterns.any { lower.contains(it) }) return false
+        if (OfflineMathAndUnitEngine.tryEvaluate(lower) != null) return false
+
+        // Only route to web_search for explicit search/live-data intents above; let the
+        // on-device GGUF model / OfflineNaturalEngine answer general knowledge directly!
         return false
     }
 
@@ -1733,6 +1844,7 @@ object OfflineTaskRouter {
 class LocalLlmProvider(
     private val client: OkHttpClient,
     private val downloadManager: LocalModelDownloadManager? = null,
+    private val recommendedThreadsProvider: () -> Int = { 4 },
 ) : LlmProvider {
 
     private val openAiBridge = OpenAiCompatibleProvider(
@@ -1751,10 +1863,15 @@ class LocalLlmProvider(
         val modelFile = downloadManager?.modelFile(readySpec)
         val ggufInfo = modelFile?.let { GgufModelInspector.inspect(it) }
 
-        // The GGUF file is optional. Without it the built-in on-device engine still
-        // answers and runs every phone tool, so an un-downloaded model is never a
-        // dead end: it simply reports that the built-in engine is answering.
-        val isModelReady = modelFile != null && modelFile.exists() && ggufInfo?.valid == true
+        if (downloadManager != null && (modelFile == null || !modelFile.exists() || ggufInfo?.valid != true)) {
+            emit(
+                LlmEvent.Error(
+                    "Offline model '${requestedSpec.displayName}' is not downloaded yet. " +
+                        "Open Settings → AI Model → Offline Local AI Models and tap Download.",
+                ),
+            )
+            return@flow
+        }
 
         // Connection test probe from ProviderTester
         val lastMessage = request.messages.lastOrNull()
@@ -1766,31 +1883,9 @@ class LocalLlmProvider(
             return@flow
         }
 
-        // Optional: If a local llama.cpp / Ollama server is running on loopback, try it first
-        if (isModelReady && isLocalRunnerReachable()) {
-            var emittedAny = false
-            runCatching {
-                openAiBridge.stream(
-                    request = request,
-                    config = config.copy(
-                        baseUrl = "http://127.0.0.1:8080/v1",
-                        model = readySpec.id,
-                    ),
-                ).collect { ev ->
-                    if (ev is LlmEvent.TextDelta || ev is LlmEvent.ToolCallReady) {
-                        emittedAny = true
-                        emit(ev)
-                    }
-                }
-            }
-            if (emittedAny) {
-                emit(LlmEvent.Done)
-                return@flow
-            }
-        }
-
-        // On-device execution engine:
-        // Round 1 (USER turn): Match intent against available tools (including recent conversation context)
+        // 1. Deterministic on-device tool routing BEFORE invoking any small local LLM.
+        //    This guarantees phone actions run reliably and stops tiny 350M–1.7B models
+        //    from hallucinating raw JSON or code when fed 50+ tool schemas.
         if (lastMessage?.role == LlmRole.USER && request.tools.isNotEmpty()) {
             val priorConversation = request.messages.dropLast(1).filter {
                 it.role == LlmRole.USER || it.role == LlmRole.ASSISTANT
@@ -1809,9 +1904,7 @@ class LocalLlmProvider(
             }
         }
 
-        // Multi-round execution:
-        // Round 2+ (after a TOOL result returned to the model):
-        // Check if there is a pending subsequent step in a multi-step task!
+        // 2. Multi-round tool follow-up (e.g., open_app -> type_on_screen)
         val trailingTools = request.messages.takeLastWhile { it.role == LlmRole.TOOL }
         if (trailingTools.isNotEmpty() && request.tools.isNotEmpty()) {
             val originalUserMsg = request.messages.lastOrNull { it.role == LlmRole.USER }?.content.orEmpty()
@@ -1826,27 +1919,152 @@ class LocalLlmProvider(
             }
         }
 
+        val systemText = request.messages.firstOrNull { it.role == LlmRole.SYSTEM }?.content.orEmpty()
+        val userText = request.messages.lastOrNull { it.role == LlmRole.USER }?.content?.trim().orEmpty()
+        val title = extractOwnerTitle(systemText)
+        val ownerName = extractOwnerName(systemText)
+        val allowCode = NaturalResponseSanitizer.userExplicitlyAskedForCode(userText)
+
+        // 3. When answering conversational questions (not tool results, not background JSON/monitoring),
+        //    try local neural inference first with a compact natural-language-only prompt (no tool schemas!).
+        val isBackgroundStructured = userText.contains("[BACKGROUND MONITORING OBSERVATION]") ||
+            systemText.contains("JSON only", ignoreCase = true) ||
+            userText.contains("Reply with ONLY a JSON array")
+
+        if (trailingTools.isEmpty() && !isBackgroundStructured && userText.isNotBlank()) {
+            val intentAnalysis = IntentGate.classify(userText, title)
+            val isDirectSafetyOrCancellation = intentAnalysis.isCancellationOrCorrection ||
+                intentAnalysis.kind == UserIntentKind.CLARIFICATION_NEEDED
+
+            if (!isDirectSafetyOrCancellation) {
+                val activeMode = Regex("""Active Operating Mode:\s*([^\n(]+)""", RegexOption.IGNORE_CASE)
+                    .find(systemText)?.groupValues?.get(1)?.trim().orEmpty().ifBlank { "Standard" }
+                val memoryHighlights = listStoredMemoriesFromPrompt(systemText)
+                    ?.lines()
+                    ?.map { it.removePrefix("- ").trim() }
+                    ?.filter { it.isNotBlank() }
+                    .orEmpty()
+                val compactSystem = OnDeviceGgufEngine.buildCompactLocalSystemPrompt(
+                    ownerName = ownerName,
+                    ownerTitle = title,
+                    activeModeName = activeMode,
+                    memoryHighlights = memoryHighlights,
+                    userAskedForCode = allowCode,
+                )
+
+                // 3a. Local loopback llama.cpp (8080) or Ollama (11434) server if active
+                val loopbackUrl = detectLocalRunnerBaseUrl()
+                if (loopbackUrl != null) {
+                    val recentDialogue = request.messages
+                        .filter { it.role == LlmRole.USER || it.role == LlmRole.ASSISTANT }
+                        .takeLast(6)
+                    val cleanRequest = ChatRequest(
+                        messages = listOf(LlmMessage.system(compactSystem)) + recentDialogue,
+                        tools = emptyList(),
+                        temperature = 0.65,
+                        maxTokens = request.maxTokens.coerceIn(128, 512),
+                    )
+                    val bufferedText = StringBuilder()
+                    runCatching {
+                        openAiBridge.stream(
+                            request = cleanRequest,
+                            config = config.copy(
+                                baseUrl = loopbackUrl,
+                                model = readySpec.id,
+                            ),
+                        ).collect { ev ->
+                            if (ev is LlmEvent.TextDelta) bufferedText.append(ev.text)
+                        }
+                    }
+                    val cleaned = NaturalResponseSanitizer.sanitizeModelOutput(
+                        bufferedText.toString(),
+                        allowCode = allowCode,
+                    )
+                    if (cleaned.isNotBlank()) {
+                        streamWords(cleaned)
+                        emit(LlmEvent.Done)
+                        return@flow
+                    }
+                }
+
+                // 3b. Real On-Device GGUF Native Inference (`llama.cpp` ARM64 via OnDeviceGgufEngine)
+                if (modelFile != null && modelFile.exists() && ggufInfo?.valid == true) {
+                    val contextualPrompt = buildLocalConversationPrompt(request, userText)
+                    val nativeRaw = OnDeviceGgufEngine.generateReply(
+                        modelFile = modelFile,
+                        systemPrompt = compactSystem,
+                        userPrompt = contextualPrompt,
+                        maxTokens = request.maxTokens.coerceIn(128, 384),
+                        threads = recommendedThreadsProvider(),
+                        contextSize = 2048,
+                    )
+                    if (!nativeRaw.isNullOrBlank()) {
+                        val cleaned = NaturalResponseSanitizer.sanitizeModelOutput(
+                            nativeRaw,
+                            allowCode = allowCode,
+                        )
+                        if (cleaned.isNotBlank()) {
+                            streamWords(cleaned)
+                            emit(LlmEvent.Done)
+                            return@flow
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. Built-in native Kotlin natural-language engine & sanitized tool summarizer
         val reply = synthesizeOfflineReply(
             request = request,
             spec = readySpec,
             ggufInfo = ggufInfo,
-            modelReady = isModelReady,
         )
-
-        val words = reply.split(Regex("(?<=\\s)"))
-        for (word in words) {
-            emit(LlmEvent.TextDelta(word))
-            delay(14L)
-        }
+        streamWords(reply)
         emit(LlmEvent.Done)
     }.flowOn(Dispatchers.IO)
 
-    private fun isLocalRunnerReachable(): Boolean = runCatching {
-        java.net.Socket().use { socket ->
-            socket.connect(java.net.InetSocketAddress("127.0.0.1", 8080), 120)
-            true
+    private suspend fun kotlinx.coroutines.flow.FlowCollector<LlmEvent>.streamWords(reply: String) {
+        val words = reply.split(Regex("(?<=\\s)"))
+        for (word in words) {
+            emit(LlmEvent.TextDelta(word))
+            delay(10L)
         }
-    }.getOrDefault(false)
+    }
+
+    private fun buildLocalConversationPrompt(request: ChatRequest, currentUserText: String): String {
+        val recentTurns = request.messages
+            .filter { it.role == LlmRole.USER || it.role == LlmRole.ASSISTANT }
+            .dropLast(1)
+            .takeLast(4)
+        if (recentTurns.isEmpty()) return currentUserText
+        return buildString {
+            appendLine("Recent conversation context:")
+            for (msg in recentTurns) {
+                val roleLabel = if (msg.role == LlmRole.USER) "User" else "Jarvis"
+                appendLine("$roleLabel: ${msg.content.trim().take(240)}")
+            }
+            appendLine()
+            append("Current question: ")
+            append(currentUserText)
+        }
+    }
+
+    private fun detectLocalRunnerBaseUrl(): String? {
+        val candidates = listOf(
+            8080 to "http://127.0.0.1:8080/v1",
+            11434 to "http://127.0.0.1:11434/v1",
+        )
+        for ((port, url) in candidates) {
+            val reachable = runCatching {
+                java.net.Socket().use { socket ->
+                    socket.connect(java.net.InetSocketAddress("127.0.0.1", port), 100)
+                    true
+                }
+            }.getOrDefault(false)
+            if (reachable) return url
+        }
+        return null
+    }
 
     private fun synthesizeAutonomousThought(
         observationPrompt: String,
@@ -1893,17 +2111,43 @@ class LocalLlmProvider(
         request: ChatRequest,
         spec: LocalModelSpec,
         ggufInfo: GgufHeaderInfo?,
-        modelReady: Boolean,
     ): String {
         val systemText = request.messages.firstOrNull { it.role == LlmRole.SYSTEM }?.content.orEmpty()
         val title = extractOwnerTitle(systemText)
         val ownerName = extractOwnerName(systemText)
 
-        // If the previous step was a tool execution, summarize the tool results in J.A.R.V.I.S.'s voice
+        // If the previous step was a tool execution, summarize the tool results in J.A.R.V.I.S.'s natural voice.
+        // If a web search / research tool failed (for example, device is offline), fall back smoothly
+        // to the offline natural knowledge engine for the owner's original question!
         val trailingTools = request.messages.takeLastWhile { it.role == LlmRole.TOOL }
         if (trailingTools.isNotEmpty()) {
+            val lastUserQuestion = request.messages.lastOrNull { it.role == LlmRole.USER }?.content?.trim().orEmpty()
+            val searchTools = setOf("web_search", "deep_research", "fact_check", "fetch_web_page")
+            val allFailedSearch = trailingTools.all { toolMsg ->
+                (toolMsg.toolName in searchTools) && NaturalResponseSanitizer.isSearchErrorOrEmpty(toolMsg.content)
+            }
+            if (allFailedSearch && lastUserQuestion.isNotBlank()) {
+                val priorDialogue = request.messages
+                    .filter { it.role == LlmRole.USER || it.role == LlmRole.ASSISTANT }
+                    .dropLast(1)
+                val sizeStr = ggufInfo?.fileSizeBytes?.takeIf { it > 0 }?.let { LocalModelCatalog.formatBytes(it) } ?: spec.approxSizeLabel
+                return OfflineNaturalEngine.generateNaturalReply(
+                    userText = lastUserQuestion,
+                    ownerTitle = title,
+                    ownerName = ownerName,
+                    modelDisplayName = spec.displayName,
+                    modelParameterBadge = spec.parameterBadge,
+                    modelSizeLabel = sizeStr,
+                    modelBestUse = spec.bestUse,
+                    systemPrompt = systemText,
+                    priorDialogue = priorDialogue,
+                    memoryLookup = { q -> findRelevantMemoryLine(systemText, q) },
+                    allMemoriesSummary = { listStoredMemoriesFromPrompt(systemText) },
+                )
+            }
+
             val summaries = trailingTools.mapNotNull { toolMsg ->
-                parseToolOutcome(toolMsg.content)
+                parseToolOutcome(toolMsg.content, toolMsg.toolName, title)
             }
             val joined = summaries.joinToString("\n\n").trim()
             return if (joined.isNotBlank()) {
@@ -1918,7 +2162,6 @@ class LocalLlmProvider(
         }
 
         val userText = request.messages.lastOrNull { it.role == LlmRole.USER }?.content?.trim().orEmpty()
-        val lower = userText.lowercase(Locale.ROOT)
 
         // Check if this is an autonomous thought background observation request
         if (userText.contains("[BACKGROUND MONITORING OBSERVATION]")) {
@@ -1939,112 +2182,29 @@ class LocalLlmProvider(
             intentAnalysis.clarificationPrompt?.let { return it }
         }
 
-        // Math evaluation
-        evaluateSimpleMath(lower)?.let { result ->
-            return "The answer is $result, $title."
-        }
-
-        // Direct memory / notes lookup from the system prompt's injected memory context
-        findRelevantMemoryLine(systemText, lower)?.let { matchedMemory ->
-            return "From your stored memory, $title: $matchedMemory"
-        }
-
         val priorDialogue = request.messages
             .filter { it.role == LlmRole.USER || it.role == LlmRole.ASSISTANT }
             .dropLast(1)
-        val lastAssistantReply = priorDialogue.lastOrNull { it.role == LlmRole.ASSISTANT && it.content.isNotBlank() }?.content?.trim()
-        val previousUserQuestion = priorDialogue.lastOrNull { it.role == LlmRole.USER && it.content.isNotBlank() }?.content?.trim()
+        val sizeStr = ggufInfo?.fileSizeBytes?.takeIf { it > 0 }?.let { LocalModelCatalog.formatBytes(it) } ?: spec.approxSizeLabel
 
-        // Short-term conversation memory queries ("what did you just say?", "repeat that", "what was I asking about?")
-        if (lower.contains("what did you just say") ||
-            lower.contains("what did you say") ||
-            lower.contains("repeat that") ||
-            lower.contains("say that again") ||
-            lower == "pardon" ||
-            lower == "come again" ||
-            lower.contains("what was your last")
-        ) {
-            return if (!lastAssistantReply.isNullOrBlank()) {
-                "I just said: \"$lastAssistantReply\", $title."
-            } else {
-                "We have only just begun this session, $title, so I had not spoken prior to this."
-            }
-        }
-
-        if (lower.contains("what did i just say") ||
-            lower.contains("what did i say") ||
-            lower.contains("what did i ask") ||
-            lower.contains("what was i asking") ||
-            lower.contains("what were we talking about") ||
-            lower.contains("do you remember what we")
-        ) {
-            return if (!previousUserQuestion.isNullOrBlank()) {
-                val replyNote = if (!lastAssistantReply.isNullOrBlank()) " And I answered: \"$lastAssistantReply\"" else ""
-                "You just asked me: \"$previousUserQuestion\", $title.$replyNote"
-            } else {
-                "You have not asked a prior question in this session yet, $title."
-            }
-        }
-
-        return OfflineConversationEngine.reply(
+        return OfflineNaturalEngine.generateNaturalReply(
             userText = userText,
-            context = OfflineReplyContext(
-                ownerTitle = title,
-                ownerName = ownerName,
-                modelName = spec.displayName,
-                modelSizeLabel = spec.approxSizeLabel,
-                modelReady = modelReady,
-                memoryLines = memoryLinesFromPrompt(systemText),
-                lastAssistantReply = lastAssistantReply,
-                previousUserQuestion = previousUserQuestion,
-                now = Date(),
-            ),
+            ownerTitle = title,
+            ownerName = ownerName,
+            modelDisplayName = spec.displayName,
+            modelParameterBadge = spec.parameterBadge,
+            modelSizeLabel = sizeStr,
+            modelBestUse = spec.bestUse,
+            systemPrompt = systemText,
+            priorDialogue = priorDialogue,
+            memoryLookup = { q -> findRelevantMemoryLine(systemText, q) },
+            allMemoriesSummary = { listStoredMemoriesFromPrompt(systemText) },
         )
     }
 
-    /** Collects the sanitized memory lines the memory layer injects into the prompt. */
-    private fun memoryLinesFromPrompt(systemPrompt: String): List<String> {
-        val section = systemPrompt.substringAfter("## Retrieved memory notes", "")
-            .substringBefore("## Non-negotiable", "")
-        if (section.isBlank()) return emptyList()
-        return section.lines()
-            .map { it.trim() }
-            .filter { it.startsWith("- ") }
-            .map { it.removePrefix("- ").replace(Regex("^\\([^)]*\\)\\s*"), "").trim() }
-            .filter { it.isNotBlank() && !it.contains("Octavian") }
-            .take(12)
-    }
-
-    private fun parseToolOutcome(rawJson: String): String? {
-        val trimmed = rawJson.trim()
-        val rawResult = if (trimmed.startsWith("{")) {
-            runCatching {
-                val obj = JSONObject(trimmed)
-                obj.optString("result").trim().ifBlank { obj.optString("error").trim() }
-            }.getOrDefault("")
-        } else {
-            trimmed
-        }
-        if (rawResult.isBlank()) return null
-
-        // Cleanly format web_search output so TTS speaks the research findings instead of URLs or prompt directives
-        if (rawResult.startsWith("Live web search results for")) {
-            val cleanedLines = rawResult.lines()
-                .map { it.trim() }
-                .filter { line ->
-                    line.isNotBlank() &&
-                        !line.startsWith("http://") &&
-                        !line.startsWith("https://") &&
-                        !line.startsWith("Summarize these results", ignoreCase = true)
-                }
-                .take(4)
-            return cleanedLines.joinToString("\n")
-        }
-
-        return rawResult
-            .replace("Inform the owner now.", "")
-            .replace("Summarize these results so the owner hears the answer; no browser is open and none should be opened.", "")
-            .trim()
+    private fun parseToolOutcome(rawJson: String, toolName: String? = null, ownerTitle: String = "sir"): String? {
+        val cleaned = NaturalResponseSanitizer.sanitizeToolOutcome(rawJson, toolName, ownerTitle)
+        return cleaned.takeIf { it.isNotBlank() }
     }
 
     private fun extractOwnerTitle(systemPrompt: String): String {
@@ -2108,25 +2268,5 @@ class LocalLlmProvider(
             .filter { it.startsWith("- (") && !it.contains("Octavian") }
         if (lines.isEmpty()) return null
         return lines.take(10).joinToString("\n")
-    }
-
-    private fun evaluateSimpleMath(lower: String): String? {
-        val m = Regex("""(-?\d+(?:\.\d+)?)\s*(\+|\-|\*|x|×|/|÷|plus|minus|times|divided by)\s*(-?\d+(?:\.\d+)?)""").find(lower)
-            ?: return null
-        val a = m.groupValues[1].toDoubleOrNull() ?: return null
-        val op = m.groupValues[2]
-        val b = m.groupValues[3].toDoubleOrNull() ?: return null
-        val res = when (op) {
-            "+", "plus" -> a + b
-            "-", "minus" -> a - b
-            "*", "x", "×", "times" -> a * b
-            "/", "÷", "divided by" -> if (b != 0.0) a / b else return null
-            else -> return null
-        }
-        return if (res == res.roundToInt().toDouble()) {
-            res.roundToInt().toString()
-        } else {
-            String.format(Locale.US, "%.2f", res)
-        }
     }
 }

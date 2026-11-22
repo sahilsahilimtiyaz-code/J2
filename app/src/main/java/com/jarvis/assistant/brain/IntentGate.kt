@@ -497,21 +497,69 @@ object IntentGate {
         return prefixes.any { norm.startsWith(it) }
     }
 
+    private val jarvisActionCapabilityKeywords = listOf(
+        "whatsapp",
+        "voice message",
+        "voice note",
+        "audio message",
+        "phone call",
+        "video call",
+        "answer call",
+        "pick up call",
+        "stay on call",
+        "sms",
+        "text message",
+        "send message",
+        "send a message",
+        "email",
+        "gmail",
+        "open app",
+        "open apps",
+        "control my phone",
+        "control the phone",
+        "control screen",
+        "read screen",
+        "see screen",
+        "tap ",
+        "swipe ",
+        "scroll ",
+        "accessibility",
+        "notification",
+        "alarm",
+        "timer",
+        "flashlight",
+        "torch",
+        "automate",
+        "calendar",
+        "your capabilities",
+        "your features",
+        "work offline",
+        "without internet",
+    )
+
+    private fun mentionsJarvisPhoneCapability(norm: String): Boolean =
+        jarvisActionCapabilityKeywords.any { norm.contains(it) }
+
     private fun isInformationalQuestion(norm: String): Boolean {
-        val prefixes = listOf(
+        val alwaysJarvisPrefixes = listOf(
+            "explain how you ",
+            "tell me how you ",
+            "what are your capabilities",
+            "what can you do",
+            "what features do you have",
+        )
+        if (alwaysJarvisPrefixes.any { norm.startsWith(it) }) {
+            return true
+        }
+        val contextualPrefixes = listOf(
             "how would you ",
             "how do you ",
             "how can you ",
             "how does ",
             "how is ",
-            "explain how you ",
-            "tell me how you ",
             "what is the process ",
-            "what are your capabilities",
-            "what can you do",
-            "what features do you have",
         )
-        return prefixes.any { norm.startsWith(it) }
+        return contextualPrefixes.any { norm.startsWith(it) } && mentionsJarvisPhoneCapability(norm)
     }
 
     private fun isCapabilityQuestion(norm: String, hasQuestionMark: Boolean): Boolean {
@@ -523,14 +571,17 @@ object IntentGate {
             "are you capable ",
             "do you have the ability to ",
             "do you support ",
-            "is it possible to ",
             "is it possible for you to ",
-            "do you know how to ",
             "can you tell me if you can ",
             "tell me if you can ",
             "have you got the ability to ",
         )
         if (explicitCapabilityPrefixes.any { norm.startsWith(it) || norm.contains(" $it") }) {
+            return true
+        }
+        if ((norm.startsWith("is it possible to ") || norm.startsWith("do you know how to ")) &&
+            mentionsJarvisPhoneCapability(norm)
+        ) {
             return true
         }
 
@@ -575,8 +626,10 @@ object IntentGate {
                 }
             }
 
-            // "Do you ..." / "Are you ..." are always questions, never imperative commands
-            if (matchedPrefix == "do you " || matchedPrefix == "are you ") {
+            // "Do you ..." / "Are you ..." should only trigger capability gate when asking about Jarvis phone actions
+            if ((matchedPrefix == "do you " || matchedPrefix == "are you ") &&
+                mentionsJarvisPhoneCapability(remainder)
+            ) {
                 return true
             }
         }
