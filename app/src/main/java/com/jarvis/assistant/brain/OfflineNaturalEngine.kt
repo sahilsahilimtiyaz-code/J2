@@ -198,7 +198,7 @@ object NaturalResponseSanitizer {
         }
 
         val codeLineRegex = Regex(
-            """^(?:def |class |fun |val |var |import |from |return |if\s*\(|for\s*\(|while\s*\(|public |private |const |let |function |#include|print\(|println\(|console\.log|//|/\*|\{|}|\[|]|<\?|\w+\s*=\s*[\[{'"\d])""",
+            """^(?:def |class |fun |val |var |import |from |return |if\s*\(|for\s*\(|while\s*\(|public |private |const |let |function |#include|print\(|println\(|console\.log|//|/\*|\{|\}|\[|\]|<\?|\w+\s*=\s*[\{\['"\d])""",
         )
         val codeLineCount = lines.count { line ->
             codeLineRegex.containsMatchIn(line) || line.endsWith(";") || line.endsWith("{")
