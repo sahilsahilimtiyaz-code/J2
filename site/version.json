@@ -1,10 +1,10 @@
 {
-  "versionCode": 103,
-  "versionName": "1.0.3",
+  "versionCode": 104,
+  "versionName": "1.0.4",
   "apkUrl": "https://github.com/sahilsahilimtiyaz-code/J2/releases/latest/download/app-debug.apk",
   "downloadPageUrl": "https://sahilsahilimtiyaz-code.github.io/J2/",
   "releaseNotes": "",
   "releasedAt": "2026-11-23",
-  "sha256": "5b0155d3f7723413e62285201a6fc2aaa615278471a37e2ccc689d6cde4d370b",
+  "sha256": "9cd42efaa37d93940883a93c4fc742bddc133891f6b87964366e18cdd2dab599",
   "minSupportedVersionCode": 0
 }
