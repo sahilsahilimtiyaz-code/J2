@@ -51,6 +51,7 @@ object OnDeviceGgufEngine {
         maxTokens: Int = 256,
         threads: Int = 4,
         contextSize: Int = 2048,
+        modelId: String = "",
     ): String? {
         if (nativeUnavailable || !modelFile.exists() || !modelFile.isFile) {
             return null
@@ -58,6 +59,16 @@ object OnDeviceGgufEngine {
 
         val safeThreads = threads.coerceIn(1, 4)
         val safeContext = contextSize.coerceIn(1024, 4096)
+        val cleanPrompt = userPrompt.trim()
+        if (cleanPrompt.isBlank()) return null
+
+        val effectiveSystem = if (isThinkingModel(modelId, modelFile.name) &&
+            !systemPrompt.contains("/no_think")
+        ) {
+            if (systemPrompt.isBlank()) "/no_think" else "$systemPrompt\n/no_think"
+        } else {
+            systemPrompt
+        }
 
         return mutex.withLock {
             if (nativeUnavailable) return@withLock null
@@ -70,8 +81,8 @@ object OnDeviceGgufEngine {
 
                 val result = Llama.complete(
                     model = model,
-                    prompt = userPrompt,
-                    systemPrompt = systemPrompt,
+                    prompt = cleanPrompt,
+                    systemPrompt = effectiveSystem,
                     maxTokens = maxTokens.coerceIn(64, 512),
                 )
                 result.text.trim().takeIf { it.isNotBlank() }
@@ -89,10 +100,21 @@ object OnDeviceGgufEngine {
         }
     }
 
+    internal fun isThinkingModel(modelId: String, fileName: String = ""): Boolean {
+        val combined = "$modelId $fileName".lowercase()
+        return combined.contains("qwen3") ||
+            combined.contains("deepseek-r1") ||
+            combined.contains("qwq") ||
+            combined.contains("thinking")
+    }
+
     /**
-     * Builds a compact, natural-language-only system prompt optimized for small
-     * 350M–1.7B quantized GGUF models so they answer questions accurately in
-     * clear prose instead of emitting raw code or hallucinated JSON tool calls.
+     * Builds a compact, positive natural-language system prompt optimized for small
+     * 350M–1.7B quantized GGUF models.
+     *
+     * Avoids negative-priming tokens ("Python", "JSON", "code", "syntax") when prose
+     * is expected, because tiny models often attend to forbidden token names and emit
+     * code or SyntaxError snippets by association.
      */
     fun buildCompactLocalSystemPrompt(
         ownerName: String,
@@ -100,31 +122,36 @@ object OnDeviceGgufEngine {
         activeModeName: String,
         memoryHighlights: List<String>,
         userAskedForCode: Boolean,
+        priorTurnHint: String = "",
     ): String = buildString {
-        append("You are J.A.R.V.I.S., the calm, polite, intelligent personal AI assistant created by Octavian. ")
+        append("You are Jarvis, the calm, polite, intelligent personal AI assistant created by Octavian. ")
         if (ownerName.isNotBlank()) {
-            append("You are assisting $ownerName (address them as $ownerTitle). ")
+            append("You are speaking with $ownerName (address them as $ownerTitle). ")
         } else {
             append("Address the user as $ownerTitle. ")
         }
-        if (activeModeName.isNotBlank() && !activeModeName.equals("Standard", ignoreCase = true)) {
+        if (activeModeName.isNotBlank() && !activeModeName.equals("Standard", ignoreCase = true) &&
+            !activeModeName.equals("Default", ignoreCase = true)
+        ) {
             append("Active mode: $activeModeName. ")
         }
         if (userAskedForCode) {
-            append("Answer accurately and concisely, providing clean code only where requested. ")
+            append("Answer accurately and concisely, providing clean working examples only where asked. ")
         } else {
             append(
-                "Answer every question directly, accurately, and naturally in clear conversational English prose (2 to 5 concise sentences). " +
-                    "NEVER output JSON, XML, tool_call tags, Python, code blocks, or programming syntax. " +
-                    "Do not show internal thinking tags. ",
+                "Reply directly, accurately, and naturally in 2 to 4 brief sentences of clear conversational English prose. " +
+                    "Speak warmly and concisely like a knowledgeable British butler. ",
             )
         }
         if (memoryHighlights.isNotEmpty()) {
-            append("Known context about the user: ")
+            append("Context about the user: ")
             append(memoryHighlights.take(4).joinToString("; "))
-            append(".")
+            append(". ")
         }
-    }
+        if (priorTurnHint.isNotBlank()) {
+            append(priorTurnHint.trim())
+        }
+    }.trim()
 
     /** Releases any loaded GGUF weights from native RAM (called on memory pressure or model switch). */
     suspend fun release() {
@@ -159,9 +186,9 @@ object OnDeviceGgufEngine {
             contextSize = contextSize,
             threads = threads,
             gpuLayers = 0,
-            temperature = 0.65f,
-            topP = 0.90f,
-            topK = 40,
+            temperature = 0.35f,
+            topP = 0.85f,
+            topK = 24,
             seed = -1,
         )
         val loaded = Llama.loadModel(modelPath = path, config = config)

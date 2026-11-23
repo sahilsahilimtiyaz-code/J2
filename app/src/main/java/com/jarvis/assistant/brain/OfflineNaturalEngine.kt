@@ -20,43 +20,67 @@ import kotlin.math.sqrt
 object NaturalResponseSanitizer {
 
     private val CONTROL_TOKEN_REGEX = Regex(
-        """<\|[a-zA-Z0-9_:\-]+\|>|</?s>|\[/?INST\]|<<\/?SYS>>|<end_of_turn>|<start_of_turn>|<\|eot_id\|>|<\|end_of_text\|>|<\|start_header_id\|>.*?<\|end_header_id\|>""",
+        """<\|[a-zA-Z0-9_:\-]+\|>|\[\|[a-zA-Z0-9_:\-]+\|\]|</?s>|<bos>|<eos>|\[/?INST\]|<<\/?SYS>>|<end_of_turn>|<start_of_turn>(?:model|user|system)?|<\|eot_id\|>|<\|end_of_text\|>|<\|start_header_id\|>.*?<\|end_header_id\|>""",
         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
     )
+    private val JINJA_TEMPLATE_REGEX = Regex(
+        """\{%.*?%\}|\{\{.*?\}\}""",
+        RegexOption.DOT_MATCHES_ALL,
+    )
     private val THINK_BLOCK_REGEX = Regex(
-        """<(?:think|thought|reasoning|analysis|reflection)>.*?</(?:think|thought|reasoning|analysis|reflection)>""",
+        """<(?:think|thought|reasoning|analysis|reflection|scratchpad)>.*?</(?:think|thought|reasoning|analysis|reflection|scratchpad)>""",
         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
     )
     private val UNCLOSED_THINK_REGEX = Regex(
-        """<(?:think|thought|reasoning|analysis|reflection)>.*$""",
+        """<(?:think|thought|reasoning|analysis|reflection|scratchpad)>.*$""",
         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
     )
     private val TOOL_CALL_BLOCK_REGEX = Regex(
         """<(?:tool_call|function_call|tool_response|observation)>.*?</(?:tool_call|function_call|tool_response|observation)>""",
         setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
     )
+    private val UNCLOSED_TOOL_CALL_REGEX = Regex(
+        """<(?:tool_call|function_call|tool_response|observation)>.*$""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+    )
+    private val PYTHON_TAG_REGEX = Regex(
+        """<\|python_tag\|>.*$""",
+        setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL),
+    )
     private val INTERNAL_DIRECTIVE_REGEX = Regex(
         """\[(?:Action complete on phone|Action finished|BACKGROUND MONITORING OBSERVATION|System note|Tool result|BLOCKED_INJECTION_ATTEMPT)[^\]]*]""",
         RegexOption.IGNORE_CASE,
     )
+    private val PROMPT_ECHO_LINE_REGEX = Regex(
+        """(?im)^\s*(?:recent conversation context\s*:|current question\s*:|/(?:no_think|think))\s*$""",
+    )
     private val CODE_FENCE_REGEX = Regex("""```([a-zA-Z0-9_+\-#]*)\s*\n?(.*?)```""", RegexOption.DOT_MATCHES_ALL)
+    private val UNCLOSED_CODE_FENCE_REGEX = Regex("""```([a-zA-Z0-9_+\-#]*)\s*\n?(.*)$""", RegexOption.DOT_MATCHES_ALL)
     private val INLINE_TOOL_JSON_REGEX = Regex("""(?s)\{\s*"(?:name|tool|function|tool_name|call)"\s*:\s*"[^"]+".*?\}""")
     private val MARKDOWN_LINK_REGEX = Regex("""\[([^\]\n]+)]\((https?://[^)\s]+)\)""")
     private val RAW_URL_REGEX = Regex("""https?://\S+""")
     private val MARKDOWN_HEADING_REGEX = Regex("""(?m)^\s{0,3}#{1,6}\s+""")
     private val TELEMETRY_BANNER_REGEX = Regex("""(?m)^\s*={3,}.*?={3,}\s*$""")
 
+    private val CODE_LANGUAGES = setOf(
+        "python", "py", "kotlin", "java", "js", "javascript", "ts", "typescript",
+        "c", "cpp", "c++", "csharp", "cs", "go", "rust", "bash", "sh", "zsh",
+        "sql", "xml", "html", "css", "json", "yaml", "yml", "php", "ruby",
+    )
+
     fun userExplicitlyAskedForCode(userText: String): Boolean {
         val lower = userText.lowercase(Locale.ROOT)
         return Regex(
-            """\b(write code|give me code|show me code|code snippet|sample code|example code|implement in|program in|script in|kotlin code|python code|java code|javascript code|html code|css code|sql query|regex for|function in|class in|debug this code)\b""",
+            """\b(write code|give me code|show me code|code snippet|sample code|example code|implement in|program in|script in|kotlin code|python code|java code|javascript code|html code|css code|sql query|regex for|function in|class in|debug this code|write a function|write a script|write a program)\b""",
         ).containsMatchIn(lower)
     }
 
     /**
      * Cleans raw output streamed from a local GGUF/loopback LLM so no control tokens,
-     * chain-of-thought tags, tool-call JSON, or accidental code/Markdown syntax leaks.
-     * Returns empty string if the model emitted only raw code/JSON garbage when prose was expected.
+     * chain-of-thought tags, tool-call JSON, template errors, syntax errors, or accidental
+     * code/Markdown syntax leaks.
+     * Returns empty string if the model emitted raw code/syntax-error/template garbage
+     * when conversational prose was expected.
      */
     fun sanitizeModelOutput(raw: String, allowCode: Boolean = false): String {
         if (raw.isBlank()) return ""
@@ -64,18 +88,33 @@ object NaturalResponseSanitizer {
         text = THINK_BLOCK_REGEX.replace(text, " ")
         text = UNCLOSED_THINK_REGEX.replace(text, " ")
         text = TOOL_CALL_BLOCK_REGEX.replace(text, " ")
+        text = UNCLOSED_TOOL_CALL_REGEX.replace(text, " ")
+        text = PYTHON_TAG_REGEX.replace(text, " ")
         text = CONTROL_TOKEN_REGEX.replace(text, "")
+        text = JINJA_TEMPLATE_REGEX.replace(text, "")
         text = INTERNAL_DIRECTIVE_REGEX.replace(text, "")
-        text = text.replace(Regex("(?i)^\\s*(?:assistant|jarvis|j\\.a\\.r\\.v\\.i\\.s\\.|ai|model)\\s*:\\s*"), "")
+        text = PROMPT_ECHO_LINE_REGEX.replace(text, "")
+        text = text.replace(Regex("(?im)^\\s*(?:assistant|jarvis|j\\.a\\.r\\.v\\.i\\.s\\.|ai|model|user|system)\\s*:\\s*"), "")
 
         if (!allowCode) {
+            if (looksLikeSyntaxOrCodeError(text)) {
+                return ""
+            }
             text = CODE_FENCE_REGEX.replace(text) { m ->
                 val lang = m.groupValues[1].lowercase(Locale.ROOT)
                 val inner = m.groupValues[2].trim()
                 when {
                     looksLikeJsonPayload(inner) -> extractProseFromJsonText(inner)
-                    lang in setOf("python", "py", "kotlin", "java", "js", "javascript", "ts", "typescript", "c", "cpp", "bash", "sh", "sql", "xml", "html", "json") ||
-                        looksMostlyLikeRawCode(inner) -> ""
+                    lang in CODE_LANGUAGES || looksMostlyLikeRawCode(inner) || looksLikeSyntaxOrCodeError(inner) -> ""
+                    else -> inner
+                }
+            }
+            text = UNCLOSED_CODE_FENCE_REGEX.replace(text) { m ->
+                val lang = m.groupValues[1].lowercase(Locale.ROOT)
+                val inner = m.groupValues[2].trim()
+                when {
+                    looksLikeJsonPayload(inner) -> extractProseFromJsonText(inner)
+                    lang in CODE_LANGUAGES || looksMostlyLikeRawCode(inner) || looksLikeSyntaxOrCodeError(inner) || lang.isEmpty() -> ""
                     else -> inner
                 }
             }
@@ -85,7 +124,11 @@ object NaturalResponseSanitizer {
                 text = if (looksLikeToolCallJson(text.trim()) && extracted.isBlank()) "" else extracted
             }
             text = stripMarkdownSyntax(text)
-            if (looksMostlyLikeRawCode(text.trim())) {
+            val candidate = text.trim()
+            if (looksLikeSyntaxOrCodeError(candidate) ||
+                looksMostlyLikeRawCode(candidate) ||
+                looksLikeDegenerateRepetition(candidate)
+            ) {
                 return ""
             }
         }
@@ -96,6 +139,41 @@ object NaturalResponseSanitizer {
             .trim()
     }
 
+    /**
+     * Detects when a small quantized model produced a programming/parser/template error
+     * instead of a natural conversational answer.
+     */
+    fun looksLikeSyntaxOrCodeError(text: String): Boolean {
+        if (text.isBlank()) return false
+        val errorRegex = Regex(
+            """(?i)\b(?:SyntaxError|IndentationError|NameError|TypeError|ValueError|AttributeError|KeyError|IndexError|ReferenceError|ParseError|CompileError|RuntimeError)\b|traceback\s*\(most recent call last\)|(?:invalid|unexpected)\s+syntax|syntax\s+error|unexpected\s+token|unexpected\s+end\s+of|unterminated\s+string|parse\s+error|jinja\w*\s+error|template\s+error|decode\s+failed""",
+        )
+        return errorRegex.containsMatchIn(text)
+    }
+
+    /**
+     * Detects degenerate token-repetition loops common in tiny unpenalized quantized models.
+     */
+    fun looksLikeDegenerateRepetition(text: String): Boolean {
+        if (text.length < 30) return false
+        val sameWordRepeat = Regex("""(?i)\b(\w{2,})(?:\s+\1\b){5,}""")
+        if (sameWordRepeat.containsMatchIn(text)) return true
+        val phraseRepeat = Regex("""(?i)(\b\w+(?:\s+\w+){1,4}\b)(?:[,\s.!?;:]+\1){3,}""")
+        return phraseRepeat.containsMatchIn(text)
+    }
+
+    /**
+     * Detects weak non-answers from tiny offline models so [LocalLlmProvider] can replace
+     * them with a verified offline answer whenever one exists.
+     */
+    fun isUnhelpfulRefusal(text: String): Boolean {
+        val lower = text.trim().lowercase(Locale.ROOT)
+        if (lower.isBlank()) return true
+        return Regex(
+            """^(?:i\s+(?:don't|do\s+not)\s+know\b|i'?m\s+sorry,?\s+i\s+(?:don't|do\s+not)\s+(?:know|have)|as\s+an\s+ai(?:\s+language)?\s+model\b|i\s+(?:cannot|can't|am\s+unable\s+to)\s+(?:answer|provide|help\s+with)\s+that\b|i\s+do\s+not\s+have\s+(?:access\s+to|information\s+about|that\s+information))""",
+        ).containsMatchIn(lower)
+    }
+
     private fun looksLikeToolCallJson(text: String): Boolean {
         val lower = text.lowercase(Locale.ROOT)
         return (lower.contains("\"name\"") || lower.contains("\"function\"") || lower.contains("\"tool\"")) &&
@@ -104,20 +182,32 @@ object NaturalResponseSanitizer {
 
     fun looksMostlyLikeRawCode(text: String): Boolean {
         if (text.isBlank()) return false
+        if (looksLikeSyntaxOrCodeError(text)) return true
+        if (looksLikeToolCallJson(text)) return true
+
         val lines = text.lines().map { it.trim() }.filter { it.isNotBlank() }
         if (lines.isEmpty()) return false
+
+        val strongSingleLineCodeRegex = Regex(
+            """^(?:def\s+\w+\s*\(|class\s+\w+\s*[:({]|fun\s+\w+\s*\(|from\s+[\w.]+\s+import\b|import\s+[\w.]+|print\s*\(|println\s*\(|console\.log\s*\(|(?:val|var|const|let)\s+\w+\s*=|#include\b|#!/|\<\?php|\<script\b|SELECT\s+.+\s+FROM\b)""",
+        )
+        if (lines.size == 1) {
+            val single = lines[0]
+            if (strongSingleLineCodeRegex.containsMatchIn(single)) return true
+            if (single.endsWith(";") && single.contains("=")) return true
+        }
+
         val codeLineRegex = Regex(
             """^(?:def |class |fun |val |var |import |from |return |if\s*\(|for\s*\(|while\s*\(|public |private |const |let |function |#include|print\(|println\(|console\.log|//|/\*|\{|}|\[|]|<\?|\w+\s*=\s*[\[{'"\d])""",
         )
         val codeLineCount = lines.count { line ->
             codeLineRegex.containsMatchIn(line) || line.endsWith(";") || line.endsWith("{")
         }
-        if (lines.size >= 2 && codeLineCount.toFloat() / lines.size >= 0.50f) {
+        if (lines.size >= 2 && codeLineCount.toFloat() / lines.size >= 0.45f) {
             return true
         }
-        if (looksLikeToolCallJson(text)) return true
         val symbolCount = text.count { it in "{}[];<>`\\" }
-        return text.length >= 24 && (symbolCount.toFloat() / text.length) > 0.18f
+        return text.length >= 20 && (symbolCount.toFloat() / text.length) > 0.18f
     }
 
     /**
@@ -871,6 +961,156 @@ object OfflineNaturalEngine {
             keywords = listOf("battery health", "save battery", "extend battery", "battery life"),
             answer = "Lithium-ion phone batteries last longest when kept away from excessive heat and extreme charge levels. Lowering screen brightness, curbing background wakeups, avoiding heavy gaming while fast-charging, and keeping daily charge roughly between 20 and 85 percent preserves long-term health.",
         ),
+
+        // Expanded Physics, Space, Chemistry & Everyday Science
+        KnowledgeEntry(
+            keywords = listOf("sun", "star", "stars", "nuclear fusion"),
+            answer = "The Sun is a medium-sized yellow dwarf star made mostly of hydrogen and helium. Deep in its core, nuclear fusion combines hydrogen nuclei into helium, releasing the light and heat that sustain life on Earth.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("moon", "lunar", "tides", "eclipse"),
+            answer = "The Moon is Earth's only natural satellite, orbiting roughly 384,400 kilometers away. Its gravitational pull drives ocean tides, and solar or lunar eclipses occur when the Sun, Earth, and Moon align along the same line.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("universe", "big bang", "galaxy", "milky way"),
+            answer = "The Milky Way is our home barred-spiral galaxy, containing over a hundred billion stars. According to cosmology, the observable universe has been expanding and cooling since the Big Bang roughly 13.8 billion years ago.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("thermodynamics", "entropy", "heat transfer", "conduction", "convection"),
+            answer = "Thermodynamics studies heat, energy, and work. Energy cannot be created or destroyed, heat naturally flows from warmer objects to cooler ones via conduction, convection, or radiation, and entropy measures how dispersed that energy becomes.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("magnet", "magnetism", "electromagnet", "magnetic field"),
+            answer = "Magnetism arises from moving electric charges and aligned electron spins inside materials like iron. Electric currents create magnetic fields and changing magnetic fields induce electric currents — the principle behind motors and power generators.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("sound wave", "speed of sound", "echo", "frequency", "decibel"),
+            answer = "Sound travels as mechanical vibrations through air, water, or solids. In dry air at room temperature it moves at about 343 meters per second — far slower than light, which is why you see lightning before hearing thunder.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("water", "h2o", "boiling point", "freezing point", "ice floats"),
+            answer = "Water, or H2O, consists of two hydrogen atoms bonded to one oxygen atom. At sea-level pressure it freezes at 0 degrees Celsius and boils at 100 degrees Celsius, and ice floats because frozen water expands into an open crystal lattice.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("oxygen", "breathing", "respiration", "lungs", "atmosphere"),
+            answer = "Earth's atmosphere is roughly 78 percent nitrogen and 21 percent oxygen. Your lungs draw in oxygen and transfer it to red blood cells, which deliver it throughout the body to release energy from food while exhaling carbon dioxide.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("periodic table", "chemistry", "molecule", "chemical bond"),
+            answer = "The periodic table organizes the 118 known chemical elements by atomic number and recurring chemical properties. Atoms share or transfer electrons through covalent or ionic bonds to form molecules like water and salt.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("acid", "base", "ph scale", "alkaline"),
+            answer = "The pH scale runs from 0 to 14 to measure how acidic or basic a water solution is. Pure water sits near neutral at 7, acids like lemon juice sit below 7, and bases like baking soda sit above 7.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("seasons", "summer", "winter", "equinox", "solstice", "earth tilt"),
+            answer = "Earth experiences seasons not because its distance from the Sun changes much, but because its axis is tilted about 23.5 degrees. Whichever hemisphere tilts toward the Sun receives more direct sunlight and longer days.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("earthquake", "volcano", "plate tectonics", "tectonic"),
+            answer = "Earth's outer crust is broken into massive tectonic plates slowly floating over the mantle. Earthquakes happen when stress along plate boundaries releases suddenly, while magma pushing to the surface creates volcanoes.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("thunder", "lightning", "rain", "weather", "rainbow"),
+            answer = "Rain forms when cooled water vapor condenses around tiny atmospheric dust particles until droplets grow too heavy to stay aloft. Lightning heats the surrounding air so rapidly that the resulting shockwave reaches us as thunder.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("heart", "blood", "circulation", "blood pressure"),
+            answer = "The human heart beats roughly 100,000 times a day, pumping oxygen-poor blood to the lungs and oxygen-rich blood through arteries to every organ, then returning it through veins in a continuous loop.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("immune system", "vaccine", "virus", "bacteria", "antibiotic"),
+            answer = "The immune system defends the body using white blood cells and targeted antibodies. Vaccines train that defense safely in advance, whereas antibiotics kill bacteria and do not work against viral infections.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("nutrition", "protein", "carbohydrates", "vitamins", "metabolism"),
+            answer = "A balanced diet supplies carbohydrates and healthy fats for energy, protein for repairing tissue and muscle, and vitamins and minerals for cellular reactions, alongside adequate water and fiber.",
+        ),
+
+        // Expanded Math Concepts & Computing Topics (Plain Spoken English)
+        KnowledgeEntry(
+            keywords = listOf("pythagoras", "pythagorean", "right triangle"),
+            answer = "The Pythagorean theorem states that in any right triangle, the square of the longest side (the hypotenuse) equals the sum of the squares of the other two sides: a squared plus b squared equals c squared.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("what is pi", "number pi", "circumference"),
+            answer = "Pi is the mathematical constant representing the ratio of a circle's circumference to its diameter, approximately 3.14159. It is irrational, meaning its decimal digits continue indefinitely without repeating.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("prime number", "prime numbers"),
+            answer = "A prime number is a whole number greater than 1 whose only positive divisors are 1 and itself, starting with 2, 3, 5, 7, 11, and 13. Primes are essential in modern cryptography and secure communications.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("binary", "bits and bytes", "binary code"),
+            answer = "Computers represent all data in binary using two states — 0 and 1, called bits — because electronic circuits easily distinguish off and on voltages. Eight bits form a byte, capable of representing 256 distinct values.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("bluetooth", "nfc", "5g", "gps", "satellite navigation"),
+            answer = "Short-range wireless standards like Bluetooth connect nearby accessories such as earbuds, NFC handles tap-to-pay within centimeters, Wi-Fi delivers high-speed local internet, and GPS calculates your location using timing signals from orbiting satellites.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("password", "two factor", "2fa", "phishing", "malware"),
+            answer = "Strong digital security relies on unique long passphrases, a dedicated password manager, and two-factor authentication, while watching carefully for phishing messages that try to rush you into handing over codes or logins.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("programming", "coding", "what is code", "compiler", "software"),
+            answer = "Software programming means writing clear instructions that tell a computer how to process information and respond to users. Compilers or interpreters translate human-readable source code into binary machine instructions the processor executes.",
+        ),
+
+        // Expanded Geography & History
+        KnowledgeEntry(
+            keywords = listOf("capital of spain", "madrid"),
+            answer = "The capital of Spain is Madrid.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("capital of south korea", "seoul"),
+            answer = "The capital of South Korea is Seoul.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("capital of egypt", "cairo"),
+            answer = "The capital of Egypt is Cairo, near the Nile Delta and ancient Giza.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("capital of turkey", "ankara", "istanbul"),
+            answer = "The capital of Turkey is Ankara, though Istanbul is its largest and best-known city.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("capital of uae", "abu dhabi", "dubai"),
+            answer = "The capital of the United Arab Emirates is Abu Dhabi, while Dubai is its largest commercial hub.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("capital of pakistan", "islamabad"),
+            answer = "The capital of Pakistan is Islamabad.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("capital of bangladesh", "dhaka"),
+            answer = "The capital of Bangladesh is Dhaka.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("capital of mexico", "mexico city"),
+            answer = "The capital of Mexico is Mexico City.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("sahara", "largest desert", "desert"),
+            answer = "The Sahara in North Africa is the largest hot desert on Earth, while Antarctica is technically the largest cold desert overall due to its minimal precipitation.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("shakespeare", "romeo and juliet", "hamlet"),
+            answer = "William Shakespeare was an English playwright and poet of the late 16th and early 17th centuries whose works, including Hamlet, Macbeth, and Romeo and Juliet, deeply shaped English literature and theater.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("ada lovelace", "first programmer"),
+            answer = "Ada Lovelace was a 19th-century English mathematician who wrote the first published algorithm intended for Charles Babbage's Analytical Engine and foresaw that computers could work with symbols beyond pure numbers.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("galileo", "telescope", "heliocentric"),
+            answer = "Galileo Galilei was an Italian astronomer and physicist who improved the telescope, discovered Jupiter's four largest moons, and championed observational science and the Sun-centered solar system model.",
+        ),
+        KnowledgeEntry(
+            keywords = listOf("renaissance", "industrial revolution", "printing press"),
+            answer = "Gutenberg's 15th-century movable-type printing press accelerated the European Renaissance's revival of art and science, which later paved the way for the Industrial Revolution's shift to mechanized manufacturing and steam power.",
+        ),
     )
 
     private val dryJokes = listOf(
@@ -909,10 +1149,99 @@ object OfflineNaturalEngine {
         memoryLookup: (String) -> String?,
         allMemoriesSummary: () -> String?,
     ): String {
+        val verified = tryAnswerVerified(
+            userText = userText,
+            ownerTitle = ownerTitle,
+            ownerName = ownerName,
+            modelDisplayName = modelDisplayName,
+            modelParameterBadge = modelParameterBadge,
+            modelSizeLabel = modelSizeLabel,
+            modelBestUse = modelBestUse,
+            systemPrompt = systemPrompt,
+            priorDialogue = priorDialogue,
+            memoryLookup = memoryLookup,
+            allMemoriesSummary = allMemoriesSummary,
+        )
+        if (verified != null) return verified
+
         val clean = userText.trim()
         val lower = clean.lowercase(Locale.ROOT)
         val norm = lower.replace(Regex("""[^\p{L}\p{N}\s'/%+\-*^().]"""), " ").replace(Regex("""\s+"""), " ").trim()
         val mode = extractActiveMode(systemPrompt)
+        val lastAssistantReply = priorDialogue.lastOrNull { it.role == LlmRole.ASSISTANT && it.content.isNotBlank() }?.content?.trim()
+        val previousUserQuestion = priorDialogue.lastOrNull { it.role == LlmRole.USER && it.content.isNotBlank() }?.content?.trim()
+
+        // Simple conversational acknowledgements
+        if (norm in setOf("yes", "yeah", "yep", "sure", "ok", "okay", "alright", "got it", "understood", "sounds good", "fine", "cool", "nice", "great")) {
+            return if (!lastAssistantReply.isNullOrBlank() && lastAssistantReply.contains("?")) {
+                "Very good, $ownerTitle. Tell me what specific step you would like next and I will take care of it."
+            } else {
+                "Very well, $ownerTitle. Standing by whenever you are ready."
+            }
+        }
+        if (norm in setOf("no", "nah", "nope", "not really", "nothing")) {
+            return "Understood, $ownerTitle. I will leave it there — let me know if you need anything else."
+        }
+        if (lower.contains("fun fact") || lower.contains("interesting fact") || lower.contains("tell me a fact") || lower.contains("surprise me")) {
+            val facts = listOf(
+                "A day on Venus is longer than its year, $ownerTitle: Venus takes about 243 Earth days to rotate once, yet only 225 Earth days to orbit the Sun.",
+                "Octopuses have three hearts and blue copper-based blood, $ownerTitle — two hearts pump blood through the gills while the third circulates it to the body.",
+                "Light takes roughly 8 minutes and 20 seconds to travel from the Sun to Earth, $ownerTitle, so we always see the Sun as it was minutes ago.",
+                "Honey never spoils under proper sealed storage, $ownerTitle; archaeologists have uncovered edible pots of honey thousands of years old.",
+            )
+            val idx = abs((clean.hashCode() + LocalTime.now().minute)) % facts.size
+            return facts[idx]
+        }
+
+        // Follow-up conversational continuity
+        if (!previousUserQuestion.isNullOrBlank() &&
+            (lower.startsWith("and ") || lower.startsWith("what about ") || lower.startsWith("tell me more") ||
+                lower.contains("about that") || lower.contains("about it") || lower.startsWith("why?") || norm == "why" ||
+                norm == "explain more" || norm == "go on")
+        ) {
+            return "Staying with \"$previousUserQuestion\", $ownerTitle: let me know which part you want to focus on, or ask me to search online when connected for live details."
+        }
+
+        // Mode-aware helpful offline fallback (natural prose — never syntax errors, never code, never robotic boilerplate)
+        val topic = extractCleanTopic(clean)
+        return when (mode) {
+            "STUDY" ->
+                "That is an excellent subject to examine, $ownerTitle. For $topic, try breaking it into three pieces: what it is at its core, how its parts interact, and one everyday example. If you paste your notes here, I can quiz you or condense them right away offline."
+            "TASKS" ->
+                "I can organize $topic into clear steps right away, $ownerTitle. Give me the first deadline or milestone, and I will set up a reminder or scheduled task for you."
+            "RESEARCH" ->
+                "Live web sources are unavailable while offline, $ownerTitle, so I will not invent specifics about $topic. Ask me to research $topic once connected and I will pull verified articles for you."
+            else ->
+                if (clean.endsWith("?") || lower.startsWith("what ") || lower.startsWith("who ") || lower.startsWith("why ") ||
+                    lower.startsWith("how ") || lower.startsWith("when ") || lower.startsWith("where ") || lower.startsWith("explain ")
+                ) {
+                    "Offline on $modelDisplayName, I do not have a verified reference on $topic right here, $ownerTitle, and I prefer being candid over guessing. If you have an internet connection, say \"research $topic\" or enable a cloud model in Settings for full live answers."
+                } else {
+                    "Noted, $ownerTitle. While offline on $modelDisplayName, I can answer science, math, history, and everyday questions, manage reminders and notes, or run phone actions whenever you give the word."
+                }
+        }
+    }
+
+    /**
+     * Deterministic checks (conversation recall, creator/Jarvis identity, greetings, math/units,
+     * calendar date/time, and saved owner memories) that tiny quantized models cannot know or
+     * reliably compute on their own.
+     */
+    fun tryAnswerDeterministic(
+        userText: String,
+        ownerTitle: String,
+        ownerName: String,
+        modelDisplayName: String,
+        modelParameterBadge: String,
+        modelSizeLabel: String,
+        modelBestUse: String,
+        priorDialogue: List<LlmMessage>,
+        memoryLookup: (String) -> String?,
+        allMemoriesSummary: () -> String?,
+    ): String? {
+        val clean = userText.trim()
+        val lower = clean.lowercase(Locale.ROOT)
+        val norm = lower.replace(Regex("""[^\p{L}\p{N}\s'/%+\-*^().]"""), " ").replace(Regex("""\s+"""), " ").trim()
 
         val lastAssistantReply = priorDialogue.lastOrNull { it.role == LlmRole.ASSISTANT && it.content.isNotBlank() }?.content?.trim()
         val previousUserQuestion = priorDialogue.lastOrNull { it.role == LlmRole.USER && it.content.isNotBlank() }?.content?.trim()
@@ -982,7 +1311,6 @@ object OfflineNaturalEngine {
             val salutation = when (hour) {
                 in 5..11 -> "Good morning"
                 in 12..16 -> "Good afternoon"
-                in 17..21 -> "Good evening"
                 else -> "Good evening"
             }
             return "$salutation, $ownerTitle. All systems are online and at your disposal. What can I help you with?"
@@ -1041,6 +1369,16 @@ object OfflineNaturalEngine {
             return "You have my undivided loyalty and professional esteem, $ownerTitle — which is about as affectionate as an engineering-grade AI gets."
         }
 
+        // 3b. Quick counting / spelling / letter counting
+        Regex("""count (?:to|up to) (\d{1,3})""").find(lower)?.let { match ->
+            val limit = match.groupValues[1].toIntOrNull()?.coerceIn(1, 100) ?: 10
+            return (1..limit).joinToString(", ") + "."
+        }
+        Regex("""(?:how many letters (?:are )?in|length of(?: the word)?)\s+["']?([a-zA-Z]+)["']?""").find(lower)?.let { match ->
+            val word = match.groupValues[1]
+            return "The word \"$word\" has ${word.length} letters, $ownerTitle."
+        }
+
         // 4. Math & Unit Conversions
         OfflineMathAndUnitEngine.tryEvaluate(clean, ownerTitle)?.let { return it }
 
@@ -1057,6 +1395,45 @@ object OfflineNaturalEngine {
             }
         }
 
+        return null
+    }
+
+    /**
+     * Returns a verified deterministic/knowledge-base answer if the user's message matches
+     * conversation recall, identity, greetings, math/units, calendar date/time, saved memories,
+     * counting/spelling, or our curated knowledge base — or `null` otherwise.
+     */
+    fun tryAnswerVerified(
+        userText: String,
+        ownerTitle: String,
+        ownerName: String,
+        modelDisplayName: String,
+        modelParameterBadge: String,
+        modelSizeLabel: String,
+        modelBestUse: String,
+        systemPrompt: String,
+        priorDialogue: List<LlmMessage>,
+        memoryLookup: (String) -> String?,
+        allMemoriesSummary: () -> String?,
+    ): String? {
+        tryAnswerDeterministic(
+            userText = userText,
+            ownerTitle = ownerTitle,
+            ownerName = ownerName,
+            modelDisplayName = modelDisplayName,
+            modelParameterBadge = modelParameterBadge,
+            modelSizeLabel = modelSizeLabel,
+            modelBestUse = modelBestUse,
+            priorDialogue = priorDialogue,
+            memoryLookup = memoryLookup,
+            allMemoriesSummary = allMemoriesSummary,
+        )?.let { return it }
+
+        val clean = userText.trim()
+        val lower = clean.lowercase(Locale.ROOT)
+        val norm = lower.replace(Regex("""[^\p{L}\p{N}\s'/%+\-*^().]"""), " ").replace(Regex("""\s+"""), " ").trim()
+        val mode = extractActiveMode(systemPrompt)
+
         // 7. Comprehensive Offline Knowledge Base (Natural prose + mode-aware framing)
         matchKnowledgeEntry(norm)?.let { entry ->
             return formatKnowledgeForMode(entry, mode, ownerTitle)
@@ -1069,26 +1446,7 @@ object OfflineNaturalEngine {
             return buildNaturalDraft(clean, lower, ownerTitle, ownerName)
         }
 
-        // 9. Follow-up conversational continuity
-        if (!previousUserQuestion.isNullOrBlank() &&
-            (lower.startsWith("and ") || lower.startsWith("what about ") || lower.startsWith("tell me more") ||
-                lower.contains("about that") || lower.contains("about it") || lower.startsWith("why?") || norm == "why")
-        ) {
-            return "Continuing from \"$previousUserQuestion\", $ownerTitle: I have that context in mind. If you would like deeper up-to-date details from the web, ask me to research it online, or tell me which angle you want to explore."
-        }
-
-        // 10. Mode-aware helpful fallback for open-ended / niche questions while strictly offline (zero code, zero jargon)
-        val topic = extractCleanTopic(clean)
-        return when (mode) {
-            "STUDY" ->
-                "That is a worthwhile topic to explore, $ownerTitle. While running fully offline on $modelDisplayName, I do not have a dedicated local reference on $topic yet, so I would rather be candid than invent details. When you have a connection, ask me to deep-research $topic, or paste your study notes here and I will help break them down."
-            "TASKS" ->
-                "I can help turn $topic into a clear plan, $ownerTitle. Tell me the deadline or first milestone, and I can schedule it as a tracked task or reminder right away."
-            "RESEARCH" ->
-                "I do not have verified offline data on $topic at the moment, $ownerTitle, and I prefer not to guess. Once you are online, ask me to run deep research or fact-check $topic and I will pull live sources for you."
-            else ->
-                "I want to give you an accurate answer rather than guess, $ownerTitle. While operating completely offline on $modelDisplayName, I do not have a verified local entry for $topic. If you have internet access, say \"research $topic\" or connect a cloud provider in Settings for broader open-ended answers."
-        }
+        return null
     }
 
     private fun tryAnswerDateOrTime(lower: String, ownerTitle: String): String? {
@@ -1115,7 +1473,7 @@ object OfflineNaturalEngine {
                 val month = today.format(DateTimeFormatter.ofPattern("MMMM", Locale.ENGLISH))
                 "We are in $month, $ownerTitle."
             }
-            lower.contains("time") && (lower.contains("what") || lower.contains("current") || lower.contains("tell")) -> {
+            lower.contains("time") && (lower.contains("what is the time") || lower.contains("what's the time") || lower.contains("current time") || lower.contains("tell me the time")) -> {
                 val now = LocalTime.now().format(timeFmt)
                 "It is currently $now on ${today.format(dateFmt)}, $ownerTitle."
             }

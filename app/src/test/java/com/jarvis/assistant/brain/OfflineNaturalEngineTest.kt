@@ -41,6 +41,8 @@ class OfflineNaturalEngineTest {
         val generalQuestions = listOf(
             "How does gravity work?",
             "How is electricity generated?",
+            "How does a timer work?",
+            "How is a battery charged?",
             "Are you okay?",
             "Do you know Albert Einstein?",
             "How do you cook rice?",
@@ -240,5 +242,93 @@ class OfflineNaturalEngineTest {
         assertTrue(OfflineTaskRouter.routeUserCommand("What is your name?", extendedTools).isEmpty())
         assertTrue(OfflineTaskRouter.routeUserCommand("What is 25% of 400?", extendedTools).isEmpty())
         assertTrue(OfflineTaskRouter.routeUserCommand("Who created you?", extendedTools).isEmpty())
+    }
+
+    @Test
+    fun sanitizer_rejects_syntax_errors_single_line_code_jinja_templates_and_repetition_loops() {
+        val syntaxSamples = listOf(
+            "SyntaxError: invalid syntax",
+            "  File \"<stdin>\", line 1\nSyntaxError: unexpected EOF while parsing",
+            "bash: syntax error near unexpected token `newline'",
+            "Traceback (most recent call last):\n  File \"main.py\", line 2, in <module>\nNameError: name 'x' is not defined",
+            "print('hello world')",
+            "def greet(name): return f'hi {name}'",
+            "```python\ndef unclosed():\n    return 42",
+            "<tool_call>{\"name\":\"web_search\",\"arguments\":{\"query\":\"test\"}}",
+            "hello hello hello hello hello hello hello world",
+        )
+        for (sample in syntaxSamples) {
+            val cleaned = NaturalResponseSanitizer.sanitizeModelOutput(sample, allowCode = false)
+            assertEquals("Expected broken/code output '$sample' to be rejected", "", cleaned)
+        }
+
+        val jinjaAndGemmaLeak = "{{ bos_token }}{% if system %}{% endif %}<start_of_turn>model\nLight travels at 299,792 km/s.<end_of_turn>"
+        val cleanedJinja = NaturalResponseSanitizer.sanitizeModelOutput(jinjaAndGemmaLeak, allowCode = false)
+        assertEquals("Light travels at 299,792 km/s.", cleanedJinja)
+
+        val promptEcho = "Recent conversation context:\nUser: hi\nCurrent question:\n/no_think\nAll systems are nominal."
+        val cleanedEcho = NaturalResponseSanitizer.sanitizeModelOutput(promptEcho, allowCode = false)
+        assertTrue(cleanedEcho.contains("All systems are nominal."))
+        assertFalse(cleanedEcho.contains("/no_think"))
+        assertFalse(cleanedEcho.contains("Current question:"))
+
+        assertTrue(NaturalResponseSanitizer.isUnhelpfulRefusal("I don't know."))
+        assertTrue(NaturalResponseSanitizer.isUnhelpfulRefusal("I'm sorry, I don't know about that."))
+        assertTrue(NaturalResponseSanitizer.isUnhelpfulRefusal("As an AI language model, I cannot answer that."))
+        assertFalse(NaturalResponseSanitizer.isUnhelpfulRefusal("Light travels at roughly 300,000 kilometers per second."))
+    }
+
+    @Test
+    fun expanded_offline_knowledge_and_helpful_utilities_answer_naturally() {
+        val provider = LocalLlmProvider(client = OkHttpClient(), downloadManager = null)
+        val config = ProviderConfig(
+            id = "local",
+            name = "Offline",
+            kind = ProviderKind.LOCAL_ON_DEVICE,
+            baseUrl = "local://on-device",
+            apiKey = "",
+            model = "qwen3-1.7b",
+        )
+
+        fun ask(prompt: String): String = runBlocking {
+            val events = provider.stream(
+                ChatRequest(
+                    messages = listOf(
+                        LlmMessage.system("Preferred form of address: sir.\nOwner name: Alex."),
+                        LlmMessage.user(prompt),
+                    ),
+                    tools = emptyList(),
+                ),
+                config,
+            ).toList()
+            events.filterIsInstance<LlmEvent.TextDelta>().joinToString("") { it.text }.trim()
+        }
+
+        val sun = ask("How does the sun produce energy?")
+        assertNaturalProseOnly(sun)
+        assertTrue("Expected nuclear fusion explanation, got: $sun", sun.contains("fusion", ignoreCase = true))
+
+        val seasons = ask("Why do we have seasons?")
+        assertNaturalProseOnly(seasons)
+        assertTrue("Expected axial tilt explanation, got: $seasons", seasons.contains("23.5"))
+
+        val ph = ask("What is the pH scale?")
+        assertNaturalProseOnly(ph)
+        assertTrue("Expected pH explanation, got: $ph", ph.contains("0 to 14"))
+
+        val pyth = ask("What is the Pythagorean theorem?")
+        assertNaturalProseOnly(pyth)
+        assertTrue("Expected hypotenuse explanation, got: $pyth", pyth.contains("hypotenuse", ignoreCase = true))
+
+        val letters = ask("How many letters in Jarvis?")
+        assertNaturalProseOnly(letters)
+        assertTrue("Expected 6 letters, got: $letters", letters.contains("6 letters"))
+
+        val count = ask("Count to 5")
+        assertNaturalProseOnly(count)
+        assertTrue("Expected 1, 2, 3, 4, 5, got: $count", count.contains("1, 2, 3, 4, 5"))
+
+        val fact = ask("Tell me a fun fact")
+        assertNaturalProseOnly(fact)
     }
 }

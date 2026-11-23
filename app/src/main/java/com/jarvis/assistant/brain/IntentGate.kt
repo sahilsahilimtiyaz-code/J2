@@ -551,15 +551,29 @@ object IntentGate {
         if (alwaysJarvisPrefixes.any { norm.startsWith(it) }) {
             return true
         }
-        val contextualPrefixes = listOf(
+        val secondPersonPrefixes = listOf(
             "how would you ",
             "how do you ",
             "how can you ",
-            "how does ",
-            "how is ",
-            "what is the process ",
         )
-        return contextualPrefixes.any { norm.startsWith(it) } && mentionsJarvisPhoneCapability(norm)
+        if (secondPersonPrefixes.any { norm.startsWith(it) } && mentionsJarvisPhoneCapability(norm)) {
+            return true
+        }
+        val processPhrases = listOf(
+            "whatsapp",
+            "voice message",
+            "voice note",
+            "audio message",
+            "control my phone",
+            "control the phone",
+            "control screen",
+            "read screen",
+            "see screen",
+            "answer call",
+            "pick up call",
+        )
+        return (norm.startsWith("how does ") || norm.startsWith("how is ") || norm.startsWith("what is the process ")) &&
+            (norm.contains("jarvis") || norm.contains("you ") || processPhrases.any { norm.contains(it) })
     }
 
     private fun isCapabilityQuestion(norm: String, hasQuestionMark: Boolean): Boolean {

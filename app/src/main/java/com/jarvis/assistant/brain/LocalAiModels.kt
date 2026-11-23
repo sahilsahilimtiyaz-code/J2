@@ -930,7 +930,10 @@ object OfflineTaskRouter {
         }
 
         // 11. Screen brightness
-        if (lower.contains("brightness") && hasTool("set_screen_brightness")) {
+        if (lower.contains("brightness") &&
+            (!EXPLANATORY_QUESTION_PREFIX.containsMatchIn(lower) || lower.contains("screen brightness") || lower.contains("my brightness")) &&
+            hasTool("set_screen_brightness")
+        ) {
             val pct = Regex("""(\d{1,3})""").find(lower)?.groupValues?.get(1)?.toIntOrNull()?.coerceIn(0, 100)
             val isAuto = lower.contains("auto") || lower.contains("adaptive")
             return call(
@@ -1058,7 +1061,16 @@ object OfflineTaskRouter {
         }
 
         // 18. Notifications
-        if (lower.contains("notification")) {
+        if (lower.contains("notification") &&
+            (!EXPLANATORY_QUESTION_PREFIX.containsMatchIn(lower) ||
+                lower.contains("my notification") ||
+                lower.contains("read notification") ||
+                lower.contains("check notification") ||
+                lower.contains("show notification") ||
+                lower.contains("unread") ||
+                lower.contains("dismiss") ||
+                lower.contains("clear"))
+        ) {
             if ((lower.contains("dismiss") || lower.contains("clear")) && hasTool("dismiss_notifications")) {
                 return call("dismiss_notifications", "{}")
             }
@@ -1137,17 +1149,35 @@ object OfflineTaskRouter {
             return call("run_diagnostics", "{}")
         }
         if ((lower.contains("storage") || lower.contains("disk space") || lower.contains("free space")) &&
+            (!EXPLANATORY_QUESTION_PREFIX.containsMatchIn(lower) ||
+                lower.contains("my storage") ||
+                lower.contains("phone storage") ||
+                lower.contains("device storage") ||
+                lower.contains("disk space") ||
+                lower.contains("free space") ||
+                lower.contains("check storage") ||
+                lower.contains("analyze storage")) &&
             hasTool("analyze_storage")
         ) {
             return call("analyze_storage", "{}")
         }
         if ((lower.contains("battery") || lower.contains("phone status") || lower.contains("device status") || lower.contains("wifi status")) &&
+            (!EXPLANATORY_QUESTION_PREFIX.containsMatchIn(lower) ||
+                lower.contains("my battery") ||
+                lower.contains("battery level") ||
+                lower.contains("battery percentage") ||
+                lower.contains("battery status") ||
+                lower.contains("phone battery") ||
+                lower.contains("phone status") ||
+                lower.contains("device status") ||
+                lower.contains("wifi status")) &&
             hasTool("get_device_status")
         ) {
             return call("get_device_status", "{}")
         }
-        if ((lower.contains("what time") || lower.contains("current time") || lower.contains("what is the time") ||
-                lower.contains("what's the time") || lower.contains("today's date") || lower.contains("what day is it")) &&
+        if ((lower.contains("what time is it") || lower.contains("current time") || lower.contains("what is the time") ||
+                lower.contains("what's the time") || lower.contains("tell me the time") ||
+                lower.contains("today's date") || lower.contains("what day is it")) &&
             hasTool("get_current_time")
         ) {
             return call("get_current_time", "{}")
@@ -1610,6 +1640,10 @@ object OfflineTaskRouter {
         return emptyList()
     }
 
+    private val EXPLANATORY_QUESTION_PREFIX = Regex(
+        """^(?:what is (?:a |an |the )?|what are |how does |how do |why does |why do |explain |define |tell me about )""",
+    )
+
     private fun isWebResearchIntent(lower: String): Boolean {
         if (lower.contains("who are you") ||
             lower.contains("what is your name") ||
@@ -1933,10 +1967,11 @@ class LocalLlmProvider(
 
         if (trailingTools.isEmpty() && !isBackgroundStructured && userText.isNotBlank()) {
             val intentAnalysis = IntentGate.classify(userText, title)
-            val isDirectSafetyOrCancellation = intentAnalysis.isCancellationOrCorrection ||
+            val isDirectSafetyOrInquiry = intentAnalysis.isCancellationOrCorrection ||
+                intentAnalysis.isNonExecutionInquiry ||
                 intentAnalysis.kind == UserIntentKind.CLARIFICATION_NEEDED
 
-            if (!isDirectSafetyOrCancellation) {
+            if (!isDirectSafetyOrInquiry) {
                 val activeMode = Regex("""Active Operating Mode:\s*([^\n(]+)""", RegexOption.IGNORE_CASE)
                     .find(systemText)?.groupValues?.get(1)?.trim().orEmpty().ifBlank { "Standard" }
                 val memoryHighlights = listStoredMemoriesFromPrompt(systemText)
@@ -1944,13 +1979,61 @@ class LocalLlmProvider(
                     ?.map { it.removePrefix("- ").trim() }
                     ?.filter { it.isNotBlank() }
                     .orEmpty()
+                val priorDialogue = request.messages
+                    .filter { it.role == LlmRole.USER || it.role == LlmRole.ASSISTANT }
+                    .dropLast(1)
+                val sizeStr = ggufInfo?.fileSizeBytes?.takeIf { it > 0 }?.let { LocalModelCatalog.formatBytes(it) } ?: readySpec.approxSizeLabel
+
+                if (!allowCode) {
+                    val deterministic = OfflineNaturalEngine.tryAnswerDeterministic(
+                        userText = userText,
+                        ownerTitle = title,
+                        ownerName = ownerName,
+                        modelDisplayName = readySpec.displayName,
+                        modelParameterBadge = readySpec.parameterBadge,
+                        modelSizeLabel = sizeStr,
+                        modelBestUse = readySpec.bestUse,
+                        priorDialogue = priorDialogue,
+                        memoryLookup = { q -> findRelevantMemoryLine(systemText, q) },
+                        allMemoriesSummary = { listStoredMemoriesFromPrompt(systemText) },
+                    )
+                    if (!deterministic.isNullOrBlank()) {
+                        streamWords(deterministic)
+                        emit(LlmEvent.Done)
+                        return@flow
+                    }
+                }
+
+                val priorTurnHint = buildPriorTurnHint(priorDialogue, userText)
                 val compactSystem = OnDeviceGgufEngine.buildCompactLocalSystemPrompt(
                     ownerName = ownerName,
                     ownerTitle = title,
                     activeModeName = activeMode,
                     memoryHighlights = memoryHighlights,
                     userAskedForCode = allowCode,
+                    priorTurnHint = priorTurnHint,
                 )
+
+                fun verifyOrKeep(cleaned: String): String {
+                    if (cleaned.isBlank()) return ""
+                    if (!allowCode && NaturalResponseSanitizer.isUnhelpfulRefusal(cleaned)) {
+                        val verified = OfflineNaturalEngine.tryAnswerVerified(
+                            userText = userText,
+                            ownerTitle = title,
+                            ownerName = ownerName,
+                            modelDisplayName = readySpec.displayName,
+                            modelParameterBadge = readySpec.parameterBadge,
+                            modelSizeLabel = sizeStr,
+                            modelBestUse = readySpec.bestUse,
+                            systemPrompt = systemText,
+                            priorDialogue = priorDialogue,
+                            memoryLookup = { q -> findRelevantMemoryLine(systemText, q) },
+                            allMemoriesSummary = { listStoredMemoriesFromPrompt(systemText) },
+                        )
+                        return verified ?: ""
+                    }
+                    return cleaned
+                }
 
                 // 3a. Local loopback llama.cpp (8080) or Ollama (11434) server if active
                 val loopbackUrl = detectLocalRunnerBaseUrl()
@@ -1961,7 +2044,7 @@ class LocalLlmProvider(
                     val cleanRequest = ChatRequest(
                         messages = listOf(LlmMessage.system(compactSystem)) + recentDialogue,
                         tools = emptyList(),
-                        temperature = 0.65,
+                        temperature = 0.35,
                         maxTokens = request.maxTokens.coerceIn(128, 512),
                     )
                     val bufferedText = StringBuilder()
@@ -1976,9 +2059,11 @@ class LocalLlmProvider(
                             if (ev is LlmEvent.TextDelta) bufferedText.append(ev.text)
                         }
                     }
-                    val cleaned = NaturalResponseSanitizer.sanitizeModelOutput(
-                        bufferedText.toString(),
-                        allowCode = allowCode,
+                    val cleaned = verifyOrKeep(
+                        NaturalResponseSanitizer.sanitizeModelOutput(
+                            bufferedText.toString(),
+                            allowCode = allowCode,
+                        ),
                     )
                     if (cleaned.isNotBlank()) {
                         streamWords(cleaned)
@@ -1989,25 +2074,49 @@ class LocalLlmProvider(
 
                 // 3b. Real On-Device GGUF Native Inference (`llama.cpp` ARM64 via OnDeviceGgufEngine)
                 if (modelFile != null && modelFile.exists() && ggufInfo?.valid == true) {
-                    val contextualPrompt = buildLocalConversationPrompt(request, userText)
                     val nativeRaw = OnDeviceGgufEngine.generateReply(
                         modelFile = modelFile,
                         systemPrompt = compactSystem,
-                        userPrompt = contextualPrompt,
+                        userPrompt = userText,
                         maxTokens = request.maxTokens.coerceIn(128, 384),
                         threads = recommendedThreadsProvider(),
                         contextSize = 2048,
+                        modelId = readySpec.id,
                     )
-                    if (!nativeRaw.isNullOrBlank()) {
-                        val cleaned = NaturalResponseSanitizer.sanitizeModelOutput(
-                            nativeRaw,
+                    var cleaned = verifyOrKeep(
+                        NaturalResponseSanitizer.sanitizeModelOutput(
+                            nativeRaw.orEmpty(),
                             allowCode = allowCode,
-                        )
-                        if (cleaned.isNotBlank()) {
-                            streamWords(cleaned)
-                            emit(LlmEvent.Done)
-                            return@flow
+                        ),
+                    )
+                    // Some GGUF Jinja chat templates (e.g. Gemma 3 / small instruct tunes) fail or emit
+                    // template/syntax artifacts when given a system role; retry once with a clean user-only turn.
+                    if (cleaned.isBlank()) {
+                        val plainRetryPrompt = if (allowCode) {
+                            userText
+                        } else {
+                            "Answer clearly in 2 brief sentences of plain English: $userText"
                         }
+                        val retryRaw = OnDeviceGgufEngine.generateReply(
+                            modelFile = modelFile,
+                            systemPrompt = "",
+                            userPrompt = plainRetryPrompt,
+                            maxTokens = request.maxTokens.coerceIn(128, 320),
+                            threads = recommendedThreadsProvider(),
+                            contextSize = 2048,
+                            modelId = readySpec.id,
+                        )
+                        cleaned = verifyOrKeep(
+                            NaturalResponseSanitizer.sanitizeModelOutput(
+                                retryRaw.orEmpty(),
+                                allowCode = allowCode,
+                            ),
+                        )
+                    }
+                    if (cleaned.isNotBlank()) {
+                        streamWords(cleaned)
+                        emit(LlmEvent.Done)
+                        return@flow
                     }
                 }
             }
@@ -2031,22 +2140,22 @@ class LocalLlmProvider(
         }
     }
 
-    private fun buildLocalConversationPrompt(request: ChatRequest, currentUserText: String): String {
-        val recentTurns = request.messages
-            .filter { it.role == LlmRole.USER || it.role == LlmRole.ASSISTANT }
-            .dropLast(1)
-            .takeLast(4)
-        if (recentTurns.isEmpty()) return currentUserText
-        return buildString {
-            appendLine("Recent conversation context:")
-            for (msg in recentTurns) {
-                val roleLabel = if (msg.role == LlmRole.USER) "User" else "Jarvis"
-                appendLine("$roleLabel: ${msg.content.trim().take(240)}")
-            }
-            appendLine()
-            append("Current question: ")
-            append(currentUserText)
-        }
+    private fun buildPriorTurnHint(priorDialogue: List<LlmMessage>, currentUserText: String): String {
+        val lower = currentUserText.trim().lowercase(Locale.ROOT)
+        val looksLikeFollowUp = currentUserText.length <= 45 ||
+            lower.startsWith("and ") ||
+            lower.startsWith("what about ") ||
+            lower.startsWith("how about ") ||
+            lower.startsWith("why") ||
+            lower.contains("about that") ||
+            lower.contains("about it") ||
+            lower.contains("tell me more") ||
+            lower.contains("explain more")
+        if (!looksLikeFollowUp) return ""
+        val lastUser = priorDialogue.lastOrNull { it.role == LlmRole.USER && it.content.isNotBlank() }
+            ?.content?.trim()?.take(100)
+            ?: return ""
+        return "Previous topic: $lastUser."
     }
 
     private fun detectLocalRunnerBaseUrl(): String? {

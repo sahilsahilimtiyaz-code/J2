@@ -5,7 +5,7 @@ owner's Samsung Galaxy A54. It is sideloaded, never published on Google Play.
 
 **Current status: Phase 9 complete plus Spatial Visual Perception, 5 Operational Modes (`Standard`, `Study`, `Research`, `Tasks`, `Agentic`), Task Scheduler, Deep Web Research (`deep_research`, `fetch_web_page`, `fact_check`), Support Developer YouTube card (`@octavian-codes`), On-Device ARM64 GGUF Inference (`OnDeviceGgufEngine`), Natural Offline Prose Guardrails (`NaturalResponseSanitizer`), Zero Fake Activity, and Deep Battery/App Optimization.**
 
-Local `gradle testDebugUnitTest assembleDebug --no-daemon` and `lintDebug` are green (**182 unit tests, 0 failures**; JDK 17/21, Gradle 9.3.1, AGP 9.5.0, Kotlin 2.4.10, `compileSdk 37`, `targetSdk 36`, `minSdk 31`).
+Local `gradle testDebugUnitTest assembleDebug --no-daemon` and `lintDebug` are green (**206 unit tests across 27 suites, 0 failures**; JDK 17/21, Gradle 9.3.1, AGP 9.5.0, Kotlin 2.4.10, `compileSdk 37`, `targetSdk 36`, `minSdk 31`).
 
 ## What works now
 

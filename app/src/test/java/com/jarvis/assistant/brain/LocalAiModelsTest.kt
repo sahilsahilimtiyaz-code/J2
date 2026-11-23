@@ -8,6 +8,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.buildJsonObject
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -24,6 +25,12 @@ class LocalAiModelsTest {
         ToolDefinition("set_alarm", "Set alarm", buildJsonObject {}),
         ToolDefinition("set_volume", "Adjust volume", buildJsonObject {}),
         ToolDefinition("run_diagnostics", "Run diagnostics", buildJsonObject {}),
+        ToolDefinition("get_device_status", "Get battery and device status", buildJsonObject {}),
+        ToolDefinition("analyze_storage", "Analyze device storage", buildJsonObject {}),
+        ToolDefinition("read_notifications", "Read active notifications", buildJsonObject {}),
+        ToolDefinition("dismiss_notifications", "Dismiss active notifications", buildJsonObject {}),
+        ToolDefinition("get_current_time", "Get current time and date", buildJsonObject {}),
+        ToolDefinition("set_screen_brightness", "Set screen brightness", buildJsonObject {}),
         ToolDefinition("remember_about_owner", "Save owner fact", buildJsonObject {}),
         ToolDefinition("search_memory", "Search saved memory and notes", buildJsonObject {}),
         ToolDefinition("web_search", "Search the web", buildJsonObject {}),
@@ -247,7 +254,15 @@ class LocalAiModelsTest {
             userAskedForCode = false,
         )
         assertTrue(compactPrompt.contains("clear conversational English prose"))
-        assertTrue(!compactPrompt.contains("\"type\":\"function\""))
+        assertFalse(compactPrompt.contains("\"type\":\"function\""))
+        assertFalse(compactPrompt.contains("Python", ignoreCase = true))
+        assertFalse(compactPrompt.contains("JSON", ignoreCase = true))
+        assertFalse(compactPrompt.contains("XML", ignoreCase = true))
+        assertFalse(compactPrompt.contains("syntax", ignoreCase = true))
+        assertFalse(compactPrompt.contains("tool_call", ignoreCase = true))
+
+        assertTrue(OnDeviceGgufEngine.isThinkingModel("qwen3_1_7b", "Qwen3-1.7B-Q4_K_M.gguf"))
+        assertFalse(OnDeviceGgufEngine.isThinkingModel("gemma3_1b", "gemma-3-1b-it-Q4_K_M.gguf"))
 
         val provider = LocalLlmProvider(OkHttpClient(), downloadManager = null)
         val config = ProviderConfig(
@@ -283,5 +298,30 @@ class LocalAiModelsTest {
             assertTrue("Reply for '$q' must not contain JSON tool calls: $reply", !reply.contains("\"tool_call\""))
             assertTrue("Reply for '$q' must not contain XML control tags: $reply", !reply.contains("<think>"))
         }
+    }
+
+    @Test
+    fun explanatory_questions_with_device_keywords_do_not_hijack_to_tools() {
+        val explanatoryQueries = listOf(
+            "How do batteries work?",
+            "Why do batteries degrade over time?",
+            "What is cloud storage?",
+            "What is a push notification?",
+            "What time did Apollo 11 land?",
+            "What is the brightness of the sun?",
+        )
+        for (q in explanatoryQueries) {
+            val routed = OfflineTaskRouter.routeUserCommand(q, sampleTools)
+            assertTrue(
+                "Explanatory question '$q' should NOT hijack to a device tool, but routed to ${routed.map { it.name }}",
+                routed.isEmpty(),
+            )
+        }
+
+        // Genuine device-state commands MUST still route accurately
+        assertEquals("get_device_status", OfflineTaskRouter.routeUserCommand("What is my battery level?", sampleTools).firstOrNull()?.name)
+        assertEquals("analyze_storage", OfflineTaskRouter.routeUserCommand("Check free space on my phone", sampleTools).firstOrNull()?.name)
+        assertEquals("read_notifications", OfflineTaskRouter.routeUserCommand("Read my notifications", sampleTools).firstOrNull()?.name)
+        assertEquals("get_current_time", OfflineTaskRouter.routeUserCommand("What time is it?", sampleTools).firstOrNull()?.name)
     }
 }
